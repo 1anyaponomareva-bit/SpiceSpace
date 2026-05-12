@@ -1550,6 +1550,17 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+async def root() -> dict:
+    """Полезный ответ для тех, кто открыл Railway URL руками вместо Mini App."""
+    return {
+        "service": "SpiceSpace Bot API",
+        "ok": True,
+        "endpoints": ["/health", "/api/profile?telegram_id=<digits>"],
+        "miniapp": "https://spicespace-miniapp.vercel.app",
+    }
+
+
 @app.get("/health")
 async def health() -> dict[str, bool]:
     return {"ok": True}
