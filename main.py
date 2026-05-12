@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from google.api_core.exceptions import NotFound, ResourceExhausted
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -1507,6 +1507,18 @@ async def _bootstrap_bot() -> None:
         model_chain[0],
         model_chain[:5],
     )
+
+    try:
+        await bot.set_my_commands(
+            [
+                BotCommand("start", "Собрать цель и запустить онбординг"),
+                BotCommand("reset", "Пересобрать цель заново"),
+                BotCommand("stop", "Отключить ежедневные сообщения"),
+            ]
+        )
+        log.info("Bot commands registered in Telegram menu.")
+    except Exception as e:
+        log.warning("set_my_commands failed: %s", e)
 
 
 async def _shutdown_bot() -> None:
