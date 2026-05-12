@@ -27,10 +27,12 @@ from urllib.parse import parse_qsl
 from zoneinfo import ZoneInfo
 
 import google.generativeai as genai
-from aiohttp import web
+import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from google.api_core.exceptions import NotFound, ResourceExhausted
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -1316,7 +1318,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-# --------------------------- HTTP API for Mini App ---------------------------
+# --------------------------- FastAPI server for Railway / Mini App ---------------------------
 
 def _allowed_origins() -> set[str]:
     raw = os.getenv(
@@ -1326,7 +1328,7 @@ def _allowed_origins() -> set[str]:
     return {x.strip() for x in raw.split(",") if x.strip()}
 
 
-def _extract_init_data(request: web.Request) -> str:
+def _extract_init_data(request: Request) -> str:
     auth = request.headers.get("Authorization", "")
     if auth.startswith("tma "):
         return auth[len("tma "):].strip()
@@ -1391,73 +1393,55 @@ def _enrich_profile_for_api(profile: dict) -> dict:
     return p
 
 
-@web.middleware
-async def _cors_middleware(request: web.Request, handler) -> web.StreamResponse:
-    allowed = _allowed_origins()
-    origin = request.headers.get("Origin", "")
-    allow = origin if (origin and origin in allowed) else ""
-
-    if request.method == "OPTIONS":
-        resp = web.Response(status=204)
-    else:
-        try:
-            resp = await handler(request)
-        except web.HTTPException as http_exc:
-            resp = http_exc
-
-    if allow:
-        resp.headers["Access-Control-Allow-Origin"] = allow
-        resp.headers["Vary"] = "Origin"
-        resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
-        resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-    return resp
-
-
-async def _api_options(request: web.Request) -> web.Response:
-    return web.Response(status=204)
-
-
-async def _api_health(request: web.Request) -> web.Response:
-    return web.json_response({"ok": True})
-
-
-async def _api_profile(request: web.Request) -> web.Response:
-    init_data = _extract_init_data(request)
-    user_obj = _validate_init_data(init_data) if init_data else None
-    if not user_obj:
-        return web.json_response({"error": "unauthorized"}, status=401)
-    tid = str(user_obj.get("id", ""))
-    if not tid:
-        return web.json_response({"error": "invalid user"}, status=400)
-    profile = user_profiles.get(tid)
-    return web.json_response(
-        {
-            "telegram_id": tid,
-            "profile": _enrich_profile_for_api(profile) if profile else None,
-            "user": {
-                "first_name": user_obj.get("first_name"),
-                "username": user_obj.get("username"),
-                "photo_url": user_obj.get("photo_url"),
-            },
-        }
+def _create_fastapi_app() -> FastAPI:
+    api = FastAPI(title="SpiceSpace Bot API", version="1.0.0")
+    api.add_middleware(
+        CORSMiddleware,
+        allow_origins=sorted(_allowed_origins()),
+        allow_credentials=False,
+        allow_methods=["GET", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
     )
 
+    @api.get("/health")
+    async def health() -> dict[str, bool]:
+        return {"ok": True}
 
-async def _start_api_server(port: int) -> web.AppRunner | None:
-    try:
-        api = web.Application(middlewares=[_cors_middleware])
-        api.router.add_get("/health", _api_health)
-        api.router.add_get("/api/profile", _api_profile)
-        api.router.add_route("OPTIONS", "/{tail:.*}", _api_options)
-        runner = web.AppRunner(api)
-        await runner.setup()
-        site = web.TCPSite(runner, host="0.0.0.0", port=port)
-        await site.start()
-        log.info("API server listening on :%s (origins=%s)", port, sorted(_allowed_origins()))
-        return runner
-    except Exception as e:
-        log.exception("Failed to start API server: %s", e)
-        return None
+    @api.get("/api/profile")
+    async def get_profile(
+        request: Request,
+        telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+    ) -> dict:
+        # Production Mini App can authenticate with Telegram initData; the query
+        # parameter remains available for the simple Railway/API MVP.
+        init_data = _extract_init_data(request)
+        user_obj = _validate_init_data(init_data) if init_data else None
+
+        tid = str(user_obj.get("id")) if user_obj else (telegram_id or "").strip()
+        if not tid or not tid.isdigit():
+            raise HTTPException(status_code=400, detail="telegram_id is required")
+
+        profile = user_profiles.get(tid)
+        if not isinstance(profile, dict):
+            raise HTTPException(status_code=404, detail="profile not found")
+
+        return _enrich_profile_for_api(profile)
+
+    return api
+
+
+async def _serve_fastapi(port: int) -> uvicorn.Server:
+    config = uvicorn.Config(
+        app=_create_fastapi_app(),
+        host="0.0.0.0",
+        port=port,
+        log_level="info",
+        access_log=False,
+        loop="asyncio",
+    )
+    server = uvicorn.Server(config)
+    await server.serve()
+    return server
 
 
 # --------------------------- Application bootstrap ---------------------------
@@ -1486,18 +1470,21 @@ def main() -> None:
     async def post_init(application: Application) -> None:
         scheduler.start()
         log.info("Scheduler started: daily_check each minute via IntervalTrigger (%s)", tz)
-        runner = await _start_api_server(api_port)
-        application.bot_data["api_runner"] = runner
+        application.bot_data["api_task"] = asyncio.create_task(_serve_fastapi(api_port))
+        log.info("FastAPI server task started on 0.0.0.0:%s", api_port)
 
     async def post_shutdown(application: Application) -> None:
         try:
             scheduler.shutdown(wait=False)
         except Exception:
             pass
-        runner = application.bot_data.get("api_runner")
-        if runner is not None:
+        task = application.bot_data.get("api_task")
+        if task is not None:
             try:
-                await runner.cleanup()
+                task.cancel()
+                await task
+            except asyncio.CancelledError:
+                pass
             except Exception:
                 pass
 
