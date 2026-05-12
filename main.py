@@ -69,6 +69,10 @@ OB_ASK_SIGNALS = 9
 OB_ASK_TIMEFRAME = 10
 OB_ASK_TIME = 11
 OB_FIRST_NEXT = 12
+# Если raw_goal — большое vision из нескольких направлений сразу,
+# мы НЕ идём дальше к daily_time, пока не выбрано одно направление и одна цель на 30 дней.
+OB_PICK_FOCUS = 13
+OB_PICK_FOCUS_GOAL = 14
 
 GENDER_ROWS: list[tuple[str, str]] = [
     ("male", "Он"),
@@ -106,6 +110,132 @@ TIMEFRAME_ROWS: list[tuple[str, str]] = [
     ("14", "14 дней"),
     ("30", "30 дней"),
 ]
+
+# Направления (focus) когда у человека большое видение / много целей.
+FOCUS_ROWS: list[tuple[str, str]] = [
+    ("money", "💰 Деньги"),
+    ("relocation", "✈️ Переезд / Америка"),
+    ("media", "🎤 Медийность"),
+    ("instagram", "📷 Instagram"),
+    ("tiktok", "🎵 TikTok"),
+    ("blogs", "📰 Блоги / контент"),
+    ("other", "✏️ Другое (своё)"),
+]
+
+# Под-цели на 30 дней внутри каждого направления (ключ -> [(subkey, label)]).
+FOCUS_GOAL_ROWS: dict[str, list[tuple[str, str]]] = {
+    "money": [
+        ("first_500", "Заработать первые $500"),
+        ("find_source", "Найти источник дохода"),
+        ("sell_product", "Продать продукт/услугу"),
+        ("find_niche", "Понять, на чём зарабатывать"),
+    ],
+    "media": [
+        ("daily_post", "Публиковаться каждый день"),
+        ("series", "Запустить рубрику/сериал"),
+        ("first_1000", "Набрать первые +1000 подписчиков"),
+        ("test_formats", "Протестировать 3 формата"),
+    ],
+    "instagram": [
+        ("reels_30", "30 Reels за 30 дней"),
+        ("subs_1000", "+1000 подписчиков"),
+        ("formats_3", "Найти 3 формата, которые цепляют"),
+        ("content_system", "Собрать контент-систему"),
+    ],
+    "tiktok": [
+        ("videos_30", "30 видео за 30 дней"),
+        ("test_formats", "Протестировать 3 формата"),
+        ("adapt", "Адаптировать контент под язык/рынок"),
+        ("first_views", "Стабильные первые просмотры"),
+    ],
+    "blogs": [
+        ("pick_3", "Выбрать 3 направления блогов"),
+        ("matrix", "Расписать контент-матрицу"),
+        ("first_10", "Выпустить первые 10 публикаций"),
+        ("test_3", "Протестировать 3 аккаунта"),
+    ],
+    "relocation": [
+        ("path", "Понять реальный путь переезда"),
+        ("first_step", "Сделать один конкретный шаг (документы/консультация)"),
+        ("english", "Стабильная практика английского"),
+        ("research", "Выбрать 2–3 страны и проверить условия"),
+    ],
+}
+
+# Лёгкие сигналы направлений: используем для разбора большого vision-текста.
+_FOCUS_HINTS: list[tuple[str, tuple[str, ...]]] = [
+    ("money", ("$", "₽", "€", "доллар", "рубл", "евро", "деньг", "доход",
+               "заработ", "зарплат", "продаж", "клиент", "млн", "тыс", "к/мес", "kk")),
+    ("relocation", ("америк", "сша", "usa", "us ", "переезд", "релокац",
+                    "виза", "грин-карт", "грин карт", "иммигр", "uk", "англи",
+                    "канад", "европ", "lisbon", "берлин")),
+    ("media", ("медийн", "извест", "узнаваем", "узнавай", "персон",
+               "публичн", "блогер", "стать звезд")),
+    ("instagram", ("instagram", " инст", "инста", " ig ", " ig\n", "reels", "рилс")),
+    ("tiktok", ("tiktok", "тик ток", "тик-ток", "тикток")),
+    ("blogs", ("блог", "телеграм-канал", "телеграм канал", "youtube", "ютуб",
+               "канал", "контент", "рассылк", "подкаст")),
+]
+
+# Просьба «давай просто пообщаемся» — выйти из анкеты в режим диалога.
+_PAUSE_HINTS = (
+    "давай пообщ",
+    "хочу пообщ",
+    "хочу с тобой пообщ",
+    "хочу сейчас с тобой пообщ",
+    "пообщаемся",
+    "пообщаться",
+    "просто пообщ",
+    "поговорить с тобой",
+    "хочу поговорить",
+    "давай поговорим",
+    "не хочу анкет",
+    "не сейчас анкет",
+    "потом анкет",
+    "пауза в анкете",
+    "паузу в анкете",
+    "поставь анкет",
+    "не буду анкет",
+)
+
+# Просьба вернуться в анкету.
+_RESUME_HINTS = (
+    "продолжим анкет",
+    "продолжим онбординг",
+    "вернёмся к анкет",
+    "вернемся к анкет",
+    "вернись к анкет",
+    "дальше анкет",
+    "к анкете",
+)
+
+# Упрёк: «зачем ты мне это говоришь / перескочил / не услышал».
+_COMPLAINT_HINTS = (
+    "зачем ты мне это говор",
+    "зачем ты это говор",
+    "перескочил",
+    "перепрыгнул",
+    "ты меня не слыш",
+    "не услышал мою цел",
+    "ты не понял мою цел",
+    "ты не разобрал цел",
+    "не разобрал цел",
+    "не разобрался с цел",
+)
+
+# Нереалистичный срок: «за месяц всё это / реально ли всё это за месяц».
+_UNREALISTIC_TIMEFRAME_HINTS = (
+    "за месяц всё это",
+    "за месяц все это",
+    "всё это за месяц",
+    "все это за месяц",
+    "за 30 дней всё",
+    "за 30 дней все",
+    "реально ли за месяц",
+    "достижимо ли за месяц",
+    "достигнем за месяц",
+    "достигнуть за месяц",
+)
 
 # Ключевые слова для эвристического классификатора.
 _MEASURABLE_UNITS = (
@@ -245,6 +375,34 @@ def timeframe_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def focus_keyboard(candidates: list[str]) -> InlineKeyboardMarkup:
+    """Кнопки направлений. Сначала найденные в тексте, потом остальные, в конце «Другое»."""
+    seen: set[str] = set()
+    ordered: list[tuple[str, str]] = []
+    for key in candidates:
+        for k, label in FOCUS_ROWS:
+            if k == key and k not in seen:
+                ordered.append((k, label))
+                seen.add(k)
+    for k, label in FOCUS_ROWS:
+        if k == "other":
+            continue
+        if k not in seen:
+            ordered.append((k, label))
+            seen.add(k)
+    ordered.append(("other", "✏️ Другое (своё)"))
+    rows = [[InlineKeyboardButton(label, callback_data=f"focus:{k}")] for k, label in ordered]
+    return InlineKeyboardMarkup(rows)
+
+
+def focus_goal_keyboard(focus_key: str) -> InlineKeyboardMarkup:
+    rows = []
+    for subkey, label in FOCUS_GOAL_ROWS.get(focus_key, []):
+        rows.append([InlineKeyboardButton(label, callback_data=f"fg:{subkey}")])
+    rows.append([InlineKeyboardButton("← Сменить направление", callback_data="fg:__back")])
+    return InlineKeyboardMarkup(rows)
+
+
 def first_next_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -342,6 +500,79 @@ async def _classify_goal_type(raw_goal: str, model_names: list[str]) -> str:
         return "ask_user"
 
     return await asyncio.to_thread(call)
+
+
+def _extract_focus_candidates(text: str) -> list[str]:
+    """По сырому тексту цели вытаскивает упомянутые направления (money, instagram, ...)."""
+    if not text:
+        return []
+    low = text.lower()
+    found: list[str] = []
+    for key, hints in _FOCUS_HINTS:
+        if any(h in low for h in hints):
+            if key not in found:
+                found.append(key)
+    return found
+
+
+def _count_bullets(text: str) -> int:
+    """Сколько строк / буллитов в тексте — грубый признак того, что человек прислал список."""
+    if not text:
+        return 0
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) >= 3:
+        return len(lines)
+    bullets = re.findall(r"(?:^|\s)(?:[\-\*•·]|\d+[\.\)])\s+", text)
+    return len(bullets)
+
+
+def _classify_goal_scale(raw_goal: str) -> tuple[str, list[str]]:
+    """
+    Возвращает (scale, candidates):
+      - 'vision' — большое видение / несколько направлений сразу.
+      - 'single' — обычная одна цель.
+      - 'unclear' — не понятно, продолжим как обычную цель.
+    """
+    if not raw_goal:
+        return "unclear", []
+    cands = _extract_focus_candidates(raw_goal)
+    bullets = _count_bullets(raw_goal)
+    if len(cands) >= 2 or bullets >= 3:
+        return "vision", cands
+    if len(cands) == 1:
+        return "single", cands
+    return "unclear", cands
+
+
+def _focus_label(key: str) -> str:
+    return dict(FOCUS_ROWS).get(key, key)
+
+
+def _focus_goal_label(focus_key: str, subkey: str) -> str:
+    for k, label in FOCUS_GOAL_ROWS.get(focus_key, []):
+        if k == subkey:
+            return label
+    return subkey
+
+
+def _looks_like_pause(text: str) -> bool:
+    low = (text or "").lower()
+    return any(h in low for h in _PAUSE_HINTS)
+
+
+def _looks_like_resume(text: str) -> bool:
+    low = (text or "").lower()
+    return any(h in low for h in _RESUME_HINTS)
+
+
+def _looks_like_complaint(text: str) -> bool:
+    low = (text or "").lower()
+    return any(h in low for h in _COMPLAINT_HINTS)
+
+
+def _looks_like_unrealistic_timeframe(text: str) -> bool:
+    low = (text or "").lower()
+    return any(h in low for h in _UNREALISTIC_TIMEFRAME_HINTS)
 
 
 def _signals_text(signals: list[str]) -> str:
@@ -682,6 +913,10 @@ def _persist_onboarding_profile(cid: int, st: dict[str, object]) -> None:
     goal_signals = list(st.get("goal_signals") or [])
     final_goal = str(st.get("final_goal", "")).strip()
     daily_time = str(st.get("daily_time", "09:30"))
+    vision_raw = str(st.get("vision_raw", "")).strip()
+    goal_candidates = list(st.get("goal_candidates") or [])
+    active_focus = str(st.get("active_focus", "")).strip()
+    goal_scale = str(st.get("goal_scale", "")).strip() or "single"
 
     existing = user_profiles.get(str(cid)) or {}
     streak = int(existing.get("streak", 0) or 0)
@@ -703,6 +938,11 @@ def _persist_onboarding_profile(cid: int, st: dict[str, object]) -> None:
         "goal_signals": goal_signals,
         "final_goal": final_goal,
         "daily_time": daily_time,
+        "vision_raw": vision_raw,
+        "goal_candidates": goal_candidates,
+        "active_focus": active_focus,
+        "goal_scale": goal_scale,
+        "onboarding_paused": False,
         "streak": streak,
         "weekly_score": weekly_score,
         "completed_tasks": completed_tasks,
@@ -812,6 +1052,104 @@ async def _begin_qualitative_branch(msg, st: dict) -> None:
     )
 
 
+async def _handle_pause_or_complaint(
+    msg, st: dict, step: int, raw: str
+) -> bool:
+    """
+    Возвращает True, если сообщение перехвачено как пауза/упрёк и шаг анкеты
+    обработан особым образом (анкета не двигается дальше). False — продолжаем обычную обработку.
+    """
+    # Пауза действует только после того, как мы уже спросили raw_goal — раньше нет смысла.
+    if step < OB_RAW_GOAL or step == OB_FIRST_NEXT:
+        return False
+
+    if _looks_like_complaint(raw):
+        # Откатываемся назад: возвращаем человека к тому шагу, где он реально хотел быть.
+        if step in (OB_ASK_TIME, OB_FIRST_NEXT):
+            new_step = OB_PICK_FOCUS if st.get("goal_scale") == "vision" else OB_RAW_GOAL
+        elif step in (OB_PICK_FOCUS_GOAL,):
+            new_step = OB_PICK_FOCUS
+        elif step in (OB_ASK_AMOUNT, OB_ASK_DEADLINE, OB_ASK_SIGNALS, OB_ASK_TIMEFRAME, OB_ASK_GOAL_TYPE):
+            new_step = OB_RAW_GOAL
+        else:
+            new_step = step
+        st["step"] = new_step
+        await msg.reply_text(
+            "Ты права, я перескочил.\n"
+            "Дал советы раньше, чем нормально понял твою цель.\n\n"
+            "Давай вернёмся на шаг назад."
+        )
+        # перерисуем текущий шаг
+        await _ask_current_step(msg, st)
+        return True
+
+    if _looks_like_pause(raw):
+        st["paused"] = True
+        st["paused_from_step"] = step
+        await msg.reply_text(
+            "Да, давай.\n"
+            "Сейчас не будем заполнять анкету.\n\n"
+            "Расскажи, что хочется разобрать:\n"
+            "цель, страх, хаос в голове или первый шаг?\n\n"
+            "Когда захочешь — напиши «продолжим анкету», и вернёмся туда же, где остановились."
+        )
+        return True
+
+    return False
+
+
+async def _ask_current_step(msg, st: dict) -> None:
+    """Заново задаёт текущий вопрос анкеты — используется после паузы / отката."""
+    step = int(st.get("step") or 0)
+    if step == OB_RAW_GOAL:
+        await msg.reply_text(
+            "Напиши, чего хочешь — одной фразой или списком, как удобно. "
+            "Я разберусь, как лучше с этим работать."
+        )
+        return
+    if step == OB_PICK_FOCUS:
+        cands = list(st.get("goal_candidates") or [])
+        await msg.reply_text(
+            "Выберем один рычаг на ближайшие 30 дней. Что берём первым?",
+            reply_markup=focus_keyboard(cands),
+        )
+        return
+    if step == OB_PICK_FOCUS_GOAL:
+        focus_key = str(st.get("active_focus", "")).strip()
+        if focus_key == "other":
+            await msg.reply_text(
+                "Напиши одну конкретную цель на 30 дней — текстом, своими словами."
+            )
+            return
+        await msg.reply_text(
+            f"Окей, берём «{_focus_label(focus_key)}».\n"
+            "Какая ближайшая рабочая цель на 30 дней?",
+            reply_markup=focus_goal_keyboard(focus_key),
+        )
+        return
+    if step == OB_ASK_AMOUNT:
+        await msg.reply_text(
+            "Любое конкретное число — даже примерно. Например 500$, 3 кг, 10 клиентов."
+        )
+        return
+    if step == OB_ASK_DEADLINE:
+        await msg.reply_text("За какой срок? 7 дней, месяц, до конца лета — любой ориентир.")
+        return
+    if step == OB_ASK_SIGNALS:
+        await msg.reply_text(
+            "Выбери 1–2 признака:", reply_markup=signals_keyboard(list(st.get("goal_signals") or []))
+        )
+        return
+    if step == OB_ASK_TIMEFRAME:
+        await msg.reply_text("На какой срок берём первый этап?", reply_markup=timeframe_keyboard())
+        return
+    if step == OB_ASK_TIME:
+        await msg.reply_text(
+            "Во сколько писать каждый день?\nФормат HH:MM — например 09:30 или 18:00"
+        )
+        return
+
+
 async def handle_onboarding_turn(
     update: Update, context: ContextTypes.DEFAULT_TYPE, raw: str
 ) -> None:
@@ -819,6 +1157,10 @@ async def handle_onboarding_turn(
     msg = update.message
     st = onboarding.setdefault(cid, {"step": OB_ASK_NAME})
     step = int(st.get("step") or 0)
+
+    # Сначала ловим паузу / упрёк — это важнее, чем формальный шаг.
+    if await _handle_pause_or_complaint(msg, st, step, raw):
+        return
 
     if step == OB_ASK_NAME:
         name = raw.strip()[:120] or "друг"
@@ -858,6 +1200,27 @@ async def handle_onboarding_turn(
             return
         st["raw_goal"] = raw_goal_text
 
+        # 1) Сначала проверяем масштаб: если это большое vision из нескольких направлений —
+        #    НЕ идём к amount/deadline/time. Сначала просим выбрать один рычаг.
+        scale, cands = _classify_goal_scale(raw_goal_text)
+        st["goal_scale"] = scale
+        if scale == "vision":
+            st["vision_raw"] = raw_goal_text
+            st["goal_candidates"] = cands or []
+            st["step"] = OB_PICK_FOCUS
+            name = str(st.get("name", "")).strip()
+            opener = f"{name}, вот это уже не цель, а большое видение.\nИ оно классное.\n\n" if name else \
+                "Стоп. Это не одна цель, а целая картина жизни.\nИ это нормально.\n\n"
+            await msg.reply_text(
+                opener
+                + "Но если попробовать взять всё сразу — мозг просто зависнет.\n"
+                "Давай умнее: выберем один рычаг на ближайшие 30 дней.\n\n"
+                "Что берём первым?",
+                reply_markup=focus_keyboard(cands),
+            )
+            return
+
+        # 2) Обычная одна цель — старый flow.
         model_names = context.bot_data.get("gemini_model_names") or []
         try:
             goal_type = await _classify_goal_type(raw_goal_text, model_names)
@@ -881,6 +1244,46 @@ async def handle_onboarding_turn(
 
     if step == OB_ASK_GOAL_TYPE:
         await msg.reply_text("Выбери кнопкой ниже 👇")
+        return
+
+    if step == OB_PICK_FOCUS:
+        # Человек что-то написал текстом вместо нажатия кнопки.
+        # Самая частая ошибка: «реально ли всё это за месяц?» — стопорим мягко.
+        if _looks_like_unrealistic_timeframe(raw):
+            await msg.reply_text(
+                "За месяц всё это — нет, это не рабочая цель.\n"
+                "Это видение на большой период.\n\n"
+                "На 30 дней нам нужна цель, которая создаёт движение в сторону этого.\n"
+                "Выбери один главный рычаг — кнопкой ниже.",
+                reply_markup=focus_keyboard(list(st.get("goal_candidates") or [])),
+            )
+            return
+        await msg.reply_text(
+            "Выбери одно направление кнопкой ниже — с него начнём.",
+            reply_markup=focus_keyboard(list(st.get("goal_candidates") or [])),
+        )
+        return
+
+    if step == OB_PICK_FOCUS_GOAL:
+        focus_key = str(st.get("active_focus", "")).strip()
+        if focus_key == "other":
+            text = raw.strip()
+            if not text:
+                await msg.reply_text("Напиши одну конкретную цель на 30 дней — текстом.")
+                return
+            st["final_goal"] = text[:500]
+            st["goal_type"] = "measurable"
+            st["deadline"] = "30 дней"
+            st["step"] = OB_ASK_TIME
+            await msg.reply_text(
+                f"Окей. Фиксируем на 30 дней: {st['final_goal']}.\n\n"
+                "Во сколько писать каждый день?\nФормат HH:MM — например 09:30 или 18:00"
+            )
+            return
+        await msg.reply_text(
+            "Выбери цель кнопкой ниже — так быстрее.",
+            reply_markup=focus_goal_keyboard(focus_key),
+        )
         return
 
     if step == OB_ASK_AMOUNT:
@@ -1154,6 +1557,104 @@ async def onboarding_timeframe_callback(update: Update, context: ContextTypes.DE
     )
 
 
+async def onboarding_focus_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    if not q or not q.message:
+        return
+    await q.answer()
+    cid = q.message.chat.id
+    st = onboarding.get(cid)
+    if not st or int(st.get("step") or 0) != OB_PICK_FOCUS:
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    data = q.data or ""
+    parts = data.split(":", 1)
+    if len(parts) != 2 or parts[0] != "focus":
+        return
+    key = parts[1]
+    if key not in dict(FOCUS_ROWS):
+        return
+
+    try:
+        await q.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    st["active_focus"] = key
+    st["step"] = OB_PICK_FOCUS_GOAL
+
+    if key == "other":
+        await q.message.reply_text(
+            "Окей. Напиши одну конкретную цель на 30 дней — текстом, своими словами.\n"
+            "Что-то, на что мы реально можем работать каждый день."
+        )
+        return
+
+    await q.message.reply_text(
+        f"Окей, берём «{_focus_label(key)}».\n"
+        "Какая ближайшая рабочая цель на 30 дней?",
+        reply_markup=focus_goal_keyboard(key),
+    )
+
+
+async def onboarding_focus_goal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    if not q or not q.message:
+        return
+    await q.answer()
+    cid = q.message.chat.id
+    st = onboarding.get(cid)
+    if not st or int(st.get("step") or 0) != OB_PICK_FOCUS_GOAL:
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    data = q.data or ""
+    parts = data.split(":", 1)
+    if len(parts) != 2 or parts[0] != "fg":
+        return
+    subkey = parts[1]
+
+    try:
+        await q.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    if subkey == "__back":
+        st["step"] = OB_PICK_FOCUS
+        await q.message.reply_text(
+            "Окей, давай сменим направление.\nЧто берём первым?",
+            reply_markup=focus_keyboard(list(st.get("goal_candidates") or [])),
+        )
+        return
+
+    focus_key = str(st.get("active_focus", "")).strip()
+    label = _focus_goal_label(focus_key, subkey)
+    if not focus_key or not label or label == subkey:
+        # Невалидное состояние — мягко вернём к выбору фокуса.
+        st["step"] = OB_PICK_FOCUS
+        await q.message.reply_text(
+            "Похоже, выбор сбился. Выбери направление ещё раз.",
+            reply_markup=focus_keyboard(list(st.get("goal_candidates") or [])),
+        )
+        return
+
+    st["final_goal"] = label
+    st["goal_type"] = "measurable"
+    st["deadline"] = "30 дней"
+    st["step"] = OB_ASK_TIME
+    await q.message.reply_text(
+        f"Окей. На 30 дней работаем над одной целью:\n\n{label}\n\n"
+        "Во сколько писать каждый день?\nФормат HH:MM — например 09:30 или 18:00"
+    )
+
+
 async def onboarding_first_next_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -1268,8 +1769,18 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _ensure_onboarding_first_next_from_profile(cid)
     st_ob = onboarding.get(cid)
     if st_ob and int(st_ob.get("step") or 0) > 0:
-        await handle_onboarding_turn(update, context, raw)
-        return
+        if st_ob.get("paused"):
+            # Если пользователь явно просит вернуться — снимаем паузу и возвращаемся к шагу.
+            if _looks_like_resume(raw):
+                st_ob["paused"] = False
+                await update.message.reply_text("Возвращаемся к анкете.")
+                await _ask_current_step(update.message, st_ob)
+                return
+            # Иначе общаемся как коуч — анкету НЕ двигаем.
+            # Дальнейшая обработка ниже (Gemini-режим).
+        else:
+            await handle_onboarding_turn(update, context, raw)
+            return
 
     log.info("incoming text chat_id=%s len=%s", cid, len(raw))
     model_names: list[str] = context.bot_data["gemini_model_names"]
@@ -1304,12 +1815,13 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     st_ob = onboarding.get(cid)
     if st_ob:
         step = int(st_ob.get("step") or 0)
+        paused = bool(st_ob.get("paused"))
         if step == OB_FIRST_NEXT:
             await update.effective_message.reply_text(
                 "Сейчас выбери вариант кнопкой под сообщением с вопросом."
             )
             return
-        if step > 0:
+        if step > 0 and not paused:
             await update.effective_message.reply_text(
                 "Давай до конца анкету текстом — голос чуть позже 💛"
             )
@@ -1426,6 +1938,18 @@ def _register_telegram_handlers(app_: Application) -> None:
         CallbackQueryHandler(
             onboarding_timeframe_callback,
             pattern=r"^tf:(7|14|30)$",
+        )
+    )
+    app_.add_handler(
+        CallbackQueryHandler(
+            onboarding_focus_callback,
+            pattern=r"^focus:(money|relocation|media|instagram|tiktok|blogs|other)$",
+        )
+    )
+    app_.add_handler(
+        CallbackQueryHandler(
+            onboarding_focus_goal_callback,
+            pattern=r"^fg:[a-z_0-9]+$",
         )
     )
     app_.add_handler(
