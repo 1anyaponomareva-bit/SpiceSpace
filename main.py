@@ -36,6 +36,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from google.api_core.exceptions import NotFound, ResourceExhausted
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -905,6 +906,38 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
     return reply
 
 
+async def _typing_loop(bot, chat_id: int) -> None:
+    """Держит индикатор «печатает…» в шапке чата, пока работает Gemini.
+    Telegram гасит chat_action через ~5 секунд, поэтому повторяем каждые 4 секунды."""
+    try:
+        while True:
+            try:
+                await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            except Exception:
+                pass
+            await asyncio.sleep(4)
+    except asyncio.CancelledError:
+        return
+
+
+async def _send_thinking_placeholder(message):
+    """Отправляет временное сообщение «Думаю…», которое позже заменим на финальный ответ."""
+    try:
+        return await message.reply_text("Думаю…")
+    except Exception:
+        return None
+
+
+async def _replace_with_reply(placeholder, message, text: str) -> None:
+    """Меняет «Думаю…» на финальный ответ. Если не вышло — шлёт новое сообщение."""
+    if placeholder is not None:
+        with suppress(Exception):
+            await placeholder.edit_text(text)
+            return
+    with suppress(Exception):
+        await message.reply_text(text)
+
+
 def _parse_daily_time(raw: str) -> str | None:
     m = re.fullmatch(r"(\d{1,2}):(\d{2})", raw.strip())
     if not m:
@@ -1257,11 +1290,17 @@ async def handle_onboarding_turn(
 
         # 2) Обычная одна цель — старый flow.
         model_names = context.bot_data.get("gemini_model_names") or []
+        typing_task = asyncio.create_task(_typing_loop(context.bot, cid))
         try:
-            goal_type = await _classify_goal_type(raw_goal_text, model_names)
-        except Exception as e:
-            log.warning("classify failed: %s", e)
-            goal_type = "ask_user"
+            try:
+                goal_type = await _classify_goal_type(raw_goal_text, model_names)
+            except Exception as e:
+                log.warning("classify failed: %s", e)
+                goal_type = "ask_user"
+        finally:
+            typing_task.cancel()
+            with suppress(Exception):
+                await typing_task
 
         if goal_type == "measurable":
             await _begin_measurable_branch(msg, st, raw_goal_text)
@@ -1726,22 +1765,29 @@ async def onboarding_first_next_callback(
         else "После онбординга: нажал «Пока нет» — нужны варианты, с чего начать."
     )
 
+    placeholder = await _send_thinking_placeholder(q.message)
+    typing_task = asyncio.create_task(_typing_loop(context.bot, cid))
     try:
-        reply = await _gemini_post_onboarding_reply(cid, model_names, mode)
-    except ResourceExhausted:
-        log.exception("Gemini quota after onboarding branch")
-        reply = (
-            "С Google AI сейчас лимит запросов. Подожди минуту и напиши сюда одним сообщением — подскажу шаг."
-            if key == "yes"
-            else "С Google AI сейчас лимит запросов. Подожди минуту и напиши — набросаю варианты."
-        )
-    except Exception as e:
-        log.exception("Gemini error post-onboarding: %s", e)
-        reply = (
-            "Сейчас не получилось сгенерировать ответ. Напиши одним сообщением — продолжим с шага."
-            if key == "yes"
-            else "Сейчас не получилось набросать варианты. Напиши одним сообщением — продолжим."
-        )
+        try:
+            reply = await _gemini_post_onboarding_reply(cid, model_names, mode)
+        except ResourceExhausted:
+            log.exception("Gemini quota after onboarding branch")
+            reply = (
+                "С Google AI сейчас лимит запросов. Подожди минуту и напиши сюда одним сообщением — подскажу шаг."
+                if key == "yes"
+                else "С Google AI сейчас лимит запросов. Подожди минуту и напиши — набросаю варианты."
+            )
+        except Exception as e:
+            log.exception("Gemini error post-onboarding: %s", e)
+            reply = (
+                "Сейчас не получилось сгенерировать ответ. Напиши одним сообщением — продолжим с шага."
+                if key == "yes"
+                else "Сейчас не получилось набросать варианты. Напиши одним сообщением — продолжим."
+            )
+    finally:
+        typing_task.cancel()
+        with suppress(Exception):
+            await typing_task
 
     hist = histories.setdefault(cid, [])
     hist.append({"role": "user", "parts": [user_note]})
@@ -1750,7 +1796,7 @@ async def onboarding_first_next_callback(
     if len(hist) > max_turns:
         histories[cid] = hist[-max_turns:]
 
-    await q.message.reply_text(reply)
+    await _replace_with_reply(placeholder, q.message, reply)
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1820,26 +1866,38 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.info("incoming text chat_id=%s len=%s", cid, len(raw))
     model_names: list[str] = context.bot_data["gemini_model_names"]
 
+    # Пользователю важно видеть, что бот «думает», а не пропал на 3–5 секунд.
+    placeholder = await _send_thinking_placeholder(update.message)
+    typing_task = asyncio.create_task(_typing_loop(context.bot, cid))
     try:
-        reply = await _coach_reply(cid, raw, model_names)
-    except ResourceExhausted:
-        log.exception("Gemini quota exhausted")
-        await update.message.reply_text(
-            "У Google AI сейчас лимит бесплатных запросов (ошибка 429): слишком частые сообщения "
-            "или дневная квота исчерпана. Подожди 1–2 минуты и напиши снова.\n\n"
-            "Если так постоянно: зайди в Google AI Studio → проверь ключ и лимиты "
-            "https://ai.google.dev/gemini-api/docs/rate-limits — для проекта иногда нужно "
-            "включить биллинг или выбрать другую модель в .env (GEMINI_MODEL)."
-        )
-        return
-    except Exception as e:
-        log.exception("Gemini error: %s", e)
-        await update.message.reply_text(
-            "Сейчас не получилось связаться с моделью. Попробуй ещё раз через минуту."
-        )
-        return
+        try:
+            reply = await _coach_reply(cid, raw, model_names)
+        except ResourceExhausted:
+            log.exception("Gemini quota exhausted")
+            await _replace_with_reply(
+                placeholder,
+                update.message,
+                "У Google AI сейчас лимит бесплатных запросов (ошибка 429): слишком частые сообщения "
+                "или дневная квота исчерпана. Подожди 1–2 минуты и напиши снова.\n\n"
+                "Если так постоянно: зайди в Google AI Studio → проверь ключ и лимиты "
+                "https://ai.google.dev/gemini-api/docs/rate-limits — для проекта иногда нужно "
+                "включить биллинг или выбрать другую модель в .env (GEMINI_MODEL).",
+            )
+            return
+        except Exception as e:
+            log.exception("Gemini error: %s", e)
+            await _replace_with_reply(
+                placeholder,
+                update.message,
+                "Сейчас не получилось связаться с моделью. Попробуй ещё раз через минуту.",
+            )
+            return
+    finally:
+        typing_task.cancel()
+        with suppress(Exception):
+            await typing_task
 
-    await update.message.reply_text(reply)
+    await _replace_with_reply(placeholder, update.message, reply)
 
 
 async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
