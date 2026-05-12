@@ -1333,7 +1333,7 @@ def _extract_init_data(request: Request) -> str:
     auth = request.headers.get("Authorization", "")
     if auth.startswith("tma "):
         return auth[len("tma "):].strip()
-    return (request.query.get("initData") or "").strip()
+    return (request.query_params.get("initData") or "").strip()
 
 
 def _validate_init_data(init_data: str, max_age_seconds: int = 24 * 60 * 60) -> dict | None:
