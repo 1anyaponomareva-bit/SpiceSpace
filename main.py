@@ -9,7 +9,7 @@ Optional .env:
   GEMINI_MODEL=gemini-2.5-flash
   GEMINI_FALLBACK_MODELS=gemini-1.5-flash-8b,gemini-2.0-flash-lite
   PORT=8080
-  MINIAPP_ORIGINS=https://spicespace-miniapp.vercel.app,http://localhost:5173
+  MINIAPP_ORIGINS=https://spice-space.vercel.app,http://localhost:5173
 """
 
 from __future__ import annotations
@@ -1324,7 +1324,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 def _allowed_origins() -> set[str]:
     raw = os.getenv(
         "MINIAPP_ORIGINS",
-        "https://spicespace-miniapp.vercel.app,http://localhost:5173,http://localhost:3000",
+        "https://spice-space.vercel.app,http://localhost:5173,http://localhost:3000",
     )
     return {x.strip() for x in raw.split(",") if x.strip()}
 
@@ -1557,7 +1557,7 @@ async def root() -> dict:
         "service": "SpiceSpace Bot API",
         "ok": True,
         "endpoints": ["/health", "/api/profile?telegram_id=<digits>"],
-        "miniapp": "https://spicespace-miniapp.vercel.app",
+        "miniapp": "https://spice-space.vercel.app",
     }
 
 
