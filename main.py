@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qsl
@@ -1393,71 +1394,62 @@ def _enrich_profile_for_api(profile: dict) -> dict:
     return p
 
 
-def _create_fastapi_app() -> FastAPI:
-    api = FastAPI(title="SpiceSpace Bot API", version="1.0.0")
-    api.add_middleware(
-        CORSMiddleware,
-        allow_origins=sorted(_allowed_origins()),
-        allow_credentials=False,
-        allow_methods=["GET", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
+# Глобальное состояние процесса: Telegram Application и scheduler инициализируются
+# в lifespan FastAPI, чтобы один процесс держал и polling-бота, и HTTP API.
+telegram_app: Application | None = None
+scheduler: AsyncIOScheduler | None = None
+
+
+def _register_telegram_handlers(app_: Application) -> None:
+    app_.add_handler(CommandHandler("start", cmd_start))
+    app_.add_handler(CommandHandler("stop", cmd_stop))
+    app_.add_handler(CommandHandler("reset", cmd_reset))
+    app_.add_handler(
+        CallbackQueryHandler(
+            onboarding_first_next_callback,
+            pattern=r"^onboard_next:(yes|no)$",
+        )
     )
-
-    @api.get("/health")
-    async def health() -> dict[str, bool]:
-        return {"ok": True}
-
-    @api.get("/api/profile")
-    async def get_profile(
-        request: Request,
-        telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
-    ) -> dict:
-        # Production Mini App can authenticate with Telegram initData; the query
-        # parameter remains available for the simple Railway/API MVP.
-        init_data = _extract_init_data(request)
-        user_obj = _validate_init_data(init_data) if init_data else None
-
-        tid = str(user_obj.get("id")) if user_obj else (telegram_id or "").strip()
-        if not tid or not tid.isdigit():
-            raise HTTPException(status_code=400, detail="telegram_id is required")
-
-        profile = user_profiles.get(tid)
-        if not isinstance(profile, dict):
-            raise HTTPException(status_code=404, detail="profile not found")
-
-        return _enrich_profile_for_api(profile)
-
-    return api
-
-
-async def _serve_fastapi(port: int) -> uvicorn.Server:
-    config = uvicorn.Config(
-        app=_create_fastapi_app(),
-        host="0.0.0.0",
-        port=port,
-        log_level="info",
-        access_log=False,
-        loop="asyncio",
+    app_.add_handler(
+        CallbackQueryHandler(
+            onboarding_goal_type_callback,
+            pattern=r"^gt:(measurable|qualitative)$",
+        )
     )
-    server = uvicorn.Server(config)
-    await server.serve()
-    return server
+    app_.add_handler(
+        CallbackQueryHandler(
+            onboarding_signals_callback,
+            pattern=r"^sig:(energy|anxiety|sleep|stability|joy|done)$",
+        )
+    )
+    app_.add_handler(
+        CallbackQueryHandler(
+            onboarding_timeframe_callback,
+            pattern=r"^tf:(7|14|30)$",
+        )
+    )
+    app_.add_handler(
+        CallbackQueryHandler(
+            onboarding_inline_callback,
+            pattern=r"^(gender|pain|sit):(male|female|neutral|money|job|own|stuck|fitness|hire|self|business|none|transition)$",
+        )
+    )
+    app_.add_handler(MessageHandler(filters.VOICE, on_voice))
+    app_.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
 
-# --------------------------- Application bootstrap ---------------------------
+async def _bootstrap_bot() -> None:
+    """Запускает Telegram polling и scheduler в фоне. Не блокирует."""
+    global telegram_app, scheduler
 
-def main() -> None:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
-        raise RuntimeError("В .env нужен TELEGRAM_BOT_TOKEN")
+        log.error("TELEGRAM_BOT_TOKEN не задан — пропускаю запуск бота (API всё равно поднимется).")
+        return
 
     _configure_genai()
     model_name = _select_gemini_model_id()
     model_chain = _build_model_chain(model_name)
-    gemini_model = genai.GenerativeModel(
-        model_name=model_chain[0],
-        system_instruction=SYSTEM_INSTRUCTION,
-    )
 
     tz = _get_timezone()
     scheduler = AsyncIOScheduler(
@@ -1465,38 +1457,11 @@ def main() -> None:
         job_defaults={"coalesce": True, "max_instances": 1},
     )
 
-    api_port = int(os.getenv("PORT", "8080"))
+    telegram_app = Application.builder().token(token).build()
+    telegram_app.bot_data["gemini_model_names"] = model_chain
+    _register_telegram_handlers(telegram_app)
 
-    async def post_init(application: Application) -> None:
-        scheduler.start()
-        log.info("Scheduler started: daily_check each minute via IntervalTrigger (%s)", tz)
-        application.bot_data["api_task"] = asyncio.create_task(_serve_fastapi(api_port))
-        log.info("FastAPI server task started on 0.0.0.0:%s", api_port)
-
-    async def post_shutdown(application: Application) -> None:
-        try:
-            scheduler.shutdown(wait=False)
-        except Exception:
-            pass
-        task = application.bot_data.get("api_task")
-        if task is not None:
-            try:
-                task.cancel()
-                await task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-
-    app = (
-        Application.builder()
-        .token(token)
-        .post_init(post_init)
-        .post_shutdown(post_shutdown)
-        .build()
-    )
-    app.bot_data["gemini_model"] = gemini_model
-    app.bot_data["gemini_model_names"] = model_chain
+    bot = telegram_app.bot
 
     async def daily_check_job() -> None:
         try:
@@ -1517,7 +1482,7 @@ def main() -> None:
                 try:
                     question = await _generate_morning_question(model_chain, cid)
                     pending_morning[cid] = question
-                    await app.bot.send_message(chat_id=cid, text=question)
+                    await bot.send_message(chat_id=cid, text=question)
                     profile["last_daily_sent_date"] = today
                     _save_user_profiles(user_profiles)
                 except Exception as e:
@@ -1531,49 +1496,91 @@ def main() -> None:
         id="daily_check",
         replace_existing=True,
     )
+    scheduler.start()
+    log.info("Scheduler started: daily_check each minute via IntervalTrigger (%s)", tz)
 
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("stop", cmd_stop))
-    app.add_handler(CommandHandler("reset", cmd_reset))
-    app.add_handler(
-        CallbackQueryHandler(
-            onboarding_first_next_callback,
-            pattern=r"^onboard_next:(yes|no)$",
-        )
+    await telegram_app.initialize()
+    await telegram_app.start()
+    await telegram_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    log.info(
+        "Telegram polling started. Gemini primary=%s chain=%s",
+        model_chain[0],
+        model_chain[:5],
     )
-    app.add_handler(
-        CallbackQueryHandler(
-            onboarding_goal_type_callback,
-            pattern=r"^gt:(measurable|qualitative)$",
-        )
-    )
-    app.add_handler(
-        CallbackQueryHandler(
-            onboarding_signals_callback,
-            pattern=r"^sig:(energy|anxiety|sleep|stability|joy|done)$",
-        )
-    )
-    app.add_handler(
-        CallbackQueryHandler(
-            onboarding_timeframe_callback,
-            pattern=r"^tf:(7|14|30)$",
-        )
-    )
-    app.add_handler(
-        CallbackQueryHandler(
-            onboarding_inline_callback,
-            pattern=r"^(gender|pain|sit):(male|female|neutral|money|job|own|stuck|fitness|hire|self|business|none|transition)$",
-        )
-    )
-    app.add_handler(MessageHandler(filters.VOICE, on_voice))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
-    log.info("Starting bot, Gemini primary=%s chain=%s", model_chain[0], model_chain[:5])
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+async def _shutdown_bot() -> None:
+    global telegram_app, scheduler
+    if telegram_app is not None:
+        with suppress(Exception):
+            if telegram_app.updater and telegram_app.updater.running:
+                await telegram_app.updater.stop()
+        with suppress(Exception):
+            await telegram_app.stop()
+        with suppress(Exception):
+            await telegram_app.shutdown()
+        telegram_app = None
+    if scheduler is not None:
+        with suppress(Exception):
+            scheduler.shutdown(wait=False)
+        scheduler = None
+    log.info("Bot polling and scheduler stopped.")
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    try:
+        await _bootstrap_bot()
+    except Exception:
+        log.exception("Bootstrap failed; FastAPI продолжит обслуживать /health")
+    try:
+        yield
+    finally:
+        await _shutdown_bot()
+
+
+# Глобальный ASGI-объект, который ищет Railway / uvicorn: `uvicorn main:app`
+app = FastAPI(title="SpiceSpace Bot API", version="1.0.0", lifespan=_lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=sorted(_allowed_origins()),
+    allow_credentials=False,
+    allow_methods=["GET", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+
+@app.get("/health")
+async def health() -> dict[str, bool]:
+    return {"ok": True}
+
+
+@app.get("/api/profile")
+async def get_profile(
+    request: Request,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+) -> dict:
+    """
+    Profile lookup for the Mini App.
+
+    Two auth paths are supported:
+    - Telegram initData (preferred) — HMAC validated against TELEGRAM_BOT_TOKEN.
+    - ?telegram_id=<digits> — simple MVP path for local/manual checks.
+    """
+    init_data = _extract_init_data(request)
+    user_obj = _validate_init_data(init_data) if init_data else None
+
+    tid = str(user_obj.get("id")) if user_obj else (telegram_id or "").strip()
+    if not tid or not tid.isdigit():
+        raise HTTPException(status_code=400, detail="telegram_id is required")
+
+    profile = user_profiles.get(tid)
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    return _enrich_profile_for_api(profile)
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        log.info("Бот остановлен (Ctrl+C).")
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
