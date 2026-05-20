@@ -2,22 +2,24 @@
 .env.*
 !.env.example
 
-__pycache__/
-*.py[cod]
-*$py.class
-
 .venv/
 venv/
 env/
 ENV/
 
+__pycache__/
+*.py[cod]
+*$py.class
+
+.git/
+.gitignore
 .idea/
 .vscode/
-
 *.log
 
-# Runtime data with Telegram chat/user identifiers.
 subscribers.json
 user_profiles.json
 tasks.json
 daily_summaries.json
+
+agent-transcripts/
