@@ -1,4 +1,4 @@
-"""5-step conversational onboarding (not a form)."""
+"""5-step conversational onboarding — живой разговор, без кнопок."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Update
 from telegram.ext import ContextTypes
 
 import db
@@ -26,36 +26,12 @@ OB_MAIN_GOAL = 5
 OB_ASK_TIME = 6
 
 
-def kids_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("Да", callback_data="ob:kids:yes"),
-                InlineKeyboardButton("Нет", callback_data="ob:kids:no"),
-            ]
-        ]
-    )
-
-
-def works_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("Да", callback_data="ob:works:yes"),
-                InlineKeyboardButton("Нет", callback_data="ob:works:no"),
-            ],
-            [InlineKeyboardButton("Своё дело", callback_data="ob:works:own")],
-        ]
-    )
-
-
 def _default_timezone() -> str:
     return os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
 
 
 def _parse_daily_time(raw: str) -> str | None:
     import re
-
     m = re.fullmatch(r"(\d{1,2}):(\d{2})", (raw or "").strip())
     if not m:
         return None
@@ -63,6 +39,36 @@ def _parse_daily_time(raw: str) -> str | None:
     if h > 23 or mi > 59:
         return None
     return f"{h:02d}:{mi:02d}"
+
+
+def _parse_kids(raw: str) -> bool | None:
+    raw = raw.strip().lower()
+    yes_words = ["да", "есть", "двое", "трое", "один", "одна", "ребёнок", "дети", "дочь", "сын", "малыш"]
+    no_words = ["нет", "нету", "без детей", "пока нет"]
+    for w in yes_words:
+        if w in raw:
+            return True
+    for w in no_words:
+        if w in raw:
+            return False
+    return None
+
+
+def _parse_works(raw: str) -> str | None:
+    raw = raw.strip().lower()
+    own_words = ["своё", "свой", "своя", "фриланс", "бизнес", "предприниматель", "сама", "самозанятая"]
+    yes_words = ["да", "работаю", "офис", "найм"]
+    no_words = ["нет", "не работаю", "декрет", "дома"]
+    for w in own_words:
+        if w in raw:
+            return "own"
+    for w in yes_words:
+        if w in raw:
+            return "yes"
+    for w in no_words:
+        if w in raw:
+            return "no"
+    return None
 
 
 def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
@@ -114,44 +120,58 @@ async def handle_onboarding_turn(
         st["name"] = name
         st["step"] = OB_ASK_MORNING
         await msg.reply_text(
-            f"Приятно, {name} ☀️\n\n"
-            "Как начинается твоё утро? Кофе и тишина, спорт, или всё сразу в хаосе?"
+            f"{name}, привет 🙂\n\n"
+            f"Как начинается твоё утро — кофе в тишине, спорт, или дети раньше будильника?"
         )
         return
 
     if step == OB_ASK_MORNING:
         st["morning_routine"] = raw.strip()[:500] or "как получится"
         st["step"] = OB_ASK_KIDS
-        await msg.reply_text("Дети есть?", reply_markup=kids_keyboard())
+        await msg.reply_text("Дети есть?")
         return
 
     if step == OB_ASK_KIDS:
-        await msg.reply_text("Нажми кнопку — да или нет 👇", reply_markup=kids_keyboard())
+        parsed = _parse_kids(raw)
+        if parsed is None:
+            await msg.reply_text("Напиши да или нет — есть дети?")
+            return
+        st["has_kids"] = parsed
+        st["step"] = OB_ASK_WORKS
+        await msg.reply_text("Работаешь? Найм, своё дело, или сейчас нет?")
         return
 
     if step == OB_ASK_WORKS:
-        await msg.reply_text("Выбери вариант 👇", reply_markup=works_keyboard())
+        parsed = _parse_works(raw)
+        if parsed is None:
+            await msg.reply_text("Напиши как — работаю, своё дело, или сейчас нет")
+            return
+        st["works"] = parsed
+        st["step"] = OB_MAIN_GOAL
+        await msg.reply_text(
+            "И последнее — что сейчас хочешь изменить?\n\n"
+            "Не цель, а ощущение. Например: «хочу перестать чувствовать что не успеваю» "
+            "или «хочу снова чувствовать себя собой»."
+        )
         return
 
     if step == OB_MAIN_GOAL:
         text = raw.strip()[:2000]
         if len(text) < 5:
-            await msg.reply_text(
-                "Напиши своими словами — ощущение, не цель. "
-                "Например: «хочу перестать чувствовать что не успеваю»."
-            )
+            await msg.reply_text("Напиши своими словами — что хочешь изменить, пусть даже размыто.")
             return
         st["main_goal"] = text
         st["step"] = OB_ASK_TIME
         await msg.reply_text(
-            "В какое время тебе написать завтра утром?\nФормат HH:MM — например 09:30"
+            "В какое время написать тебе завтра утром?\n"
+            "Напиши в формате 09:30"
         )
         return
 
     if step == OB_ASK_TIME:
         parsed = _parse_daily_time(raw)
         if not parsed:
-            await msg.reply_text("Напиши время как 09:30 или 18:00")
+            await msg.reply_text("Напиши время как 09:30 или 08:00")
             return
         st["daily_time"] = parsed
         st["timezone"] = _default_timezone()
@@ -159,76 +179,25 @@ async def handle_onboarding_turn(
         profile = await asyncio.to_thread(persist_profile, cid, st, model_names)
         onboarding.pop(cid, None)
         user_profiles[str(cid)] = profile
-        subscribers.add(cid)
 
         name = profile.get("name", "")
         histories[cid] = [
             {
                 "role": "user",
                 "parts": [
-                    f"[SpiceSpace] Онбординг: {name}, утро — {profile.get('morning_routine')}, "
-                    f"ощущение — {profile.get('main_goal')}, пишу в {parsed}."
+                    f"[SpiceSpace] Онбординг завершён: {name}, "
+                    f"утро — {profile.get('morning_routine')}, "
+                    f"ощущение — {profile.get('main_goal')}, "
+                    f"пишу в {parsed}."
                 ],
             }
         ]
 
         await msg.reply_text(
-            f"Записала ✨ Буду писать тебе в {parsed}.\n\n"
-            f"Завтра утром напишу первым — и уже буду помнить про тебя.\n\n"
-            "/stop — если захочешь выключить утренние сообщения."
+            f"Всё, запомнила ✨\n\n"
+            f"Завтра в {parsed} напишу — и уже буду знать про тебя кое-что важное.\n\n"
+            f"Если что-то случится сегодня и захочешь поговорить — я здесь."
         )
         return
 
-    await msg.reply_text("Что-то сбилось. Нажми /start — пройдём знакомство сначала.")
-
-
-async def onboarding_context_callback(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    onboarding: dict[int, dict],
-) -> None:
-    q = update.callback_query
-    if not q or not q.data or not q.message:
-        return
-
-    cid = q.message.chat_id
-    st = onboarding.get(cid)
-    if not st:
-        await q.answer()
-        return
-
-    step = int(st.get("step") or 0)
-    parts = q.data.split(":")
-    if len(parts) != 3 or parts[0] != "ob":
-        await q.answer()
-        return
-
-    kind, val = parts[1], parts[2]
-
-    if kind == "kids" and step == OB_ASK_KIDS and val in ("yes", "no"):
-        st["has_kids"] = val == "yes"
-        st["step"] = OB_ASK_WORKS
-        await q.answer()
-        try:
-            await q.edit_message_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-        await q.message.reply_text("Работаешь?", reply_markup=works_keyboard())
-        return
-
-    if kind == "works" and step == OB_ASK_WORKS and val in ("yes", "no", "own"):
-        st["works"] = val
-        st["step"] = OB_MAIN_GOAL
-        await q.answer()
-        try:
-            await q.edit_message_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-        await q.message.reply_text(
-            "Что сейчас не так? Не цель — а ощущение.\n"
-            "Например: «хочу перестать чувствовать что я не успеваю» "
-            "или «хочу снова чувствовать себя собой»."
-        )
-        return
-
-    await q.answer()
+    await msg.reply_text("Что-то сбилось. Нажми /start — начнём знакомство сначала.")
