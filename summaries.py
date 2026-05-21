@@ -26,11 +26,15 @@ def _parse_summary_json(text: str) -> dict | None:
     try:
         data = json.loads(m.group(0))
         if isinstance(data, dict) and data.get("summary"):
-            return {
+            out = {
                 "summary": str(data.get("summary", ""))[:4000],
                 "mood": str(data.get("mood", ""))[:200],
                 "key_detail": str(data.get("key_detail", ""))[:500],
+                "task": str(data.get("task", ""))[:500],
             }
+            if "completed" in data:
+                out["completed"] = bool(data.get("completed"))
+            return out
     except json.JSONDecodeError:
         pass
     return None
@@ -88,6 +92,8 @@ def save_summary_for_today(
                     summary=parsed["summary"],
                     mood=parsed["mood"],
                     key_detail=parsed["key_detail"],
+                    task=parsed.get("task", ""),
+                    completed=parsed.get("completed"),
                 )
                 log.info("daily_summary saved user=%s date=%s", user_id, today)
                 return
@@ -110,18 +116,11 @@ def save_onboarding_summary(
         tz = ZoneInfo("Asia/Ho_Chi_Minh")
     today = datetime.now(tz).date()
 
-    kids = profile.get("has_kids")
-    kids_s = "да" if kids is True else ("нет" if kids is False else "не сказала")
-    works = profile.get("works") or ""
-    works_ru = {"yes": "да", "no": "нет", "own": "своё дело"}.get(works, works)
-
     prompt = ONBOARDING_SUMMARY_PROMPT.format(
         name=profile.get("name", ""),
-        morning_routine=profile.get("morning_routine", ""),
-        has_kids=kids_s,
-        works=works_ru,
         main_goal=profile.get("main_goal", ""),
-        daily_time=profile.get("daily_time", "09:30"),
+        morning_time=profile.get("morning_time") or profile.get("daily_time", "09:30"),
+        evening_time=profile.get("evening_time", "21:00"),
     )
 
     for mid in model_names:
@@ -141,6 +140,8 @@ def save_onboarding_summary(
                     summary=parsed["summary"],
                     mood=parsed["mood"],
                     key_detail=parsed["key_detail"],
+                    task=parsed.get("task", ""),
+                    completed=parsed.get("completed"),
                 )
                 return
         except (anthropic.RateLimitError, anthropic.NotFoundError):
@@ -151,9 +152,11 @@ def save_onboarding_summary(
     upsert_daily_summary(
         user_id,
         today,
-        summary=f"Знакомство: {profile.get('name')}. Утро: {profile.get('morning_routine')}.",
+        summary=f"Знакомство: {profile.get('name')}. Цель: {profile.get('main_goal')}.",
         mood="начало",
         key_detail=str(profile.get("main_goal", ""))[:500],
+        task="",
+        completed=False,
     )
 
 

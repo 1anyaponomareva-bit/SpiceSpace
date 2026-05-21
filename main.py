@@ -1,5 +1,5 @@
 """
-SpiceSpace Telegram bot: companion с памятью, 5-шаговый онбординг, утренние сообщения,
+SpiceSpace Telegram bot: companion с памятью, онбординг, утро/вечер daily loop,
 daily_summaries в Supabase, Claude API с prompt caching, HTTP API для Mini App.
 
 Secrets: TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY in .env
@@ -38,7 +38,14 @@ import db as db_store
 import onboarding_flow as ob
 from claude_client import build_model_chain, configure as configure_claude, generate as claude_generate
 from claude_client import select_model_id
-from prompts import MORNING_SYSTEM, MORNING_USER_TEMPLATE, build_chat_system, profile_snippet
+from prompts import (
+    MORNING_TASK_PROMPT,
+    build_chat_system,
+    evening_opening,
+    evening_reply_done,
+    evening_reply_missed,
+    morning_opening,
+)
 from summaries import maybe_save_daily_summary
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -76,12 +83,12 @@ SUBSCRIBERS_PATH = DATA_DIR / "subscribers.json"
 USER_PROFILES_PATH = DATA_DIR / "user_profiles.json"
 TASKS_PATH = DATA_DIR / "tasks.json"
 
-# Онбординг — см. onboarding_flow.py (4 шага, без кнопок)
+# Онбординг — см. onboarding_flow.py (без кнопок)
 OB_RETURNING = ob.OB_RETURNING
 OB_ASK_NAME = ob.OB_ASK_NAME
-OB_ASK_MORNING = ob.OB_ASK_MORNING
-OB_MAIN_GOAL = ob.OB_MAIN_GOAL
-OB_ASK_TIME = ob.OB_ASK_TIME
+OB_GOAL_DIALOG = ob.OB_GOAL_DIALOG
+OB_ASK_MORNING_TIME = ob.OB_ASK_MORNING_TIME
+OB_ASK_EVENING_TIME = ob.OB_ASK_EVENING_TIME
 
 GENDER_ROWS: list[tuple[str, str]] = [
     ("male", "Он"),
@@ -693,6 +700,7 @@ subscribers: set[int] = db_store.load_subscribers()
 user_profiles: dict[str, dict] = db_store.load_all_profiles()
 histories: dict[int, list[dict]] = {}
 pending_morning: dict[int, str] = {}
+pending_evening: dict[int, dict] = {}
 onboarding: dict[int, dict[str, object]] = {}
 # Последнее напоминание по задаче (для «ГОТОВО» в чате).
 last_reminder_task_id: dict[int, str] = {}
@@ -1220,11 +1228,6 @@ def _hist_to_claude_messages(hist_prefix: list[dict], user_text: str | None = No
     return messages
 
 
-def _profile_snippet(chat_id: int) -> str:
-    p = user_profiles.get(str(chat_id))
-    return profile_snippet(p) if p else ""
-
-
 def _history_context_snippet(chat_id: int, max_turns: int = 14, max_chars: int = 700) -> str:
     hist = histories.get(chat_id) or []
     if not hist:
@@ -1239,54 +1242,112 @@ def _history_context_snippet(chat_id: int, max_turns: int = 14, max_chars: int =
     return "\n".join(lines)
 
 
-async def _generate_morning_question(model_names: list[str], chat_id: int) -> str:
+def _morning_message_text(chat_id: int) -> str:
     prof = user_profiles.get(str(chat_id)) or {}
     tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name) or {}
-
-    user_prompt = MORNING_USER_TEMPLATE.format(
-        name=prof.get("name", ""),
-        morning_routine=prof.get("morning_routine", "как получится"),
-        yesterday_summary=yesterday.get("summary") or "первое утро — вчера только познакомились",
-        key_detail=yesterday.get("key_detail") or prof.get("main_goal", ""),
+    return morning_opening(
+        str(prof.get("name", "")),
+        str(yesterday.get("key_detail") or ""),
     )
 
-    def call() -> str:
-        for mid in model_names:
-            try:
-                text = claude_generate(
-                    mid,
-                    [{"role": "user", "content": user_prompt}],
-                    system=MORNING_SYSTEM,
-                    max_tokens=256,
-                    cache_core=True,
-                ).strip()
-                if text:
-                    return text
-            except (anthropic.RateLimitError, anthropic.NotFoundError):
-                continue
-        name = prof.get("name", "…")
-        detail = yesterday.get("key_detail") or prof.get("main_goal", "")
-        if detail:
-            return f"{name}, доброе утро ☀️ Помню: {detail} — как сегодня?"
-        return f"{name}, доброе утро ☀️ Как утро?"
 
-    return await asyncio.to_thread(call)
+def _profile_local_date(profile: dict) -> date:
+    tz_name = str(profile.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Ho_Chi_Minh")
+    return datetime.now(tz).date()
+
+
+def _detect_evening_outcome(raw: str) -> tuple[bool, bool]:
+    low = (raw or "").strip().lower()
+    done_words = (
+        "да",
+        "сделала",
+        "получилось",
+        "успела",
+        "готово",
+        "выполнила",
+        "сделано",
+        "получилось!",
+    )
+    miss_words = (
+        "нет",
+        "не получилось",
+        "не сделала",
+        "не успела",
+        "не вышло",
+        "сорвал",
+        "не смогла",
+    )
+    done = any(w in low for w in done_words)
+    missed = any(w in low for w in miss_words)
+    if done and missed:
+        return False, False
+    return done, missed
+
+
+def _update_today_summary_field(
+    chat_id: int, profile: dict, **fields: object
+) -> None:
+    today = _profile_local_date(profile)
+    existing = db_store.get_daily_summary(chat_id, today) or {}
+    db_store.patch_daily_summary(
+        chat_id,
+        today,
+        summary=str(fields.get("summary") or existing.get("summary") or ""),
+        mood=str(fields.get("mood") or existing.get("mood") or ""),
+        key_detail=str(fields.get("key_detail") or existing.get("key_detail") or ""),
+        task=str(fields.get("task") or existing.get("task") or ""),
+        completed=fields.get("completed", existing.get("completed")),
+    )
+
+
+async def _handle_evening_reply(
+    chat_id: int,
+    user_text: str,
+    profile: dict,
+    model_names: list[str],
+) -> str:
+    pending_evening.pop(chat_id, None)
+    done, missed = _detect_evening_outcome(user_text)
+    if done:
+        _update_today_summary_field(chat_id, profile, completed=True)
+        return evening_reply_done()
+    if missed:
+        _update_today_summary_field(chat_id, profile, completed=False)
+        return evening_reply_missed()
+    return (
+        "Расскажи честно — получилось сегодня или нет? "
+        "Мне важно понять, как ты себя чувствуешь.\n\n"
+        "Поставим задачу на завтра или утром займёмся?"
+    )
 
 
 async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> str:
-    if chat_id in pending_morning:
-        q = pending_morning.pop(chat_id)
-        user_text = (
-            f"(Отвечает на утреннее сообщение: «{q}». "
-            "Коротко, по-человечески, без коуч-языка.)\n\n"
-            f"{user_text}"
-        )
-
     prof = user_profiles.get(str(chat_id)) or {}
     tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name)
-    system = build_chat_system(prof, yesterday)
+    today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
+    extra = ""
+
+    if chat_id in pending_morning:
+        morning_q = pending_morning.pop(chat_id)
+        extra = MORNING_TASK_PROMPT.format(
+            name=prof.get("name", ""),
+            main_goal=prof.get("main_goal", ""),
+            user_answer=user_text,
+            yesterday_summary=(yesterday or {}).get("summary") or "мало контекста",
+        )
+        user_text = (
+            f"(Утро. Ответ на «{morning_q}»: «{user_text}». "
+            "Помоги поставить одну задачу на сегодня.)\n\n"
+            f"{user_text}"
+        )
+
+    system = build_chat_system(prof, yesterday, today_summary, extra=extra)
 
     hist = histories.setdefault(chat_id, [])
     history_prefixes: list[list[dict]] = [list(hist)]
@@ -1324,6 +1385,8 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
         raise RuntimeError("Ни одна модель Claude не ответила")
 
     _append_history_turn(chat_id, user_text, reply)
+    if extra:
+        _update_today_summary_field(chat_id, prof, task=reply[:500])
     asyncio.create_task(
         maybe_save_daily_summary(chat_id, prof, histories.get(chat_id, []), model_names)
     )
@@ -1376,10 +1439,10 @@ def _parse_daily_time(raw: str) -> str | None:
 def _profile_has_daily_time(profile: dict | None) -> bool:
     if not profile:
         return False
-    dt = profile.get("daily_time")
-    if dt is None:
+    mt = profile.get("morning_time") or profile.get("daily_time")
+    if mt is None:
         return False
-    return _parse_daily_time(str(dt)) is not None
+    return _parse_daily_time(str(mt)) is not None
 
 
 def _looks_like_reminder_capability_question(text: str) -> bool:
@@ -1413,9 +1476,12 @@ def _looks_like_reminder_capability_question(text: str) -> bool:
 def _reminder_capability_reply(profile: dict | None) -> str:
     """Фиксированные ответы по правилам продукта — без вызова модели."""
     if _profile_has_daily_time(profile):
-        t = str(profile.get("daily_time", "")).strip()
-        return f"Да ✨ Я напомню тебе в {t}."
-    return "Могу ✨ Во сколько тебе писать?"
+        mt = str(profile.get("morning_time") or profile.get("daily_time", "")).strip()
+        et = str(profile.get("evening_time") or "").strip()
+        if et:
+            return f"Да ✨ Утром в {mt}, вечером в {et}."
+        return f"Да ✨ Утром напишу в {mt}."
+    return "Могу ✨ Во сколько тебе писать утром?"
 
 
 def _append_history_turn(chat_id: int, user_text: str, model_text: str) -> None:
@@ -1476,12 +1542,15 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
     subscribers.discard(cid)
     pending_morning.pop(cid, None)
+    pending_evening.pop(cid, None)
     db_store.save_subscriber(cid, False)
     prof = user_profiles.get(str(cid))
     if isinstance(prof, dict):
         prof["daily_enabled"] = False
         db_store.upsert_profile(cid, prof)
-    await update.message.reply_text("Утренние напоминания выключены. Напиши /start, чтобы снова включить.")
+    await update.message.reply_text(
+        "Утренние и вечерние сообщения выключены. Напиши /start, чтобы снова включить."
+    )
 
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1490,6 +1559,7 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
     histories.pop(cid, None)
     pending_morning.pop(cid, None)
+    pending_evening.pop(cid, None)
     pending_natural_reminder.pop(cid, None)
     last_reminder_task_id.pop(cid, None)
     onboarding.pop(cid, None)
@@ -1526,6 +1596,13 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     prof_raw = user_profiles.get(str(cid))
     prof_d = prof_raw if isinstance(prof_raw, dict) else None
+    model_names: list[str] = context.bot_data["claude_model_names"]
+
+    if cid in pending_evening and prof_d:
+        reply = await _handle_evening_reply(cid, raw, prof_d, model_names)
+        _append_history_turn(cid, raw, reply)
+        await update.message.reply_text(reply)
+        return
 
     if cid in pending_natural_reminder and prof_d:
         if _looks_like_reminder_command(raw):
@@ -1594,7 +1671,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 return
 
     log.info("incoming text chat_id=%s len=%s", cid, len(raw))
-    model_names: list[str] = context.bot_data["claude_model_names"]
 
     # Пользователю важно видеть, что бот «думает», а не пропал на 3–5 секунд.
     placeholder = await _send_thinking_placeholder(update.message)
@@ -1786,6 +1862,8 @@ async def _bootstrap_bot() -> None:
                 profile = user_profiles.get(key)
                 if not isinstance(profile, dict):
                     continue
+                if not profile.get("daily_enabled", True):
+                    continue
                 tz_name = str(profile.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
                 try:
                     user_tz = ZoneInfo(tz_name)
@@ -1794,30 +1872,31 @@ async def _bootstrap_bot() -> None:
                 now_local = datetime.now(user_tz)
                 now_hm = now_local.strftime("%H:%M")
                 today = now_local.strftime("%Y-%m-%d")
-                daily_time = profile.get("daily_time", "09:30")
-                if daily_time != now_hm:
-                    continue
-                if profile.get("last_daily_sent_date") == today:
-                    continue
-                try:
-                    question = await _generate_morning_question(model_chain, cid)
-                    pending_morning[cid] = question
-                    await bot.send_message(chat_id=cid, text=question)
-                    profile["last_daily_sent_date"] = today
-                    user_profiles[key] = profile
-                    db_store.upsert_profile(cid, profile)
-                except Exception as e:
-                    log.warning("Daily message failed for %s: %s", cid, e)
+
+                morning_time = profile.get("morning_time") or profile.get("daily_time", "09:30")
+                evening_time = profile.get("evening_time") or "21:00"
+
+                if morning_time == now_hm and profile.get("last_morning_sent_date") != today:
                     try:
-                        await bot.send_message(
-                            chat_id=cid,
-                            text=(
-                                "Не получилось отправить запланированное напоминание — сбой на стороне сервиса. "
-                                "Напиши мне, когда удобно — продолжим здесь ✨"
-                            ),
-                        )
-                    except Exception as notify_err:
-                        log.warning("Service notice after daily fail also failed for %s: %s", cid, notify_err)
+                        text = _morning_message_text(cid)
+                        pending_morning[cid] = text
+                        await bot.send_message(chat_id=cid, text=text)
+                        profile["last_morning_sent_date"] = today
+                        profile["last_daily_sent_date"] = today
+                        user_profiles[key] = profile
+                        db_store.upsert_profile(cid, profile)
+                    except Exception as e:
+                        log.warning("Morning message failed for %s: %s", cid, e)
+
+                if evening_time == now_hm and profile.get("last_evening_sent_date") != today:
+                    try:
+                        pending_evening[cid] = {"date": today}
+                        await bot.send_message(chat_id=cid, text=evening_opening())
+                        profile["last_evening_sent_date"] = today
+                        user_profiles[key] = profile
+                        db_store.upsert_profile(cid, profile)
+                    except Exception as e:
+                        log.warning("Evening message failed for %s: %s", cid, e)
         except Exception as e:
             log.exception("daily_check_job crashed: %s", e)
 

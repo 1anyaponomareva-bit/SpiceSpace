@@ -8,9 +8,15 @@ create table if not exists user_profiles (
   works text check (works in ('yes', 'no', 'own')),
   main_goal text,
   daily_time text not null default '09:30',
+  morning_time text,
+  evening_time text default '21:00',
   timezone text not null default 'Asia/Ho_Chi_Minh',
   daily_enabled boolean not null default true,
   last_daily_sent_date date,
+  last_morning_sent_date date,
+  last_evening_sent_date date,
+  streak int default 0,
+  current_week int default 1,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -22,6 +28,8 @@ create table if not exists daily_summaries (
   summary text,
   mood text,
   key_detail text,
+  task text,
+  completed boolean,
   created_at timestamptz not null default now(),
   unique (user_id, summary_date)
 );

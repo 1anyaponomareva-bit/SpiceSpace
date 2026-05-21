@@ -207,6 +207,8 @@ def upsert_daily_summary(
     summary: str,
     mood: str,
     key_detail: str,
+    task: str = "",
+    completed: bool | None = None,
 ) -> None:
     key = str(user_id)
     d = on_date.isoformat()
@@ -216,7 +218,10 @@ def upsert_daily_summary(
         "summary": summary[:4000],
         "mood": mood[:200],
         "key_detail": key_detail[:500],
+        "task": (task or "")[:500],
     }
+    if completed is not None:
+        row["completed"] = bool(completed)
 
     if _use_supabase:
         _request(
@@ -233,29 +238,65 @@ def upsert_daily_summary(
     if not isinstance(user_days, dict):
         user_days = {}
         store[key] = user_days
-    user_days[d] = {"summary": summary, "mood": mood, "key_detail": key_detail}
+    entry = {"summary": summary, "mood": mood, "key_detail": key_detail, "task": task or ""}
+    if completed is not None:
+        entry["completed"] = bool(completed)
+    user_days[d] = entry
     _save_json(DAILY_SUMMARIES_PATH, store)
 
 
+def patch_daily_summary(
+    user_id: int | str,
+    on_date: date,
+    **fields: Any,
+) -> None:
+    """Merge fields into today's summary (creates minimal row if missing)."""
+    existing = get_daily_summary(user_id, on_date) or {}
+    upsert_daily_summary(
+        user_id,
+        on_date,
+        summary=str(fields.get("summary") or existing.get("summary") or ""),
+        mood=str(fields.get("mood") or existing.get("mood") or ""),
+        key_detail=str(fields.get("key_detail") or existing.get("key_detail") or ""),
+        task=str(fields.get("task") or existing.get("task") or ""),
+        completed=fields["completed"] if "completed" in fields else existing.get("completed"),
+    )
+
+
 def _profile_to_row(p: dict) -> dict:
-    last = p.get("last_daily_sent_date") or None
+    morning = p.get("morning_time") or p.get("daily_time") or "09:30"
+    evening = p.get("evening_time") or "21:00"
+    last_m = p.get("last_morning_sent_date") or p.get("last_daily_sent_date") or None
+    last_e = p.get("last_evening_sent_date") or None
     return {
         "name": p.get("name"),
         "morning_routine": p.get("morning_routine"),
         "has_kids": p.get("has_kids"),
         "works": p.get("works"),
         "main_goal": p.get("main_goal"),
-        "daily_time": p.get("daily_time", "09:30"),
+        "daily_time": morning,
+        "morning_time": morning,
+        "evening_time": evening,
         "timezone": p.get("timezone", "Asia/Ho_Chi_Minh"),
         "daily_enabled": p.get("daily_enabled", True),
-        "last_daily_sent_date": last if last else None,
+        "last_daily_sent_date": last_m if last_m else None,
+        "last_morning_sent_date": last_m if last_m else None,
+        "last_evening_sent_date": last_e if last_e else None,
+        "streak": p.get("streak", 0),
+        "current_week": p.get("current_week", 1),
     }
 
 
 def _row_to_profile(row: dict) -> dict:
     p = dict(row)
-    if p.get("last_daily_sent_date"):
-        p["last_daily_sent_date"] = str(p["last_daily_sent_date"])[:10]
+    for key in ("last_daily_sent_date", "last_morning_sent_date", "last_evening_sent_date"):
+        if p.get(key):
+            p[key] = str(p[key])[:10]
+    if not p.get("morning_time") and p.get("daily_time"):
+        p["morning_time"] = p["daily_time"]
+    if not p.get("evening_time"):
+        p["evening_time"] = "21:00"
+    p.setdefault("daily_time", p.get("morning_time", "09:30"))
     p.setdefault("raw_goal", p.get("main_goal", ""))
     p.setdefault("final_goal", p.get("main_goal", ""))
     p.setdefault("goal_type", "qualitative")
@@ -269,9 +310,13 @@ def _row_to_profile(row: dict) -> dict:
 
 
 def _row_to_summary(row: dict) -> dict:
-    return {
+    out = {
         "summary": row.get("summary") or "",
         "mood": row.get("mood") or "",
         "key_detail": row.get("key_detail") or "",
+        "task": row.get("task") or "",
         "summary_date": str(row.get("summary_date", ""))[:10],
     }
+    if row.get("completed") is not None:
+        out["completed"] = bool(row["completed"])
+    return out
