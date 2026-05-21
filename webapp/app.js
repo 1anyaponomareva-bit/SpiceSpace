@@ -270,6 +270,9 @@
       if (resp.status === 401) {
         return { profile: null, user: null, status: 'unauthorized' };
       }
+      if (resp.status === 404) {
+        return { profile: null, user: null, status: 'not-found' };
+      }
       if (!resp.ok) {
         return { profile: null, user: null, status: 'error' };
       }
@@ -305,10 +308,30 @@
     }
   }
 
-  function renderEmpty() {
+  function renderEmpty(reason) {
     document.body.classList.add('mode-empty');
     const empty = document.getElementById('empty-state');
     const main = document.getElementById('main-content');
+    const title = empty?.querySelector('.empty-title');
+    const text = empty?.querySelector('.empty-text');
+    if (title && text) {
+      if (reason === 'unauthorized') {
+        title.textContent = 'Не удалось подтвердить Telegram';
+        text.textContent =
+          'Открой Mini App из кнопки меню в том же боте, где проходила /start. Если только что сменила токен — перезапусти бота.';
+      } else if (reason === 'not-found') {
+        title.textContent = 'Профиль не найден на сервере';
+        text.textContent =
+          'Напиши /start в боте SpiceSpace ещё раз (на проде), затем снова открой Mini App из меню бота.';
+      } else if (reason === 'empty') {
+        title.textContent = 'Цель пока не зафиксирована';
+        text.textContent = 'Вернись в чат с ботом и допиши цель в онбординге.';
+      } else {
+        title.textContent = 'Пока цель не настроена';
+        text.textContent =
+          'Нажми кнопку — откроется чат с ботом, пройди /start и онбординг до конца.';
+      }
+    }
     if (empty) empty.hidden = false;
     if (main) main.hidden = true;
   }
@@ -795,7 +818,7 @@
 
     if (!profile) {
       applyIdentity(user || tgUser, null);
-      renderEmpty();
+      renderEmpty(status === 'empty' ? 'empty' : status);
       return;
     }
 

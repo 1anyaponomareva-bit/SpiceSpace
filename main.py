@@ -1196,11 +1196,24 @@ def _is_gotovo_message(text: str) -> bool:
 
 def _auth_telegram_id(request: Request, telegram_id: str | None) -> str:
     init_data = _extract_init_data(request)
-    user_obj = _validate_init_data(init_data) if init_data else None
-    tid = str(user_obj.get("id")) if user_obj else (telegram_id or "").strip()
-    if not tid or not tid.isdigit():
-        raise HTTPException(status_code=400, detail="telegram_id is required")
-    return tid
+    if init_data:
+        user_obj = _validate_init_data(init_data)
+        if not user_obj:
+            raise HTTPException(status_code=401, detail="invalid init data")
+        return str(user_obj["id"])
+    tid = (telegram_id or "").strip()
+    if tid.isdigit():
+        return tid
+    raise HTTPException(status_code=400, detail="telegram_id is required")
+
+
+def _resolve_user_profile(tid: str) -> dict | None:
+    """Профиль из JSON/Supabase + кэш в памяти (после онбординга в боте)."""
+    profile = db_store.get_profile(tid) or user_profiles.get(tid)
+    if isinstance(profile, dict):
+        user_profiles[tid] = profile
+        return profile
+    return None
 
 
 def _get_timezone() -> ZoneInfo:
@@ -1812,6 +1825,14 @@ def _validate_init_data(init_data: str, max_age_seconds: int = 24 * 60 * 60) -> 
 def _enrich_profile_for_api(profile: dict) -> dict:
     """Старые профили без новых полей получают разумные дефолты при отдаче в Mini App."""
     p = dict(profile)
+    if not p.get("main_goal"):
+        p["main_goal"] = (
+            p.get("final_goal") or p.get("raw_goal") or p.get("amount") or ""
+        ).strip()
+    if not p.get("raw_goal"):
+        p["raw_goal"] = p.get("main_goal") or ""
+    if not p.get("final_goal"):
+        p["final_goal"] = p.get("main_goal") or p.get("raw_goal") or ""
     if not p.get("goal_type"):
         p["goal_type"] = "measurable" if p.get("amount") or _has_digit(str(p.get("raw_goal", ""))) else "qualitative"
     p.setdefault("goal_signals", [])
@@ -1821,6 +1842,11 @@ def _enrich_profile_for_api(profile: dict) -> dict:
     p.setdefault("completed_tasks", [])
     p.setdefault("missed_tasks", [])
     p.setdefault("current_week", 1)
+    mt = p.get("morning_time") or p.get("daily_time")
+    if mt:
+        p.setdefault("morning_time", mt)
+        p.setdefault("daily_time", mt)
+    p.setdefault("evening_time", p.get("evening_time") or "21:00")
     return p
 
 
@@ -2046,8 +2072,9 @@ async def get_profile(
     """
     tid = _auth_telegram_id(request, telegram_id)
 
-    profile = user_profiles.get(tid)
+    profile = _resolve_user_profile(tid)
     if not isinstance(profile, dict):
+        log.info("api/profile 404 user_id=%s (нет онбординга на этом сервере)", tid)
         raise HTTPException(status_code=404, detail="profile not found")
 
     user_obj = _validate_init_data(_extract_init_data(request))
