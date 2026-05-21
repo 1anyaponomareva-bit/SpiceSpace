@@ -25,13 +25,18 @@ OB_ASK_MORNING = 2
 OB_MAIN_GOAL = 3
 OB_ASK_TIME = 4
 
-GREETING_NEW = """Я знаю — задач много, желаний ещё больше. Но в конце дня ощущение что ничего не сдвинулось. Ставишь цели, начинаешь — и где-то сливаешься.
+GREETING_NEW = "Привет! Меня зовут Спейс 🌶️ Как тебя зовут?"
 
-Я создана на основе исследований Teresa Amabile & Steven Kramer (Harvard), BJ Fogg (Stanford) и Self-Determination Theory (Deci & Ryan). Доказано: люди достигают целей в 3 раза чаще когда видят прогресс и получают ежедневную подотчётность.
 
-Я здесь чтобы это изменить. Меня зовут Спейс 🌶️
-
-Как тебя зовут?"""
+def message_after_name(name: str) -> str:
+    n = (name or "").strip() or "подруга"
+    return (
+        f"{n}, приятно 🙂 Я создана чтобы помочь тебе реально двигаться к тому что важно — "
+        "не просто ставить цели, а достигать их. Это основано на исследованиях Teresa Amabile (Harvard) "
+        "и BJ Fogg (Stanford) — люди достигают целей в 3 раза чаще когда есть ежедневная поддержка "
+        "и видимый прогресс.\n\n"
+        "Как начинается твоё утро — кофе в тишине, спорт, или дети раньше будильника?"
+    )
 
 GOAL_SUGGESTIONS = """Может быть, что-то из этого откликается?
 
@@ -284,10 +289,7 @@ async def handle_returning_choice(
 
     if looks_like_restart_onboarding(raw):
         start_reonboarding(onboarding, cid, name)
-        await msg.reply_text(
-            f"{name}, приятно познакомиться 🙂\n\n"
-            "Как начинается твоё утро — кофе в тишине, спорт, или дети раньше будильника?"
-        )
+        await msg.reply_text(message_after_name(name))
         return True
 
     if looks_like_just_chat(raw):
@@ -325,11 +327,9 @@ async def handle_onboarding_turn(
     if step == OB_ASK_NAME:
         name = raw.strip()[:120] or "подруга"
         st["name"] = name
+        _note_kids_from_answer(st, raw)
         st["step"] = OB_ASK_MORNING
-        await msg.reply_text(
-            f"{name}, приятно познакомиться 🙂\n\n"
-            "Как начинается твоё утро — кофе в тишине, спорт, или дети раньше будильника?"
-        )
+        await msg.reply_text(message_after_name(name))
         return
 
     if step == OB_ASK_MORNING:
