@@ -2008,8 +2008,10 @@ async def root() -> dict:
 
 
 @app.get("/health")
-async def health() -> dict[str, bool]:
-    return {"ok": True}
+async def health() -> dict[str, str | bool]:
+    from onboarding_flow import BOT_BUILD
+
+    return {"ok": True, "build": BOT_BUILD}
 
 
 @app.get("/api/profile")

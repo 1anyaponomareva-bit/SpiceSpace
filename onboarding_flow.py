@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
+# Для проверки деплоя: curl /health → build
+BOT_BUILD = "goal-dialog-v5"
+
 OB_RETURNING = 0
 OB_ASK_NAME = 1
 OB_GOAL_DIALOG = 2
@@ -116,6 +119,48 @@ def _note_kids_from_answer(st: dict, raw: str) -> None:
         st["has_kids"] = True
 
 
+def _normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def _last_assistant_reply(goal_turns: list[dict]) -> str:
+    for turn in reversed(goal_turns):
+        if turn.get("role") == "assistant":
+            return str(turn.get("content", "")).strip()
+    return ""
+
+
+def _is_vague_user_message(text: str) -> bool:
+    low = (text or "").strip().lower()
+    if len(low) < 4:
+        return True
+    if low in ("хз", "хз.", "?", "…", "..."):
+        return True
+    return any(x in low for x in ("хз", "не знаю", "не понимаю", "невнят", "не уверен"))
+
+
+def _vague_user_streak(goal_turns: list[dict]) -> int:
+    count = 0
+    for turn in reversed(goal_turns):
+        if turn.get("role") != "user":
+            continue
+        if _is_vague_user_message(turn.get("content", "")):
+            count += 1
+        else:
+            break
+    return count
+
+
+def _last_substantive_user_message(goal_turns: list[dict]) -> str:
+    for turn in reversed(goal_turns):
+        if turn.get("role") != "user":
+            continue
+        content = str(turn.get("content", "")).strip()
+        if content and not _is_vague_user_message(content):
+            return content
+    return ""
+
+
 def _goal_ready_flag(value: object) -> bool:
     if value is True:
         return True
@@ -176,6 +221,8 @@ def _fallback_goal_reply(goal_turns: list[dict]) -> dict:
 async def _claude_goal_dialog(
     goal_turns: list[dict],
     model_names: list[str],
+    *,
+    extra_user_hint: str = "",
 ) -> dict:
     """Мультитурновый диалог про цель → {"reply", "goal_ready", "goal"}."""
     messages = [
@@ -183,6 +230,8 @@ async def _claude_goal_dialog(
         for t in goal_turns
         if t.get("role") in ("user", "assistant") and t.get("content")
     ]
+    if extra_user_hint:
+        messages.append({"role": "user", "content": extra_user_hint})
 
     def call() -> dict:
         for mid in model_names:
@@ -433,8 +482,37 @@ async def handle_onboarding_turn(
         turns = st.setdefault("goal_turns", [])
         turns.append({"role": "user", "content": raw.strip()[:2000]})
 
+        if _vague_user_streak(turns) >= 2:
+            substantive = _last_substantive_user_message(turns)
+            if substantive:
+                goal_text = f"{substantive} (уточним в процессе)"
+                st["main_goal"] = goal_text[:2000]
+                st["step"] = OB_ASK_MORNING_TIME
+                await msg.reply_text(
+                    f"Окей, зафиксирую так: {goal_text} — по ходу уточним детали."
+                )
+                await msg.reply_text(MORNING_TIME_QUESTION)
+                return
+
+        prev_reply = _last_assistant_reply(turns)
         result = await _claude_goal_dialog(turns, model_names)
         reply = (result.get("reply") or "Расскажи подробнее?").strip()
+
+        if prev_reply and _normalize_text(reply) == _normalize_text(prev_reply):
+            log.warning("goal_dialog: repeated reply, retrying")
+            result = await _claude_goal_dialog(
+                turns,
+                model_names,
+                extra_user_hint=(
+                    "Твой прошлый ответ повторяется. Задай ДРУГОЙ вопрос "
+                    "или зафиксируй цель (goal_ready: true, goal: текст)."
+                ),
+            )
+            reply = (result.get("reply") or "").strip()
+            if not reply or _normalize_text(reply) == _normalize_text(prev_reply):
+                result = _fallback_goal_reply(turns)
+                reply = result["reply"]
+
         turns.append({"role": "assistant", "content": reply[:2000]})
 
         if result.get("goal_ready") and result.get("goal"):
