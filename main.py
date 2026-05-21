@@ -76,11 +76,10 @@ SUBSCRIBERS_PATH = DATA_DIR / "subscribers.json"
 USER_PROFILES_PATH = DATA_DIR / "user_profiles.json"
 TASKS_PATH = DATA_DIR / "tasks.json"
 
-# Онбординг — см. onboarding_flow.py (5 шагов)
+# Онбординг — см. onboarding_flow.py (4 шага, без кнопок)
+OB_RETURNING = ob.OB_RETURNING
 OB_ASK_NAME = ob.OB_ASK_NAME
 OB_ASK_MORNING = ob.OB_ASK_MORNING
-OB_ASK_KIDS = ob.OB_ASK_KIDS
-OB_ASK_WORKS = ob.OB_ASK_WORKS
 OB_MAIN_GOAL = ob.OB_MAIN_GOAL
 OB_ASK_TIME = ob.OB_ASK_TIME
 
@@ -1455,19 +1454,20 @@ async def handle_onboarding_turn(
     )
 
 
-async def onboarding_context_callback(
-    update: Update, context: ContextTypes.DEFAULT_TYPE,
-) -> None:
-    await ob.onboarding_context_callback(update, context, onboarding)
-
-
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_chat or not update.message:
         return
     cid = update.effective_chat.id
     subscribers.add(cid)
-    onboarding[cid] = {"step": OB_ASK_NAME}
-    await update.message.reply_text("Привет! Я SpiceSpace. Как тебя зовут?")
+
+    prof = user_profiles.get(str(cid))
+    if isinstance(prof, dict) and prof.get("name"):
+        ob.start_returning_choice(onboarding, cid)
+        await update.message.reply_text(ob.greeting_returning(str(prof.get("name", ""))))
+        return
+
+    ob.start_new_onboarding(onboarding, cid)
+    await update.message.reply_text(ob.GREETING_NEW)
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1507,13 +1507,13 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     st_ob = onboarding.get(cid)
-    if st_ob and int(st_ob.get("step") or 0) > 0:
+    if st_ob is not None:
         await handle_onboarding_turn(update, context, raw)
         return
 
     if not user_profiles.get(str(cid)):
-        onboarding[cid] = {"step": OB_ASK_NAME}
-        await update.message.reply_text("Привет! Я SpiceSpace. Как тебя зовут?")
+        ob.start_new_onboarding(onboarding, cid)
+        await update.message.reply_text(ob.GREETING_NEW)
         return
 
     if _looks_like_reminder_capability_question(raw):
@@ -1749,12 +1749,6 @@ def _register_telegram_handlers(app_: Application) -> None:
     app_.add_handler(CommandHandler("start", cmd_start))
     app_.add_handler(CommandHandler("stop", cmd_stop))
     app_.add_handler(CommandHandler("reset", cmd_reset))
-    app_.add_handler(
-        CallbackQueryHandler(
-            onboarding_context_callback,
-            pattern=r"^ob:(kids|works):(yes|no|own)$",
-        )
-    )
     app_.add_handler(MessageHandler(filters.VOICE, on_voice))
     app_.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
