@@ -7,8 +7,8 @@ Secrets: TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY in .env
 Optional .env:
   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
   TIMEZONE=Asia/Ho_Chi_Minh  (дефолт для новых пользователей)
-  CLAUDE_MODEL=claude-sonnet-4-20250514
-  CLAUDE_FALLBACK_MODELS=claude-3-5-haiku-20241022
+  CLAUDE_MODEL=claude-sonnet-4-5
+  CLAUDE_FALLBACK_MODELS=claude-haiku-4-5
   PORT=8080
   MINIAPP_ORIGINS=...
   MINI_APP_URL=...

@@ -32,7 +32,7 @@ def select_model_id() -> str:
     preferred = os.getenv("CLAUDE_MODEL", "").strip()
     if preferred:
         return preferred
-    return "claude-sonnet-4-20250514"
+    return "claude-sonnet-4-5"
 
 
 def build_model_chain(primary: str) -> list[str]:
@@ -45,9 +45,8 @@ def build_model_chain(primary: str) -> list[str]:
             names.append(part)
             seen.add(part)
     for mid in (
-        "claude-sonnet-4-20250514",
-        "claude-3-5-haiku-20241022",
-        "claude-3-5-sonnet-20241022",
+        "claude-sonnet-4-5",
+        "claude-haiku-4-5",
     ):
         if mid not in seen:
             names.append(mid)
