@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -13,13 +14,7 @@ from telegram.ext import ContextTypes
 
 import db
 from claude_client import generate as claude_generate
-from prompts import (
-    FIRST_QUESTION_AFTER_ONBOARD,
-    GOAL_CLARIFY_PROMPT,
-    GOAL_DISCOMFORT_PROMPT,
-    GOAL_FIXED_CLARIFY,
-    GOAL_SUGGESTIONS,
-)
+from prompts import FIRST_QUESTION_AFTER_ONBOARD, GOAL_DIALOG_SYSTEM
 from summaries import save_onboarding_summary
 
 if TYPE_CHECKING:
@@ -34,23 +29,6 @@ OB_ASK_MORNING_TIME = 3
 OB_ASK_EVENING_TIME = 4
 
 GREETING_NEW = "Привет! 👋 Меня зовут Спейс. Как тебя зовут?"
-
-_VAGUE_GOAL = frozenset(
-    {
-        "не знаю",
-        "не знаю.",
-        "хз",
-        "хз.",
-        "не понимаю",
-        "не понимаю.",
-        "не уверена",
-        "не уверен",
-        "затрудняюсь",
-        "?",
-        "…",
-        "...",
-    }
-)
 
 _KIDS_HINTS = (
     "ребён",
@@ -92,6 +70,12 @@ _WORD_HOURS: dict[str, int] = {
     "десять": 10,
     "одиннадцать": 11,
     "двенадцать": 12,
+}
+
+_GOAL_DIALOG_FALLBACK = {
+    "reply": "А как ты поймёшь что достигла этого?",
+    "goal_ready": False,
+    "goal": "",
 }
 
 
@@ -139,46 +123,56 @@ def _note_kids_from_answer(st: dict, raw: str) -> None:
         st["has_kids"] = True
 
 
-def _is_dont_know(raw: str) -> bool:
-    t = (raw or "").strip().lower()
-    if len(t) < 5:
-        return True
-    if t in _VAGUE_GOAL:
-        return True
-    for phrase in ("не знаю", "не понимаю", "не уверен", "хз"):
-        if phrase in t:
-            return True
-    return False
+def _parse_goal_dialog_json(text: str) -> dict:
+    cleaned = text.replace("```json", "").replace("```", "").strip()
+    match = re.search(r"\{[\s\S]*\}", cleaned)
+    if not match:
+        return dict(_GOAL_DIALOG_FALLBACK)
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return dict(_GOAL_DIALOG_FALLBACK)
+    if not isinstance(data, dict):
+        return dict(_GOAL_DIALOG_FALLBACK)
+    reply = str(data.get("reply", "")).strip()
+    if not reply:
+        reply = _GOAL_DIALOG_FALLBACK["reply"]
+    return {
+        "reply": reply,
+        "goal_ready": bool(data.get("goal_ready")),
+        "goal": str(data.get("goal", "")).strip(),
+    }
 
 
-def _is_vague_goal(raw: str) -> bool:
-    return _is_dont_know(raw)
-
-
-def _combined_goal_text(st: dict, latest: str = "") -> str:
-    parts = list(st.get("goal_messages") or [])
-    if latest.strip():
-        parts.append(latest.strip())
-    return " → ".join(parts) if parts else (latest or "").strip()
-
-
-def _needs_goal_clarification(text: str) -> bool:
-    t = (text or "").strip()
-    if len(t) < 12:
-        return True
-    if _is_dont_know(t):
-        return True
-    low = t.lower()
-    has_metric = bool(re.search(r"\d", low)) or any(
-        x in low for x in ("кг", "руб", "$", "€", "раз в", "ежеднев", "недел", "минут", "часов")
+async def _claude_goal_dialog(
+    goal_messages: list[str],
+    new_message: str,
+    model_names: list[str],
+) -> dict:
+    """Диалог про цель через Claude → {"reply", "goal_ready", "goal"}."""
+    history_text = "\n".join(f"- {m}" for m in goal_messages) if goal_messages else "пока ничего"
+    prompt = (
+        f"История того что пользователь писал про цель:\n{history_text}\n\n"
+        f"Новое сообщение: {new_message}\n\n"
+        "Ответь JSON."
     )
-    fuzzy = any(x in low for x in ("хочу", "хотел", "больше", "меньше", "лучше", "перестать", "начать"))
-    vague_topics = ("похуд", "зарабат", "спорт", "баланс", "выгор", "отношен", "смысл")
-    if fuzzy and not has_metric:
-        return True
-    if any(p in low for p in vague_topics) and not has_metric and len(t) < 70:
-        return True
-    return False
+
+    def call() -> dict:
+        for mid in model_names:
+            try:
+                text = claude_generate(
+                    mid,
+                    [{"role": "user", "content": prompt}],
+                    system=GOAL_DIALOG_SYSTEM,
+                    max_tokens=300,
+                    cache_core=False,
+                ).strip()
+                return _parse_goal_dialog_json(text)
+            except Exception as e:
+                log.warning("goal dialog %s: %s", mid, e)
+        return dict(_GOAL_DIALOG_FALLBACK)
+
+    return await asyncio.to_thread(call)
 
 
 def parse_time_nl(raw: str) -> str | None:
@@ -300,30 +294,7 @@ def start_reonboarding(onboarding: dict[int, dict], cid: int, name: str) -> None
         "step": OB_GOAL_DIALOG,
         "name": name,
         "goal_messages": [],
-        "goal_phase": None,
     }
-
-
-async def _goal_clarify_question(goal_text: str, model_names: list[str]) -> str:
-    prompt = GOAL_CLARIFY_PROMPT.format(goal_text=goal_text[:1500])
-
-    def call() -> str:
-        for mid in model_names:
-            try:
-                text = claude_generate(
-                    mid,
-                    [{"role": "user", "content": prompt}],
-                    system="Ты Спейс. Только один короткий вопрос.",
-                    max_tokens=120,
-                    cache_core=False,
-                ).strip()
-                if text:
-                    return text
-            except Exception as e:
-                log.warning("goal clarify %s: %s", mid, e)
-        return "А как ты поймёшь что достигла этого? Что конкретно изменится?"
-
-    return await asyncio.to_thread(call)
 
 
 async def _first_question_after_onboard(
@@ -415,39 +386,22 @@ async def handle_onboarding_turn(
         st["name"] = name
         st["step"] = OB_GOAL_DIALOG
         st["goal_messages"] = []
-        st["goal_phase"] = None
         await msg.reply_text(message_after_name(name))
         return
 
     if step == OB_GOAL_DIALOG:
         msgs = st.setdefault("goal_messages", [])
         msgs.append(raw.strip()[:2000])
-        combined = _combined_goal_text(st)
 
-        if _is_dont_know(raw):
-            phase = st.get("goal_phase")
-            if phase is None:
-                st["goal_phase"] = "discomfort_asked"
-                await msg.reply_text(GOAL_DISCOMFORT_PROMPT)
-                return
-            if phase == "discomfort_asked":
-                st["goal_phase"] = "suggestions_shown"
-                await msg.reply_text(GOAL_SUGGESTIONS)
-                return
+        result = await _claude_goal_dialog(msgs[:-1], raw.strip(), model_names)
 
-        if _needs_goal_clarification(combined):
-            clarifies = int(st.get("goal_clarify_count") or 0)
-            st["goal_clarify_count"] = clarifies + 1
-            if clarifies == 0:
-                await msg.reply_text(GOAL_FIXED_CLARIFY)
-            else:
-                question = await _goal_clarify_question(combined, model_names)
-                await msg.reply_text(question)
-            return
-
-        st["main_goal"] = combined[:2000]
-        st["step"] = OB_ASK_MORNING_TIME
-        await msg.reply_text(MORNING_TIME_QUESTION)
+        if result.get("goal_ready") and result.get("goal"):
+            st["main_goal"] = result["goal"][:2000]
+            st["step"] = OB_ASK_MORNING_TIME
+            await msg.reply_text(result["reply"])
+            await msg.reply_text(MORNING_TIME_QUESTION)
+        else:
+            await msg.reply_text(result.get("reply") or "Расскажи подробнее?")
         return
 
     if step == OB_ASK_MORNING_TIME:
