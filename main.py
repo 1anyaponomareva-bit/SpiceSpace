@@ -52,6 +52,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from telegram import (
     BotCommand,
@@ -72,6 +73,7 @@ from telegram.ext import (
 )
 
 DATA_DIR = Path(__file__).resolve().parent
+WEBAPP_DIR = DATA_DIR / "webapp"
 load_dotenv(DATA_DIR / ".env")
 
 logging.basicConfig(
@@ -1725,21 +1727,24 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 _DEFAULT_MINI_APP_URL = "https://spice-space.vercel.app"
 
 
+def _public_base_url() -> str:
+    domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if domain:
+        return f"https://{domain}".rstrip("/")
+    explicit = os.getenv("PUBLIC_URL", "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    return ""
+
+
 def _mini_app_url() -> str:
-    """
-    Публичный URL Telegram Mini App (статика на Vercel).
-    Railway — только backend API; URL вида *.railway.app сюда задавать нельзя.
-    """
+    """URL Telegram Mini App: /webapp на Railway или MINI_APP_URL (Vercel)."""
+    if (WEBAPP_DIR / "index.html").is_file():
+        base = _public_base_url()
+        if base:
+            return f"{base}/webapp"
     raw = (os.getenv("MINI_APP_URL") or "").strip()
-    url = raw or _DEFAULT_MINI_APP_URL
-    if "railway.app" in url.lower():
-        log.warning(
-            "MINI_APP_URL=%r указывает на Railway — Mini App открывается с Vercel. Подставляю %s",
-            url,
-            _DEFAULT_MINI_APP_URL,
-        )
-        return _DEFAULT_MINI_APP_URL.rstrip("/")
-    return url.rstrip("/")
+    return (raw or _DEFAULT_MINI_APP_URL).rstrip("/")
 
 
 def _allowed_origins() -> set[str]:
@@ -1747,7 +1752,11 @@ def _allowed_origins() -> set[str]:
         "MINIAPP_ORIGINS",
         "https://spice-space.vercel.app,http://localhost:5173,http://localhost:3000",
     )
-    return {x.strip() for x in raw.split(",") if x.strip()}
+    origins = {x.strip() for x in raw.split(",") if x.strip()}
+    base = _public_base_url()
+    if base:
+        origins.add(base)
+    return origins
 
 
 def _extract_init_data(request: Request) -> str:
@@ -1995,6 +2004,14 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+if (WEBAPP_DIR / "index.html").is_file():
+    app.mount(
+        "/webapp",
+        StaticFiles(directory=str(WEBAPP_DIR), html=True),
+        name="webapp",
+    )
+    log.info("Mini App static files mounted at /webapp")
+
 
 @app.get("/")
 async def root() -> dict:
@@ -2004,6 +2021,7 @@ async def root() -> dict:
         "ok": True,
         "endpoints": ["/health", "/api/profile?telegram_id=<digits>", "/api/tasks"],
         "miniapp": _mini_app_url(),
+        "webapp_static": (WEBAPP_DIR / "index.html").is_file(),
     }
 
 
@@ -2032,7 +2050,11 @@ async def get_profile(
     if not isinstance(profile, dict):
         raise HTTPException(status_code=404, detail="profile not found")
 
-    return _enrich_profile_for_api(profile)
+    user_obj = _validate_init_data(_extract_init_data(request))
+    return {
+        "profile": _enrich_profile_for_api(profile),
+        "user": user_obj if isinstance(user_obj, dict) else None,
+    }
 
 
 class TaskCreatePayload(BaseModel):
