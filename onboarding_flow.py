@@ -72,13 +72,6 @@ _WORD_HOURS: dict[str, int] = {
     "двенадцать": 12,
 }
 
-_GOAL_DIALOG_FALLBACK = {
-    "reply": "А как ты поймёшь что достигла этого?",
-    "goal_ready": False,
-    "goal": "",
-}
-
-
 def message_after_name(name: str) -> str:
     n = (name or "").strip() or "подруга"
     return (
@@ -123,54 +116,101 @@ def _note_kids_from_answer(st: dict, raw: str) -> None:
         st["has_kids"] = True
 
 
-def _parse_goal_dialog_json(text: str) -> dict:
+def _goal_ready_flag(value: object) -> bool:
+    if value is True:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "да")
+    return False
+
+
+def _parse_goal_dialog_json(text: str) -> dict | None:
     cleaned = text.replace("```json", "").replace("```", "").strip()
     match = re.search(r"\{[\s\S]*\}", cleaned)
     if not match:
-        return dict(_GOAL_DIALOG_FALLBACK)
+        return None
     try:
         data = json.loads(match.group(0))
     except json.JSONDecodeError:
-        return dict(_GOAL_DIALOG_FALLBACK)
+        return None
     if not isinstance(data, dict):
-        return dict(_GOAL_DIALOG_FALLBACK)
+        return None
     reply = str(data.get("reply", "")).strip()
     if not reply:
-        reply = _GOAL_DIALOG_FALLBACK["reply"]
+        return None
     return {
         "reply": reply,
-        "goal_ready": bool(data.get("goal_ready")),
+        "goal_ready": _goal_ready_flag(data.get("goal_ready")),
         "goal": str(data.get("goal", "")).strip(),
     }
 
 
+def _fallback_goal_reply(goal_turns: list[dict]) -> dict:
+    """Только если Claude/JSON недоступны — разные ответы по ходу диалога."""
+    user_texts = [t["content"] for t in goal_turns if t["role"] == "user"]
+    last = (user_texts[-1] if user_texts else "").strip().lower()
+    n = len(user_texts)
+
+    if n <= 1 and ("не знаю" in last or len(last) < 5):
+        return {
+            "reply": "Что сейчас больше всего не устраивает в своей жизни?",
+            "goal_ready": False,
+            "goal": "",
+        }
+    if any(x in last for x in ("деньг", "зарабат", "доход", "буду зарабатывать")):
+        return {
+            "reply": (
+                "Поняла, про деньги. Сколько в месяц хочешь выйти "
+                "или что должно измениться, чтобы сказала — получилось?"
+            ),
+            "goal_ready": False,
+            "goal": "",
+        }
+    return {
+        "reply": "Расскажи конкретнее — как через месяц поймёшь, что цель достигнута?",
+        "goal_ready": False,
+        "goal": "",
+    }
+
+
 async def _claude_goal_dialog(
-    goal_messages: list[str],
-    new_message: str,
+    goal_turns: list[dict],
     model_names: list[str],
 ) -> dict:
-    """Диалог про цель через Claude → {"reply", "goal_ready", "goal"}."""
-    history_text = "\n".join(f"- {m}" for m in goal_messages) if goal_messages else "пока ничего"
-    prompt = (
-        f"История того что пользователь писал про цель:\n{history_text}\n\n"
-        f"Новое сообщение: {new_message}\n\n"
-        "Ответь JSON."
-    )
+    """Мультитурновый диалог про цель → {"reply", "goal_ready", "goal"}."""
+    messages = [
+        {"role": t["role"], "content": t["content"]}
+        for t in goal_turns
+        if t.get("role") in ("user", "assistant") and t.get("content")
+    ]
 
     def call() -> dict:
         for mid in model_names:
             try:
                 text = claude_generate(
                     mid,
-                    [{"role": "user", "content": prompt}],
+                    messages,
                     system=GOAL_DIALOG_SYSTEM,
-                    max_tokens=300,
+                    max_tokens=400,
                     cache_core=False,
                 ).strip()
-                return _parse_goal_dialog_json(text)
+                parsed = _parse_goal_dialog_json(text)
+                if parsed:
+                    log.info(
+                        "goal_dialog ok model=%s ready=%s",
+                        mid,
+                        parsed["goal_ready"],
+                    )
+                    return parsed
+                log.warning(
+                    "goal_dialog bad JSON model=%s raw=%s",
+                    mid,
+                    text[:400],
+                )
             except Exception as e:
-                log.warning("goal dialog %s: %s", mid, e)
-        return dict(_GOAL_DIALOG_FALLBACK)
+                log.warning("goal_dialog %s: %s", mid, e, exc_info=True)
+        log.error("goal_dialog: all models failed, using fallback")
+        return _fallback_goal_reply(goal_turns)
 
     return await asyncio.to_thread(call)
 
@@ -293,7 +333,7 @@ def start_reonboarding(onboarding: dict[int, dict], cid: int, name: str) -> None
     onboarding[cid] = {
         "step": OB_GOAL_DIALOG,
         "name": name,
-        "goal_messages": [],
+        "goal_turns": [],
     }
 
 
@@ -385,23 +425,25 @@ async def handle_onboarding_turn(
         name = raw.strip()[:120] or "подруга"
         st["name"] = name
         st["step"] = OB_GOAL_DIALOG
-        st["goal_messages"] = []
+        st["goal_turns"] = []
         await msg.reply_text(message_after_name(name))
         return
 
     if step == OB_GOAL_DIALOG:
-        msgs = st.setdefault("goal_messages", [])
-        msgs.append(raw.strip()[:2000])
+        turns = st.setdefault("goal_turns", [])
+        turns.append({"role": "user", "content": raw.strip()[:2000]})
 
-        result = await _claude_goal_dialog(msgs[:-1], raw.strip(), model_names)
+        result = await _claude_goal_dialog(turns, model_names)
+        reply = (result.get("reply") or "Расскажи подробнее?").strip()
+        turns.append({"role": "assistant", "content": reply[:2000]})
 
         if result.get("goal_ready") and result.get("goal"):
             st["main_goal"] = result["goal"][:2000]
             st["step"] = OB_ASK_MORNING_TIME
-            await msg.reply_text(result["reply"])
+            await msg.reply_text(reply)
             await msg.reply_text(MORNING_TIME_QUESTION)
         else:
-            await msg.reply_text(result.get("reply") or "Расскажи подробнее?")
+            await msg.reply_text(reply)
         return
 
     if step == OB_ASK_MORNING_TIME:
