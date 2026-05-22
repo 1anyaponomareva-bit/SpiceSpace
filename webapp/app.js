@@ -1,20 +1,12 @@
 (() => {
   'use strict';
 
-  const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
-
-  const BRAND = {
-    cream: '#FAF7F2',
-    spice: '#E8500A',
-    charcoal: '#1A1A1A',
-  };
+  const tg = window.Telegram?.WebApp ?? null;
 
   const BACKEND_META = (
     document.querySelector('meta[name="spicespace-backend"]')?.content || ''
   ).trim();
-  const BACKEND_URL = (
-    BACKEND_META || window.location.origin || ''
-  ).replace(/\/+$/, '');
+  const BACKEND_URL = (BACKEND_META || window.location.origin || '').replace(/\/+$/, '');
   const BOT_USERNAME = (
     document.querySelector('meta[name="spicespace-bot-username"]')?.content || ''
   ).replace(/^@/, '');
@@ -24,6 +16,13 @@
   let lastProfile = null;
   let tasksCache = [];
   let planWeekOffset = 0;
+  let dayMarkedKey = '';
+
+  const MONTHS_SHORT = [
+    'янв', 'фев', 'мар', 'апр', 'май', 'июн',
+    'июл', 'авг', 'сен', 'окт', 'ноя', 'дек',
+  ];
+  const WEEKDAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
   function withDemoQuery(path) {
     if (!DEMO_TG || (tg && tg.initData)) return path;
@@ -37,7 +36,7 @@
     }
     const url = `${BACKEND_URL}${withDemoQuery(path)}`;
     const headers = { ...(opts.headers || {}) };
-    if (tg && tg.initData && !headers.Authorization) {
+    if (tg?.initData && !headers.Authorization) {
       headers.Authorization = `tma ${tg.initData}`;
     }
     return fetch(url, { ...opts, headers, cache: 'no-store' });
@@ -48,11 +47,6 @@
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const da = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${da}`;
-  }
-
-  function dowKeyFromLocalDate(d) {
-    const w = d.getDay();
-    return ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][w];
   }
 
   function parseISODate(iso) {
@@ -66,60 +60,326 @@
     return localISODate(dt);
   }
 
+  function dowKeyFromLocalDate(d) {
+    return ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][d.getDay()];
+  }
+
   function taskAppliesOnDate(task, iso) {
     if (task.done || task.status !== 'active') return false;
     const r = task.repeat || 'none';
     if (r === 'daily') return true;
     if (r === 'weekly') {
       const days = Array.isArray(task.days_of_week) ? task.days_of_week : [];
-      const key = dowKeyFromLocalDate(parseISODate(iso));
-      return days.includes(key);
+      return days.includes(dowKeyFromLocalDate(parseISODate(iso)));
     }
     return (task.date || '') === iso;
   }
 
-  function taskMissed(task, todayIso) {
-    if ((task.repeat || 'none') !== 'none' || task.done) return false;
-    const td = task.date || '';
-    return td < todayIso;
+  function formatDayHeader(iso, todayIso) {
+    const d = parseISODate(iso);
+    const wd = WEEKDAY_LABELS[d.getDay()];
+    const day = d.getDate();
+    const mon = MONTHS_SHORT[d.getMonth()];
+    if (iso === todayIso) return `Сегодня · ${wd} ${day} ${mon}`;
+    const tomorrow = addDaysISO(todayIso, 1);
+    if (iso === tomorrow) return `Завтра · ${wd} ${day} ${mon}`;
+    return `${wd} ${day} ${mon}`;
+  }
+
+  function pluralize(n, forms) {
+    const a = Math.abs(n) % 100;
+    const b = a % 10;
+    if (a > 10 && a < 20) return forms[2];
+    if (b > 1 && b < 5) return forms[1];
+    if (b === 1) return forms[0];
+    return forms[2];
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function cssEscapeUrl(url) {
+    return String(url).replace(/"/g, '%22');
+  }
+
+  function haptic(type) {
+    try {
+      if (!tg?.HapticFeedback) return;
+      if (type === 'select') tg.HapticFeedback.selectionChanged();
+      else if (type === 'success') tg.HapticFeedback.notificationOccurred('success');
+      else tg.HapticFeedback.impactOccurred('light');
+    } catch (_) {}
+  }
+
+  function botLink() {
+    return BOT_USERNAME ? `https://t.me/${BOT_USERNAME}` : '';
+  }
+
+  function openBotChat() {
+    const link = botLink();
+    if (!link) return;
+    if (tg && typeof tg.openTelegramLink === 'function') {
+      try { tg.openTelegramLink(link); return; } catch (_) {}
+    }
+    window.open(link, '_blank');
+  }
+
+  function initTelegram() {
+    if (!tg) return;
+    document.body.classList.add('tg-app');
+    try { tg.ready(); } catch (_) {}
+    try { tg.expand(); } catch (_) {}
+    try { tg.disableVerticalSwipes?.(); } catch (_) {}
+    try {
+      tg.setHeaderColor?.('#F4F1EA');
+      tg.setBackgroundColor?.('#F4F1EA');
+    } catch (_) {}
+    const h = tg.viewportStableHeight || tg.viewportHeight;
+    if (h && Number.isFinite(h)) {
+      document.documentElement.style.setProperty('--tg-app-height', `${h}px`);
+    }
+    if (typeof tg.onEvent === 'function') {
+      tg.onEvent('viewportChanged', () => {
+        const nh = tg.viewportStableHeight || tg.viewportHeight;
+        if (nh && Number.isFinite(nh)) {
+          document.documentElement.style.setProperty('--tg-app-height', `${nh}px`);
+        }
+      });
+    }
+  }
+
+  function pickDisplayName(user, profile) {
+    if (profile?.name) return String(profile.name).trim();
+    if (!user) return 'друг';
+    const name = (user.first_name || user.username || '').toString().trim();
+    if (!name) return 'друг';
+    return name.length > 22 ? `${name.slice(0, 22).trim()}…` : name;
+  }
+
+  function applyGreeting() {
+    const el = document.getElementById('greeting');
+    if (!el) return;
+    const h = new Date().getHours();
+    let g = 'Доброе утро,';
+    if (h >= 12 && h < 18) g = 'Добрый день,';
+    else if (h >= 18 && h < 23) g = 'Добрый вечер,';
+    else if (h >= 23 || h < 5) g = 'Доброй ночи,';
+    el.textContent = g;
+  }
+
+  function applyIdentity(user, profile) {
+    const nameEl = document.getElementById('user-name');
+    if (nameEl) nameEl.textContent = pickDisplayName(user, profile);
+
+    const avatarEl = document.getElementById('avatar');
+    const tgUser = tg?.initDataUnsafe?.user;
+    const photo = user?.photo_url || tgUser?.photo_url;
+    if (avatarEl && photo) {
+      avatarEl.style.backgroundImage = `url("${cssEscapeUrl(photo)}")`;
+    }
+  }
+
+  function showGate(reason) {
+    const gate = document.getElementById('gate');
+    const main = document.getElementById('main');
+    const title = gate?.querySelector('.gate-title');
+    const text = gate?.querySelector('.gate-text');
+    if (title && text) {
+      if (reason === 'unauthorized') {
+        title.textContent = 'Открой через бота';
+        text.textContent =
+          'Не удалось подтвердить Telegram. Открой Mini App из кнопки у бота SpiceSpace или через /app.';
+      } else if (reason === 'not-found') {
+        title.textContent = 'Профиль не найден';
+        text.textContent = 'Напиши /start в боте SpiceSpace, пройди онбординг, затем снова открой Mini App.';
+      } else {
+        title.textContent = 'Открой через бота';
+        text.textContent = 'Сначала пройди знакомство с ботом — нажми кнопку ниже.';
+      }
+    }
+    if (gate) gate.hidden = false;
+    if (main) main.hidden = true;
+  }
+
+  function showMain() {
+    const gate = document.getElementById('gate');
+    const main = document.getElementById('main');
+    if (gate) gate.hidden = true;
+    if (main) main.hidden = false;
+  }
+
+  async function fetchProfile() {
+    if (!BACKEND_URL) return { profile: null, user: null, status: 'no-backend' };
+    if (!tg?.initData && !DEMO_TG) return { profile: null, user: null, status: 'no-init-data' };
+    try {
+      const resp = await apiFetch('/api/profile');
+      if (resp.status === 401) return { profile: null, user: null, status: 'unauthorized' };
+      if (resp.status === 404) return { profile: null, user: null, status: 'not-found' };
+      if (!resp.ok) return { profile: null, user: null, status: 'error' };
+      const data = await resp.json();
+      const profile = data.profile || data;
+      const hasGoal = profile && (profile.main_goal || profile.raw_goal || profile.final_goal);
+      return {
+        profile: hasGoal ? profile : null,
+        user: data.user || null,
+        status: hasGoal ? 'ok' : 'empty',
+      };
+    } catch (e) {
+      console.warn('fetchProfile', e);
+      return { profile: null, user: null, status: 'error' };
+    }
+  }
+
+  function goalTitle(profile) {
+    return (
+      profile.main_goal || profile.final_goal || profile.raw_goal || 'Твоя цель'
+    ).trim();
+  }
+
+  function renderStreak(profile) {
+    const streak = Number(profile.streak || 0);
+    const numEl = document.getElementById('streak-number');
+    if (numEl) numEl.textContent = String(streak);
+
+    const dotsEl = document.getElementById('streak-dots');
+    if (!dotsEl) return;
+    const total = 7;
+    const filled = Math.min(streak, total);
+    const todaySlot = Math.min(filled, total - 1);
+    const parts = [];
+    for (let i = 0; i < total; i++) {
+      let cls = 'streak-dot';
+      if (i < filled) cls += ' streak-dot--done';
+      else if (i === todaySlot && filled < total) cls += ' streak-dot--today';
+      parts.push(`<span class="${cls}"></span>`);
+    }
+    dotsEl.innerHTML = parts.join('');
+  }
+
+  function renderGoals(profile) {
+    const list = document.getElementById('goals-list');
+    if (!list) return;
+
+    const week = Number(profile.current_week || 1);
+    const percent = Math.max(0, Math.min(100, Number(profile.weekly_score || 0)));
+    const streak = Number(profile.streak || 0);
+    const daysLabel = streak > 0
+      ? `${streak} ${pluralize(streak, ['день', 'дня', 'дней'])}`
+      : 'старт';
+
+    const cards = [];
+    const title = goalTitle(profile);
+    cards.push(`
+      <article class="goal-card">
+        <h3 class="goal-card__title">${escapeHtml(title)}</h3>
+        <div class="goal-card__bar-row">
+          <div class="progress-bar"><div class="progress-fill" style="width:${percent}%"></div></div>
+          <span class="goal-card__percent">${percent}%</span>
+        </div>
+        <p class="goal-card__meta">Неделя ${week} из 4 · ${escapeHtml(daysLabel)}</p>
+      </article>
+    `);
+
+    const signals = Array.isArray(profile.goal_signals) ? profile.goal_signals : [];
+    if ((profile.goal_type || '').toLowerCase() === 'qualitative' && signals.length) {
+      const SIGNAL_LABELS = {
+        energy: 'Больше энергии',
+        anxiety: 'Меньше тревоги',
+        sleep: 'Лучше сон',
+        stability: 'Стабильность',
+        joy: 'Больше радости',
+      };
+      signals.forEach((sig) => {
+        const name = SIGNAL_LABELS[sig] || sig;
+        cards.push(`
+          <article class="goal-card">
+            <h3 class="goal-card__title">${escapeHtml(name)}</h3>
+            <div class="goal-card__bar-row">
+              <div class="progress-bar"><div class="progress-fill" style="width:${percent}%"></div></div>
+              <span class="goal-card__percent">${percent}%</span>
+            </div>
+            <p class="goal-card__meta">Неделя ${week} из 4 · отслеживаем</p>
+          </article>
+        `);
+      });
+    }
+
+    list.innerHTML = cards.join('');
+  }
+
+  function renderMarkDayButton() {
+    const btn = document.getElementById('btn-mark-day');
+    if (!btn) return;
+    const today = localISODate();
+    const key = `spicespace_day_${lastProfile ? 'u' : ''}_${today}`;
+    dayMarkedKey = key;
+    const marked = sessionStorage.getItem(key) === '1';
+    btn.disabled = marked;
+    btn.classList.toggle('is-done', marked);
+    btn.textContent = marked ? '✓ День отмечен' : '✓ Отметить день выполненным';
+  }
+
+  function renderProfile(profile) {
+    lastProfile = profile;
+    showMain();
+    renderStreak(profile);
+    renderGoals(profile);
+    renderMarkDayButton();
+
+    const planGoal = document.getElementById('plan-main-goal');
+    if (planGoal) planGoal.textContent = goalTitle(profile);
   }
 
   async function loadTasks() {
     tasksCache = [];
     if (!BACKEND_URL) return;
-    if (!(tg && tg.initData) && !DEMO_TG) return;
+    if (!tg?.initData && !DEMO_TG) return;
     const resp = await apiFetch('/api/tasks');
     if (!resp.ok) return;
     const data = await resp.json();
     tasksCache = Array.isArray(data.tasks) ? data.tasks : [];
   }
 
-  function renderPlanToday() {
-    const host = document.getElementById('plan-today-list');
+  function renderPlanDays() {
+    const host = document.getElementById('plan-days');
     if (!host) return;
     const todayIso = localISODate();
-    const list = tasksCache.filter((t) => taskAppliesOnDate(t, todayIso));
-    if (!list.length) {
-      host.innerHTML = '<div class="plan-empty">Сегодня пока без задач — добавь первую ✨</div>';
-      return;
-    }
-    list.sort((a, b) => String(a.time).localeCompare(String(b.time)));
-    host.innerHTML = list.map((t) => {
-      const st = t.done ? 'done' : taskMissed(t, todayIso) ? 'missed' : '';
-      const meta = t.done ? 'сделано' : t.repeat === 'daily' ? 'каждый день' : t.repeat === 'weekly' ? 'по дням' : 'разово';
+    const days = [todayIso, addDaysISO(todayIso, 1), addDaysISO(todayIso, 2)];
+    const blocks = days.map((iso) => {
+      const list = tasksCache
+        .filter((t) => taskAppliesOnDate(t, iso))
+        .sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
+      const head = formatDayHeader(iso, todayIso);
+      if (!list.length) {
+        return `
+          <div class="day-card">
+            <div class="day-card__head"><strong>${escapeHtml(head)}</strong></div>
+            <p class="day-card__empty">Задач нет</p>
+          </div>`;
+      }
+      const items = list.map((t) => {
+        const done = Boolean(t.done);
+        return `
+          <li class="task-item${done ? ' task-item--done' : ''}" data-task-id="${escapeHtml(t.id)}">
+            <span class="task-item__title">${escapeHtml(t.title || '')}</span>
+            <button type="button" class="task-item__mark" data-act="done" data-id="${escapeHtml(t.id)}" ${done ? 'disabled' : ''}>
+              ${done ? 'Готово' : 'Сделано'}
+            </button>
+          </li>`;
+      }).join('');
       return `
-        <div class="plan-task-row ${st}" data-task-id="${escapeHtml(t.id)}">
-          <div class="plan-task-time">${escapeHtml(t.time || '')}</div>
-          <div class="plan-task-body">
-            <div class="plan-task-title">${escapeHtml(t.title || '')}</div>
-            <div class="plan-task-meta">${escapeHtml(meta)}</div>
-          </div>
-          <div class="plan-task-actions">
-            <button type="button" class="pt-btn" data-act="done" data-id="${escapeHtml(t.id)}" ${t.done ? 'disabled' : ''}>Сделано</button>
-            <button type="button" class="pt-btn secondary" data-act="postpone" data-id="${escapeHtml(t.id)}">Перенести</button>
-          </div>
+        <div class="day-card">
+          <div class="day-card__head"><strong>${escapeHtml(head)}</strong></div>
+          <ul class="task-list">${items}</ul>
         </div>`;
-    }).join('');
+    });
+    host.innerHTML = blocks.join('');
   }
 
   function mondayOfDisplayedWeek() {
@@ -132,9 +392,9 @@
     return d;
   }
 
-  function renderPlanWeek() {
-    const row = document.getElementById('plan-days-row');
-    const title = document.getElementById('plan-week-title');
+  function renderWeekCalendar() {
+    const row = document.getElementById('week-row');
+    const title = document.getElementById('week-title');
     if (!row) return;
     const mon = mondayOfDisplayedWeek();
     const labels = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -143,24 +403,21 @@
     for (let i = 0; i < 7; i++) {
       const d = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i);
       const iso = localISODate(d);
-      const num = d.getDate();
       const dayTasks = tasksCache.filter((t) => taskAppliesOnDate(t, iso));
       const anyDone = dayTasks.some((x) => x.done);
-      const anyMiss = dayTasks.some((x) => taskMissed(x, todayIso));
       const anyActive = dayTasks.some((x) => !x.done);
-      let cls = 'day-circle';
-      if (iso === todayIso) cls += ' today';
-      if (anyDone) cls += ' done';
-      else if (anyMiss) cls += ' missed';
-      else if (anyActive) cls += ' partial';
-      let dotCls = 'day-dot';
-      if (anyDone) dotCls += ' done';
-      if (iso === todayIso) dotCls += ' today';
-      parts.push(`<div class="day-item" data-day="${iso}">
-        <div class="day-label">${labels[i]}</div>
-        <div class="${cls}">${num}</div>
-        <div class="${dotCls}"></div>
-      </div>`);
+      let circleCls = 'week-day__circle';
+      if (iso === todayIso) circleCls += ' week-day__circle--today';
+      else if (anyDone && !anyActive) circleCls += ' week-day__circle--done';
+      else if (anyActive) circleCls += ' week-day__circle--partial';
+      let dotCls = 'week-day__dot';
+      if (anyActive || anyDone) dotCls += ' week-day__dot--active';
+      parts.push(`
+        <div class="week-day">
+          <span class="week-day__label">${labels[i]}</span>
+          <div class="${circleCls}">${d.getDate()}</div>
+          <span class="${dotCls}"></span>
+        </div>`);
     }
     row.innerHTML = parts.join('');
     if (title) {
@@ -169,677 +426,129 @@
     }
   }
 
-  async function refreshPlanUI() {
+  async function refreshPlan() {
     await loadTasks();
-    renderPlanToday();
-    renderPlanWeek();
+    renderPlanDays();
+    renderWeekCalendar();
   }
 
-  const SIGNAL_LABELS = {
-    energy: 'Больше энергии утром',
-    anxiety: 'Меньше тревоги',
-    sleep: 'Лучше сон',
-    stability: 'Больше стабильности в делах',
-    joy: 'Больше удовольствия от дня',
-  };
-
-  const SIGNAL_ICONS = {
-    energy: '⚡',
-    anxiety: '🌿',
-    sleep: '🌙',
-    stability: '⚖️',
-    joy: '🌞',
-  };
-
-  function initTelegram() {
-    if (!tg) return null;
-    document.body.classList.add('tg-app');
-    try { tg.ready(); } catch (_) {}
-    try { tg.expand(); } catch (_) {}
-    try { tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch (_) {}
-    try {
-      if (typeof tg.setHeaderColor === 'function') tg.setHeaderColor(BRAND.cream);
-      if (typeof tg.setBackgroundColor === 'function') tg.setBackgroundColor(BRAND.cream);
-    } catch (_) {}
-
-    syncViewportHeight();
-    if (typeof tg.onEvent === 'function') {
-      tg.onEvent('viewportChanged', syncViewportHeight);
-    }
-    return tg;
-  }
-
-  function syncViewportHeight() {
-    if (!tg) return;
-    const h = tg.viewportStableHeight || tg.viewportHeight;
-    if (h && Number.isFinite(h)) {
-      document.documentElement.style.setProperty('--tg-app-height', h + 'px');
-    }
-  }
-
-  function pickDisplayName(user, profile) {
-    if (profile && profile.name) return String(profile.name).trim();
-    if (!user) return 'Анна';
-    const name = (user.first_name || user.username || '').toString().trim();
-    if (!name) return 'Друг';
-    return name.length > 18 ? name.slice(0, 18).trim() + '…' : name;
-  }
-
-  function cssEscapeUrl(url) {
-    return String(url).replace(/"/g, '%22');
-  }
-
-  function applyDynamicGreeting() {
-    const el = document.getElementById('greeting');
-    if (!el) return;
-    const h = new Date().getHours();
-    let g = 'Доброе утро,';
-    if (h >= 12 && h < 18) g = 'Добрый день,';
-    else if (h >= 18 && h < 23) g = 'Добрый вечер,';
-    else if (h >= 23 || h < 5) g = 'Доброй ночи,';
-    el.textContent = g;
-  }
-
-  function startStatusClock() {
-    const el = document.getElementById('status-time');
-    if (!el) return;
-    const tick = () => {
-      const d = new Date();
-      const hh = String(d.getHours()).padStart(2, '0');
-      const mm = String(d.getMinutes()).padStart(2, '0');
-      el.textContent = `${hh}:${mm}`;
-    };
-    tick();
-    setInterval(tick, 30 * 1000);
-  }
-
-  function haptic(type) {
-    try {
-      if (!tg || !tg.HapticFeedback) return;
-      if (type === 'select') tg.HapticFeedback.selectionChanged();
-      else if (type === 'success') tg.HapticFeedback.notificationOccurred('success');
-      else tg.HapticFeedback.impactOccurred('light');
-    } catch (_) {}
-  }
-
-  async function fetchProfile() {
-    if (!BACKEND_URL) return { profile: null, user: null, status: 'no-backend' };
-    if (!(tg && tg.initData) && !DEMO_TG) return { profile: null, user: null, status: 'no-init-data' };
-    try {
-      const resp = await apiFetch('/api/profile');
-      if (resp.status === 401) {
-        return { profile: null, user: null, status: 'unauthorized' };
-      }
-      if (resp.status === 404) {
-        return { profile: null, user: null, status: 'not-found' };
-      }
-      if (!resp.ok) {
-        return { profile: null, user: null, status: 'error' };
-      }
-      const data = await resp.json();
-      const profile = data.profile || data;
-      const hasGoal = profile && (
-        profile.main_goal || profile.raw_goal || profile.final_goal
-      );
-      return {
-        profile: hasGoal ? profile : null,
-        user: data.user || null,
-        status: hasGoal ? 'ok' : 'empty',
-      };
-    } catch (e) {
-      console.warn('fetchProfile failed', e);
-      return { profile: null, user: null, status: 'error' };
-    }
-  }
-
-  function applyIdentity(user, profile) {
-    const nameEl = document.getElementById('user-name');
-    if (nameEl) {
-      const name = pickDisplayName(user, profile);
-      nameEl.textContent = `${name} ✦`;
-    }
-
-    const avatarEl = document.getElementById('avatar');
-    const tgUser = tg && tg.initDataUnsafe ? tg.initDataUnsafe.user : null;
-    const photo = (user && user.photo_url) || (tgUser && tgUser.photo_url);
-    if (avatarEl && photo) {
-      avatarEl.style.backgroundImage = `url("${cssEscapeUrl(photo)}")`;
-      avatarEl.textContent = '';
-    }
-  }
-
-  function renderEmpty(reason) {
-    document.body.classList.add('mode-empty');
-    const empty = document.getElementById('empty-state');
-    const main = document.getElementById('main-content');
-    const title = empty?.querySelector('.empty-title');
-    const text = empty?.querySelector('.empty-text');
-    if (title && text) {
-      if (reason === 'unauthorized') {
-        title.textContent = 'Не удалось подтвердить Telegram';
-        text.textContent =
-          'Открой Mini App из кнопки меню в том же боте, где проходила /start. Если только что сменила токен — перезапусти бота.';
-      } else if (reason === 'not-found') {
-        title.textContent = 'Профиль не найден на сервере';
-        text.textContent =
-          'Напиши /start в боте SpiceSpace ещё раз (на проде), затем снова открой Mini App из меню бота.';
-      } else if (reason === 'empty') {
-        title.textContent = 'Цель пока не зафиксирована';
-        text.textContent = 'Вернись в чат с ботом и допиши цель в онбординге.';
-      } else {
-        title.textContent = 'Пока цель не настроена';
-        text.textContent =
-          'Нажми кнопку — откроется чат с ботом, пройди /start и онбординг до конца.';
-      }
-    }
-    if (empty) empty.hidden = false;
-    if (main) main.hidden = true;
-  }
-
-  function renderProfile(profile) {
-    document.body.classList.remove('mode-empty');
-    lastProfile = profile;
-    const empty = document.getElementById('empty-state');
-    const main = document.getElementById('main-content');
-    if (empty) empty.hidden = true;
-    if (main) main.hidden = false;
-
-    const goalType = (profile.goal_type || 'measurable').toLowerCase();
-    document.body.classList.toggle('mode-measurable', goalType === 'measurable');
-    document.body.classList.toggle('mode-qualitative', goalType === 'qualitative');
-
-    renderStreak(profile);
-    renderToday(profile);
-    renderBotMessage(profile);
-    renderGoalsSection(profile);
-  }
-
-  function renderStreak(profile) {
-    const streak = Number(profile.streak || 0);
-    const num = document.getElementById('streak-number');
-    if (num) num.textContent = String(streak);
-
-    const sub = document.getElementById('streak-sub');
-    if (sub) {
-      if (streak <= 0) sub.textContent = 'начинаем серию';
-      else if (streak === 1) sub.textContent = 'первый день в движении';
-      else sub.textContent = 'дней подряд в движении';
-    }
-
-    const dots = document.getElementById('streak-dots');
-    if (!dots) return;
-    const total = 7;
-    const todayIdx = Math.min(streak, total - 1);
-    const html = [];
-    for (let i = 0; i < total; i++) {
-      let cls = 'dot';
-      if (i < streak) cls += ' done';
-      else if (i === todayIdx && streak < total) cls += ' today';
-      html.push(`<div class="${cls}"></div>`);
-    }
-    dots.innerHTML = html.join('');
-  }
-
-  function renderToday(profile) {
-    const goalType = (profile.goal_type || 'measurable').toLowerCase();
-    const label = document.getElementById('today-label');
-    const time = document.getElementById('today-time');
-    const desc = document.getElementById('today-desc');
-    if (!label || !time || !desc) return;
-
-    if (goalType === 'qualitative') {
-      label.textContent = 'Сегодня в фокусе';
-      time.textContent = '🌿 Состояние, а не цифра';
-      const focus = (profile.main_goal || profile.raw_goal || profile.final_goal || 'твоё состояние').trim();
-      desc.textContent = focus.length > 80 ? focus.slice(0, 80) + '…' : focus;
-    } else {
-      label.textContent = 'Сегодня в фокусе';
-      const fg = (profile.main_goal || profile.final_goal || profile.raw_goal || 'твоя цель').trim();
-      time.textContent = '🎯 Один маленький шаг';
-      desc.textContent = fg.length > 80 ? fg.slice(0, 80) + '…' : fg;
-    }
-  }
-
-  function renderBotMessage(profile) {
-    const text = document.getElementById('bot-text');
-    const time = document.getElementById('bot-time');
-    if (!text) return;
-    const name = (profile.name || '').trim();
-    const goalType = (profile.goal_type || 'measurable').toLowerCase();
-    const streak = Number(profile.streak || 0);
-    const greeting = name ? `${name}, ` : '';
-
-    if (goalType === 'qualitative') {
-      text.textContent = streak > 0
-        ? `${greeting}ты уже ${streak} ${pluralize(streak, ['день', 'дня', 'дней'])} подряд держишься рядом со своим состоянием. Так и идём — мягко.`
-        : `${greeting}сегодня — один маленький шаг ближе к состоянию, которое ты хочешь. Без давления.`;
-    } else {
-      text.textContent = streak > 0
-        ? `${greeting}ты уже ${streak} ${pluralize(streak, ['день', 'дня', 'дней'])} не сливаешься. Это не случайность. Это ты. 🔥`
-        : `${greeting}у тебя есть цель. Сегодня нужен один маленький шаг — и серия начнётся.`;
-    }
-
-    if (time) {
-      const d = new Date();
-      time.textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-    }
-  }
-
-  function pluralize(n, forms) {
-    const a = Math.abs(n) % 100;
-    const b = a % 10;
-    if (a > 10 && a < 20) return forms[2];
-    if (b > 1 && b < 5) return forms[1];
-    if (b === 1) return forms[0];
-    return forms[2];
-  }
-
-  function renderGoalsSection(profile) {
-    const section = document.getElementById('goals-section-title');
-    const list = document.getElementById('goals-list');
-    if (!section || !list) return;
-
-    const goalType = (profile.goal_type || 'measurable').toLowerCase();
-    const week = Number(profile.current_week || 1);
-
-    if (goalType === 'qualitative') {
-      section.textContent = `Отслеживаем · Неделя ${week}`;
-      list.innerHTML = '';
-      const signals = Array.isArray(profile.goal_signals) ? profile.goal_signals : [];
-      if (!signals.length) {
-        list.appendChild(makeGoalCard({
-          icon: '🌿',
-          iconClass: 'spirit',
-          name: profile.main_goal || profile.raw_goal || 'твоё состояние',
-          fillClass: 'spirit',
-          percent: profile.weekly_score || 0,
-          meta: 'Признаки появятся позже',
-          done: false,
-        }));
-        return;
-      }
-      signals.forEach((sig) => {
-        list.appendChild(makeGoalCard({
-          icon: SIGNAL_ICONS[sig] || '🌿',
-          iconClass: 'spirit',
-          name: SIGNAL_LABELS[sig] || sig,
-          fillClass: 'spirit',
-          percent: profile.weekly_score || 0,
-          meta: 'отслеживаем',
-          done: false,
-        }));
-      });
-      return;
-    }
-
-    section.textContent = `Моя цель · Неделя ${week}`;
-    list.innerHTML = '';
-    const finalGoal = (profile.main_goal || profile.final_goal || profile.raw_goal || 'твоя цель').trim();
-    const percent = Math.max(0, Math.min(100, Number(profile.weekly_score || 0)));
-    const completed = Array.isArray(profile.completed_tasks) ? profile.completed_tasks.length : 0;
-    const meta = completed > 0
-      ? `${completed} ${pluralize(completed, ['задача', 'задачи', 'задач'])} сделана`
-      : 'двигаемся первыми шагами';
-    list.appendChild(makeGoalCard({
-      icon: '🎯',
-      iconClass: 'body',
-      name: finalGoal,
-      fillClass: 'body',
-      percent,
-      meta,
-      done: percent >= 100,
-    }));
-  }
-
-  function makeGoalCard(opts) {
-    const { icon, iconClass, name, fillClass, percent, meta, done } = opts;
-    const card = document.createElement('div');
-    card.className = 'goal-card' + (done ? ' active' : '');
-    card.innerHTML = `
-      <div class="goal-icon ${iconClass}">${escapeHtml(icon)}</div>
-      <div class="goal-info">
-        <div class="goal-name">${escapeHtml(name)}</div>
-        <div class="progress-bar"><div class="progress-fill ${fillClass}" style="width:${percent}%"></div></div>
-        <div class="goal-meta">
-          <span class="goal-percent">${percent ? percent + '% выполнено' : 'старт'}</span>
-          <span class="goal-days">${escapeHtml(meta)}</span>
-        </div>
-      </div>
-      <div class="goal-check ${done ? 'done' : ''}">${done ? '✓' : ''}</div>
-    `;
-    return card;
-  }
-
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
-  function bindGoals() {
-    document.getElementById('goals-list')?.addEventListener('click', (e) => {
-      const card = e.target.closest('.goal-card');
-      if (!card || card.classList.contains('skeleton')) return;
-      const check = card.querySelector('.goal-check');
-      if (!check) return;
-      if (check.classList.contains('done')) {
-        check.classList.remove('done');
-        check.textContent = '';
-        card.classList.remove('active');
-      } else {
-        check.classList.add('done');
-        check.textContent = '✓';
-        card.classList.add('active');
-        haptic('success');
-      }
+  function switchTab(name) {
+    document.querySelectorAll('.tabbar__item').forEach((el) => {
+      el.classList.toggle('tabbar__item--active', el.dataset.tab === name);
     });
+    document.querySelectorAll('.panel').forEach((panel) => {
+      const on = panel.dataset.panel === name;
+      panel.hidden = !on;
+      panel.classList.toggle('panel--active', on);
+      panel.classList.toggle('panel--center', panel.dataset.panel === 'bot');
+    });
+    if (name === 'plan') refreshPlan();
+    haptic('select');
   }
 
-  function bindTodayActions() {
-    const card = document.getElementById('today-card');
-    if (!card) return;
-    card.querySelectorAll('[data-action]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const action = btn.getAttribute('data-action');
-        if (action === 'mark-done') {
-          card.classList.add('done');
-          btn.textContent = '✓ Готово!';
-          haptic('success');
-        } else if (action === 'postpone') {
-          haptic('select');
-        }
+  function bindTabs() {
+    document.querySelectorAll('.tabbar__item').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const tab = btn.dataset.tab || 'goals';
+        switchTab(tab);
       });
     });
   }
 
-  function bindBottomNav() {
-    const items = document.querySelectorAll('.nav-item');
-    const panelHome = document.getElementById('panel-home');
-    const panelPlan = document.getElementById('panel-plan');
-    const scrollArea = document.querySelector('.scroll-area');
-
-    const showPanel = (name) => {
-      if (panelHome) {
-        const hideHome = name === 'plan';
-        panelHome.hidden = hideHome;
-        panelHome.classList.toggle('tab-panel--visible', !hideHome);
-      }
-      if (panelPlan) {
-        panelPlan.hidden = name !== 'plan';
-        panelPlan.classList.toggle('tab-panel--visible', name === 'plan');
-      }
-      if (scrollArea) scrollArea.scrollTop = 0;
-    };
-
-    items.forEach((item) => {
-      item.addEventListener('click', () => {
-        items.forEach((i) => i.classList.remove('active'));
-        item.classList.add('active');
-        haptic('select');
-        const tab = item.getAttribute('data-tab') || 'home';
-        if (tab === 'bot') {
-          const link = BOT_USERNAME ? `https://t.me/${BOT_USERNAME}` : '';
-          if (link && tg && typeof tg.openTelegramLink === 'function') {
-            try { tg.openTelegramLink(link); } catch (_) {}
-          } else if (link) window.open(link, '_blank');
-          return;
-        }
-        if (tab === 'goals') {
-          showPanel('goals');
-          document.getElementById('goals-section-title')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          return;
-        }
-        if (tab === 'plan') {
-          showPanel('plan');
-          refreshPlanUI();
-          return;
-        }
-        showPanel('home');
-      });
+  function bindPlan() {
+    document.querySelector('[data-week-nav="-1"]')?.addEventListener('click', () => {
+      planWeekOffset -= 1;
+      renderWeekCalendar();
+      haptic('select');
     });
-  }
-
-  function bindPlanInteractions() {
-    document.getElementById('plan-week-nav')?.addEventListener('click', (e) => {
-      const b = e.target.closest('button[data-plan-nav]');
-      if (!b) return;
-      const d = Number(b.getAttribute('data-plan-nav') || 0);
-      planWeekOffset += d;
-      renderPlanWeek();
+    document.querySelector('[data-week-nav="1"]')?.addEventListener('click', () => {
+      planWeekOffset += 1;
+      renderWeekCalendar();
       haptic('select');
     });
 
-    document.getElementById('plan-today-list')?.addEventListener('click', async (e) => {
-      const btn = e.target.closest('button[data-act]');
-      if (!btn) return;
+    document.getElementById('plan-days')?.addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-act="done"]');
+      if (!btn || btn.disabled) return;
       const id = btn.getAttribute('data-id');
-      const act = btn.getAttribute('data-act');
       if (!id) return;
-      const task = tasksCache.find((x) => x.id === id);
-      if (act === 'done') {
-        const resp = await apiFetch(`/api/tasks/${encodeURIComponent(id)}/done`, { method: 'POST' });
-        if (resp.ok) {
-          haptic('success');
-          await refreshPlanUI();
-        }
-        return;
-      }
-      if (act === 'postpone' && task) {
-        const patch = (task.repeat || 'none') === 'none'
-          ? { date: addDaysISO(task.date || localISODate(), 1) }
-          : { snooze_until: localISODate() };
-        const resp = await apiFetch(`/api/tasks/${encodeURIComponent(id)}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(patch),
-        });
-        if (resp.ok) {
-          haptic('select');
-          await refreshPlanUI();
-        }
-      }
-    });
-  }
-
-  function readSheetForm() {
-    const title = (document.getElementById('tf-title')?.value || '').trim();
-    const date = document.getElementById('tf-date')?.value || '';
-    const timeRaw = document.getElementById('tf-time')?.value || '';
-    const tp = timeRaw.split(':');
-    const time = tp.length >= 2
-      ? `${String(Number(tp[0] || 0)).padStart(2, '0')}:${String(tp[1] || '00').padStart(2, '0').slice(0, 2)}`
-      : '';
-    const repeatEl = document.querySelector('#tf-repeat .seg-btn.active');
-    const repeat = repeatEl?.getAttribute('data-repeat') || 'none';
-    const remindEl = document.querySelector('#tf-remind .seg-btn.active');
-    const remind = Number(remindEl?.getAttribute('data-remind') || 0);
-    const dow = [];
-    document.querySelectorAll('#tf-dow .dow-btn.active').forEach((b) => {
-      const k = b.getAttribute('data-dow');
-      if (k) dow.push(k);
-    });
-    const tz = (lastProfile && lastProfile.timezone) ? String(lastProfile.timezone) : 'Asia/Ho_Chi_Minh';
-    return { title, date, time, repeat, remind_before_minutes: remind, days_of_week: dow, timezone: tz };
-  }
-
-  function openTaskSheet() {
-    const sh = document.getElementById('task-sheet');
-    if (!sh) return;
-    document.getElementById('tf-title').value = '';
-    document.getElementById('tf-date').value = localISODate();
-    document.getElementById('tf-time').value = '14:00';
-    document.querySelectorAll('#tf-repeat .seg-btn').forEach((b) => b.classList.remove('active'));
-    document.querySelector('#tf-repeat .seg-btn[data-repeat="none"]')?.classList.add('active');
-    document.querySelectorAll('#tf-remind .seg-btn').forEach((b) => b.classList.remove('active'));
-    document.querySelector('#tf-remind .seg-btn[data-remind="0"]')?.classList.add('active');
-    document.querySelectorAll('#tf-dow .dow-btn').forEach((b) => b.classList.remove('active'));
-    document.getElementById('tf-dow-wrap').hidden = true;
-    sh.hidden = false;
-  }
-
-  function closeTaskSheet() {
-    const sh = document.getElementById('task-sheet');
-    if (sh) sh.hidden = true;
-  }
-
-  function bindTaskSheet() {
-    document.getElementById('btn-add-task')?.addEventListener('click', () => {
-      haptic('select');
-      openTaskSheet();
-    });
-    document.getElementById('task-sheet-backdrop')?.addEventListener('click', closeTaskSheet);
-    document.getElementById('task-sheet-cancel')?.addEventListener('click', closeTaskSheet);
-
-    document.getElementById('tf-repeat')?.addEventListener('click', (e) => {
-      const b = e.target.closest('.seg-btn[data-repeat]');
-      if (!b) return;
-      document.querySelectorAll('#tf-repeat .seg-btn').forEach((x) => x.classList.remove('active'));
-      b.classList.add('active');
-      const r = b.getAttribute('data-repeat');
-      document.getElementById('tf-dow-wrap').hidden = r !== 'weekly';
-    });
-
-    document.getElementById('tf-remind')?.addEventListener('click', (e) => {
-      const b = e.target.closest('.seg-btn[data-remind]');
-      if (!b) return;
-      document.querySelectorAll('#tf-remind .seg-btn').forEach((x) => x.classList.remove('active'));
-      b.classList.add('active');
-    });
-
-    document.getElementById('tf-dow')?.addEventListener('click', (e) => {
-      const b = e.target.closest('.dow-btn[data-dow]');
-      if (!b) return;
-      b.classList.toggle('active');
-      haptic('select');
-    });
-
-    document.getElementById('task-sheet-save')?.addEventListener('click', async () => {
-      const f = readSheetForm();
-      if (!f.title) {
-        haptic('select');
-        return;
-      }
-      if (f.repeat === 'weekly' && !f.days_of_week.length) {
-        haptic('select');
-        return;
-      }
-      const body = {
-        title: f.title,
-        description: '',
-        date: f.date,
-        time: f.time,
-        repeat: f.repeat,
-        days_of_week: f.days_of_week,
-        remind_before_minutes: f.remind_before_minutes,
-        timezone: f.timezone,
-      };
-      const resp = await apiFetch('/api/tasks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+      const resp = await apiFetch(`/api/tasks/${encodeURIComponent(id)}/done`, { method: 'POST' });
       if (resp.ok) {
         haptic('success');
-        closeTaskSheet();
-        await refreshPlanUI();
+        await refreshPlan();
       }
     });
   }
 
-  function bindEmptyState() {
-    const btn = document.getElementById('open-bot-btn');
-    if (!btn) return;
-    btn.addEventListener('click', () => {
-      if (btn.dataset.busy === '1') return;
-      btn.dataset.busy = '1';
-      haptic('success');
-
-      const originalText = btn.textContent;
-      btn.textContent = 'Открываю чат…';
+  function bindMarkDay() {
+    document.getElementById('btn-mark-day')?.addEventListener('click', () => {
+      const btn = document.getElementById('btn-mark-day');
+      if (!btn || btn.disabled) return;
+      sessionStorage.setItem(dayMarkedKey || `spicespace_day_${localISODate()}`, '1');
       btn.disabled = true;
-
-      // Deep-link с параметром ?start=onboarding автоматически отправит
-      // боту команду /start onboarding — пользователю не надо вводить руками.
-      const link = BOT_USERNAME
-        ? `https://t.me/${BOT_USERNAME}?start=onboarding`
-        : '';
-
-      const opened = (() => {
-        if (link && tg && typeof tg.openTelegramLink === 'function') {
-          try { tg.openTelegramLink(link); return true; } catch (_) {}
-        }
-        if (link) {
-          try { window.open(link, '_blank'); return true; } catch (_) {}
-        }
-        return false;
-      })();
-
-      // Закрываем Mini App, чтобы пользователь увидел чат с ботом
-      // и пришедшее сообщение от /start. В большинстве клиентов
-      // openTelegramLink уже закрывает Mini App, но подстрахуемся.
-      setTimeout(() => {
-        if (tg && typeof tg.close === 'function') {
-          try { tg.close(); return; } catch (_) {}
-        }
-        // Если по какой-то причине ничего не сработало —
-        // возвращаем кнопку в исходное состояние.
-        btn.textContent = originalText;
-        btn.disabled = false;
-        btn.dataset.busy = '';
-      }, opened ? 250 : 0);
+      btn.classList.add('is-done');
+      btn.textContent = '✓ День отмечен';
+      haptic('success');
     });
+  }
+
+  function bindBotButtons() {
+    document.getElementById('btn-open-chat')?.addEventListener('click', () => {
+      haptic('success');
+      openBotChat();
+    });
+    document.getElementById('gate-open-bot')?.addEventListener('click', () => {
+      haptic('success');
+      openBotChat();
+    });
+  }
+
+  function buildDemoProfile(tgUser) {
+    return {
+      name: tgUser?.first_name || 'Анна',
+      goal_type: 'measurable',
+      main_goal: 'Демо без backend',
+      streak: 3,
+      weekly_score: 35,
+      current_week: 2,
+      goal_signals: [],
+    };
   }
 
   async function start() {
     initTelegram();
-    applyDynamicGreeting();
-    startStatusClock();
-    bindGoals();
-    bindTodayActions();
-    bindBottomNav();
-    bindPlanInteractions();
-    bindTaskSheet();
-    bindEmptyState();
+    applyGreeting();
+    bindTabs();
+    bindPlan();
+    bindMarkDay();
+    bindBotButtons();
 
-    const tgUser = tg && tg.initDataUnsafe ? tg.initDataUnsafe.user : null;
+    const tgUser = tg?.initDataUnsafe?.user ?? null;
     applyIdentity(tgUser, null);
 
     const { profile, user, status } = await fetchProfile();
 
-    if (status === 'no-backend' || (status === 'no-init-data' && !DEMO_TG)) {
-      applyIdentity(tgUser, null);
+    if (status === 'no-backend') {
+      showMain();
       renderProfile(buildDemoProfile(tgUser));
+      await refreshPlan();
+      return;
+    }
+
+    if (status === 'no-init-data' && !DEMO_TG) {
+      showGate('unauthorized');
       return;
     }
 
     if (!profile) {
       applyIdentity(user || tgUser, null);
-      renderEmpty(status === 'empty' ? 'empty' : status);
+      showGate(status === 'unauthorized' ? 'unauthorized' : status === 'not-found' ? 'not-found' : 'empty');
       return;
     }
 
     applyIdentity(user || tgUser, profile);
     renderProfile(profile);
-    refreshPlanUI();
-  }
-
-  function buildDemoProfile(tgUser) {
-    return {
-      name: (tgUser && tgUser.first_name) || 'Анна',
-      goal_type: 'measurable',
-      raw_goal: 'демо-режим',
-      final_goal: 'демо-режим (без backend)',
-      streak: 0,
-      weekly_score: 0,
-      current_week: 1,
-      goal_signals: [],
-      completed_tasks: [],
-      timezone: 'Asia/Ho_Chi_Minh',
-    };
+    await refreshPlan();
   }
 
   if (document.readyState === 'loading') {

@@ -3,209 +3,104 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
-  <meta name="theme-color" content="#FAF7F2" />
-  <meta name="description" content="SpiceSpace — Telegram Mini App: цели, привычки и серия дней в движении." />
+  <meta name="theme-color" content="#F4F1EA" />
+  <meta name="description" content="SpiceSpace — цели, план и прогресс." />
   <title>SpiceSpace</title>
 
-  <!--
-    Backend URL: укажите публичный URL Railway после деплоя бота.
-    Пример: <meta name="spicespace-backend" content="https://spicespace-bot.up.railway.app">
-    Если пусто — Mini App работает в demo-режиме с фейк-данными.
-  -->
-  <!-- Пусто = API на том же домене (/webapp на Railway) -->
   <meta name="spicespace-backend" content="" />
   <meta name="spicespace-bot-username" content="SpiceSpacebot" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@300;400;500&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600&family=DM+Sans:wght@400;500;600&display=swap"
     rel="stylesheet"
   />
-
   <link rel="stylesheet" href="./styles.css" />
-
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
 
-<div class="phone" id="app">
-  <div class="status-bar">
-    <span class="status-time" id="status-time">9:41</span>
-    <div class="status-icons">
-      <span>●●●</span>
-      <span>WiFi</span>
-      <span>🔋</span>
+<div class="app" id="app">
+
+  <div class="gate" id="gate" hidden>
+    <div class="gate-card">
+      <h1 class="gate-title">Открой через бота</h1>
+      <p class="gate-text">Mini App работает из чата SpiceSpace — нажми кнопку меню у бота или команду /app.</p>
+      <button type="button" class="btn btn--accent" id="gate-open-bot">Открыть чат</button>
     </div>
   </div>
 
-  <div class="scroll-area">
+  <main class="main" id="main" hidden>
+    <div class="panels">
 
-    <div class="empty-state" id="empty-state" hidden>
-      <div class="empty-icon">🌶</div>
-      <div class="empty-title">Пока цель не настроена</div>
-      <div class="empty-text">Нажми кнопку — откроется чат с ботом, и онбординг стартует сам.</div>
-      <button class="empty-btn" id="open-bot-btn">Перейти в чат с ботом</button>
-    </div>
-
-    <div class="main-content" id="main-content">
-
-      <div class="tab-panel tab-panel--visible" id="panel-home" data-panel="home">
-      <div class="header">
-        <div class="header-top">
-          <div>
-            <div class="greeting" id="greeting">Доброе утро,</div>
-            <div class="user-name" id="user-name">Анна ✦</div>
+      <section class="panel panel--active" id="panel-goals" data-panel="goals">
+        <header class="hero">
+          <div class="hero-text">
+            <p class="hero-greeting" id="greeting">Добрый день,</p>
+            <h1 class="hero-name" id="user-name">—</h1>
           </div>
-          <div class="avatar" id="avatar">🔥</div>
-        </div>
-      </div>
+          <div class="hero-avatar" id="avatar" aria-hidden="true"></div>
+        </header>
 
-      <div class="streak-card">
-        <div class="streak-left">
-          <div class="streak-label">Серия дней</div>
-          <div class="streak-number" id="streak-number">0</div>
-          <div class="streak-sub" id="streak-sub">дней подряд в движении</div>
-        </div>
-        <div class="streak-dots" id="streak-dots">
-          <div class="dot"></div>
-          <div class="dot"></div>
-          <div class="dot"></div>
-          <div class="dot"></div>
-          <div class="dot"></div>
-          <div class="dot today"></div>
-          <div class="dot"></div>
-        </div>
-      </div>
-
-      <div class="today-block">
-        <div class="today-card" id="today-card">
-          <div class="today-label" id="today-label">Сегодня в фокусе</div>
-          <div class="today-time" id="today-time">🎯 Один маленький шаг</div>
-          <div class="today-desc" id="today-desc">К цели, которая важна.</div>
-          <div class="today-actions">
-            <button class="today-btn primary" data-action="mark-done">✓ Сделала</button>
-            <button class="today-btn secondary" data-action="postpone">Перенести</button>
+        <div class="card card--dark streak-card">
+          <div class="streak-card__top">
+            <span class="label">Серия дней</span>
+            <span class="streak-card__num" id="streak-number">0</span>
           </div>
+          <div class="streak-dots" id="streak-dots"></div>
         </div>
-      </div>
 
-      <div class="bot-message">
-        <div class="bot-bubble">
-          <div class="bot-header">
-            <div class="bot-avatar">🌶</div>
-            <div class="bot-name">SpiceSpace</div>
-          </div>
-          <div class="bot-text" id="bot-text">
-            Сегодня держим в голове твою цель. Один шаг — это уже движение. 🔥
-          </div>
-          <div class="bot-time" id="bot-time">10:15</div>
-        </div>
-      </div>
+        <div class="goals-list" id="goals-list"></div>
 
-      <div class="section-title" id="goals-section-title">Мои цели</div>
-      <div class="goals-list" id="goals-list">
-        <div class="goal-card skeleton">
-          <div class="goal-icon body">🎯</div>
-          <div class="goal-info">
-            <div class="goal-name">Загружаем твою цель…</div>
-            <div class="progress-bar"><div class="progress-fill body" style="width:0%"></div></div>
-            <div class="goal-meta">
-              <span class="goal-percent">—</span>
-              <span class="goal-days">—</span>
+        <button type="button" class="btn btn--primary btn--block" id="btn-mark-day">✓ Отметить день выполненным</button>
+      </section>
+
+      <section class="panel" id="panel-plan" data-panel="plan" hidden>
+        <header class="plan-header">
+          <p class="label">Главная цель</p>
+          <h2 class="plan-goal" id="plan-main-goal">—</h2>
+        </header>
+
+        <div class="plan-days" id="plan-days"></div>
+
+        <div class="card week-card">
+          <div class="week-card__head">
+            <span class="week-card__title" id="week-title">Эта неделя</span>
+            <div class="week-nav">
+              <button type="button" class="week-nav__btn" data-week-nav="-1" aria-label="Предыдущая неделя">‹</button>
+              <button type="button" class="week-nav__btn" data-week-nav="1" aria-label="Следующая неделя">›</button>
             </div>
           </div>
-          <div class="goal-check"></div>
+          <div class="week-row" id="week-row"></div>
         </div>
-      </div>
+      </section>
 
-      </div>
-
-      <div class="tab-panel" id="panel-plan" data-panel="plan" hidden>
-        <div class="plan-top">
-          <div class="section-title" style="margin-top:8px">План</div>
-          <p class="plan-lead">Задачи и напоминания в Telegram</p>
+      <section class="panel panel--center" id="panel-bot" data-panel="bot" hidden>
+        <div class="bot-panel">
+          <h2 class="bot-panel__title">SpiceSpace</h2>
+          <p class="bot-panel__text">Вопросы, онбординг и ежедневные напоминания — в чате с ботом.</p>
+          <button type="button" class="btn btn--accent btn--block" id="btn-open-chat">Открыть чат со Спейс</button>
         </div>
-        <div class="section-title">Сегодня</div>
-        <div class="plan-today-list" id="plan-today-list"></div>
-        <button type="button" class="add-task-btn" id="btn-add-task">+ Добавить задачу</button>
-        <div class="section-title">Неделя</div>
-        <div class="week-calendar" id="plan-week-calendar">
-          <div class="week-header">
-            <div class="week-title" id="plan-week-title">Эта неделя</div>
-            <div class="week-nav" id="plan-week-nav">
-              <button type="button" data-plan-nav="-1" aria-label="Предыдущая неделя">‹</button>
-              <button type="button" data-plan-nav="1" aria-label="Следующая неделя">›</button>
-            </div>
-          </div>
-          <div class="days-row" id="plan-days-row"></div>
-        </div>
-      </div>
+      </section>
 
     </div>
 
-  </div>
-
-  <div class="task-sheet" id="task-sheet" hidden>
-    <div class="task-sheet-backdrop" id="task-sheet-backdrop"></div>
-    <div class="task-sheet-card" role="dialog" aria-modal="true" aria-labelledby="task-sheet-heading">
-      <div class="task-sheet-heading" id="task-sheet-heading">Новая задача</div>
-      <label class="task-field"><span>Название</span><input id="tf-title" type="text" maxlength="500" placeholder="Например, снять Reels" /></label>
-      <label class="task-field"><span>Дата</span><input id="tf-date" type="date" /></label>
-      <label class="task-field"><span>Время</span><input id="tf-time" type="time" /></label>
-      <div class="task-field">
-        <span>Повтор</span>
-        <div class="task-seg" id="tf-repeat">
-          <button type="button" class="seg-btn active" data-repeat="none">Один раз</button>
-          <button type="button" class="seg-btn" data-repeat="daily">Каждый день</button>
-          <button type="button" class="seg-btn" data-repeat="weekly">По дням недели</button>
-        </div>
-      </div>
-      <div class="task-field" id="tf-dow-wrap" hidden>
-        <span>Дни</span>
-        <div class="dow-row" id="tf-dow">
-          <button type="button" class="dow-btn" data-dow="mon">Пн</button>
-          <button type="button" class="dow-btn" data-dow="tue">Вт</button>
-          <button type="button" class="dow-btn" data-dow="wed">Ср</button>
-          <button type="button" class="dow-btn" data-dow="thu">Чт</button>
-          <button type="button" class="dow-btn" data-dow="fri">Пт</button>
-          <button type="button" class="dow-btn" data-dow="sat">Сб</button>
-          <button type="button" class="dow-btn" data-dow="sun">Вс</button>
-        </div>
-      </div>
-      <div class="task-field">
-        <span>Напомнить</span>
-        <div class="task-seg" id="tf-remind">
-          <button type="button" class="seg-btn active" data-remind="0">В момент</button>
-          <button type="button" class="seg-btn" data-remind="10">За 10 мин</button>
-          <button type="button" class="seg-btn" data-remind="30">За 30 мин</button>
-        </div>
-      </div>
-      <div class="task-sheet-actions">
-        <button type="button" class="task-cancel" id="task-sheet-cancel">Отмена</button>
-        <button type="button" class="task-save" id="task-sheet-save">Сохранить</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="bottom-nav">
-    <div class="nav-item active" data-tab="home">
-      <div class="nav-icon">🏠</div>
-      <div class="nav-label">Главная</div>
-    </div>
-    <div class="nav-item" data-tab="goals">
-      <div class="nav-icon">🎯</div>
-      <div class="nav-label">Цели</div>
-    </div>
-    <div class="nav-item" data-tab="plan">
-      <div class="nav-icon">📅</div>
-      <div class="nav-label">План</div>
-    </div>
-    <div class="nav-item" data-tab="bot">
-      <div class="nav-icon">💬</div>
-      <div class="nav-label">Бот</div>
-    </div>
-  </div>
+    <nav class="tabbar" aria-label="Навигация">
+      <button type="button" class="tabbar__item tabbar__item--active" data-tab="goals">
+        <span class="tabbar__icon">🎯</span>
+        <span class="tabbar__label">Цели</span>
+      </button>
+      <button type="button" class="tabbar__item" data-tab="plan">
+        <span class="tabbar__icon">📅</span>
+        <span class="tabbar__label">План</span>
+      </button>
+      <button type="button" class="tabbar__item" data-tab="bot">
+        <span class="tabbar__icon">💬</span>
+        <span class="tabbar__label">Бот</span>
+      </button>
+    </nav>
+  </main>
 
 </div>
 
