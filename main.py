@@ -1211,11 +1211,22 @@ def _is_gotovo_message(text: str) -> bool:
 
 
 def _auth_telegram_id(request: Request, telegram_id: str | None) -> str:
-    # Dev bypass: если SKIP_TMA_AUTH=true — принимаем telegram_id без валидации
+    # Временный bypass для разработки
     if os.getenv("SKIP_TMA_AUTH") == "true":
         tid = (telegram_id or "").strip()
         if tid.isdigit():
             return tid
+        # Если telegram_id не передан — берём из initData без валидации
+        init_data = _extract_init_data(request)
+        if init_data:
+            try:
+                pairs = dict(parse_qsl(init_data, keep_blank_values=True))
+                user_raw = pairs.get("user", "")
+                if user_raw:
+                    user_obj = json.loads(user_raw)
+                    return str(user_obj["id"])
+            except Exception:
+                pass
 
     init_data = _extract_init_data(request)
     if init_data:
@@ -1594,7 +1605,8 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def app_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    webapp_url = os.getenv("MINI_APP_URL", "https://spicespace-production.up.railway.app/webapp/")
+    cid = update.effective_chat.id
+    webapp_url = f"https://spicespace-production.up.railway.app/webapp/?telegram_id={cid}"
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("📊 Открыть SpiceSpace", web_app=WebAppInfo(url=webapp_url))
     ]])
