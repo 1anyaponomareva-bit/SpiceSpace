@@ -30,7 +30,7 @@ def init_db() -> bool:
         log.info("Supabase не настроен — профили и summaries в локальных JSON")
         _use_supabase = False
         return False
-    _base_url = f"{url}/rest/v1"
+    _base_url = url
     _service_key = key
     _use_supabase = True
     log.info("Supabase REST подключён")
@@ -50,18 +50,21 @@ def _request(method: str, path: str, **kwargs) -> list[dict] | dict | None:
     if not _use_supabase:
         return None
     try:
+        extra_headers = kwargs.pop("headers", {})
+        merged_headers = {**_headers(), **extra_headers}
+        url = f"{_base_url}/rest/v1/{path.lstrip('/')}"
         with httpx.Client(timeout=30.0) as client:
             r = client.request(
                 method,
-                f"{_base_url}/{path.lstrip('/')}",
-                headers=_headers(),
+                url,
+                headers=merged_headers,
                 **kwargs,
             )
             if r.status_code >= 400:
                 log.warning("Supabase %s %s -> %s %s", method, path, r.status_code, r.text[:200])
                 return None
             if not r.content:
-                return [] if method != "GET" else []
+                return []
             data = r.json()
             return data if isinstance(data, list) else [data] if isinstance(data, dict) else []
     except Exception as e:
