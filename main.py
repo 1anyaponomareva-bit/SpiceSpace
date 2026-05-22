@@ -1594,10 +1594,11 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def app_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    keyboard = _progress_reply_keyboard()
-    await update.message.reply_text(
-        "Открываю твой прогресс 👇", reply_markup=keyboard
-    )
+    webapp_url = os.getenv("MINI_APP_URL", "https://spicespace-production.up.railway.app/webapp/")
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📊 Открыть SpiceSpace", web_app=WebAppInfo(url=webapp_url))
+    ]])
+    await update.message.reply_text("Твой прогресс 👇", reply_markup=keyboard)
 
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
