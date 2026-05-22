@@ -1871,7 +1871,60 @@ def _validate_init_data(init_data: str, max_age_seconds: int = 24 * 60 * 60) -> 
         return None
 
 
-def _enrich_profile_for_api(profile: dict) -> dict:
+def _short_task_title(text: str) -> str:
+    line = (text or "").strip().split("\n")[0].strip()
+    if len(line) > 140:
+        return line[:137] + "…"
+    return line
+
+
+def _week_scores_array(profile: dict) -> list[int]:
+    raw = profile.get("week_scores")
+    if isinstance(raw, list) and len(raw) >= 4:
+        return [max(0, min(100, int(x or 0))) for x in raw[:4]]
+    cw = max(1, min(4, int(profile.get("current_week") or 1)))
+    ws = max(0, min(100, int(profile.get("weekly_score") or 0)))
+    out = [0, 0, 0, 0]
+    out[cw - 1] = ws
+    return out
+
+
+def _display_streak(profile: dict, telegram_id: str | None) -> int:
+    s = int(profile.get("streak") or 0)
+    today = _profile_local_date(profile)
+    today_iso = today.isoformat()
+    if profile.get("last_streak_date") == today_iso:
+        return max(s, 1)
+    if profile.get("today_completed"):
+        return max(s, 1)
+    if (profile.get("today_task") or "").strip():
+        return max(s, 1)
+    if telegram_id:
+        summ = db_store.get_daily_summary(telegram_id, today)
+        if isinstance(summ, dict):
+            if summ.get("completed"):
+                return max(s, 1)
+            if (summ.get("task") or "").strip():
+                return max(s, 1)
+    return s
+
+
+def _bump_streak_on_mark(profile: dict, today: date) -> int:
+    last = str(profile.get("last_streak_date") or "").strip()
+    old = int(profile.get("streak") or 0)
+    today_iso = today.isoformat()
+    if last == today_iso:
+        return old
+    if last == (today - timedelta(days=1)).isoformat():
+        new = old + 1 if old > 0 else 1
+    else:
+        new = 1
+    profile["streak"] = new
+    profile["last_streak_date"] = today_iso
+    return new
+
+
+def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> dict:
     """Старые профили без новых полей получают разумные дефолты при отдаче в Mini App."""
     p = dict(profile)
     if not p.get("main_goal"):
@@ -1896,6 +1949,20 @@ def _enrich_profile_for_api(profile: dict) -> dict:
         p.setdefault("morning_time", mt)
         p.setdefault("daily_time", mt)
     p.setdefault("evening_time", p.get("evening_time") or "21:00")
+
+    tid = telegram_id or str(p.get("telegram_id") or "")
+    today = _profile_local_date(p)
+    if tid:
+        summ = db_store.get_daily_summary(tid, today)
+        if isinstance(summ, dict):
+            task_raw = str(summ.get("task") or "").strip()
+            if task_raw:
+                p["today_task"] = _short_task_title(task_raw)
+            if summ.get("completed"):
+                p["today_completed"] = True
+
+    p["week_scores"] = _week_scores_array(p)
+    p["display_streak"] = _display_streak(p, tid or None)
     return p
 
 
@@ -2145,9 +2212,35 @@ async def get_profile(
 
     user_obj = _validate_init_data(_extract_init_data(request))
     return {
-        "profile": _enrich_profile_for_api(profile),
+        "profile": _enrich_profile_for_api(profile, tid),
         "user": user_obj if isinstance(user_obj, dict) else None,
     }
+
+
+@app.post("/api/mark-day")
+async def mark_day_endpoint(
+    request: Request,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+) -> dict:
+    tid = _auth_telegram_id(request, telegram_id)
+    profile = _resolve_user_profile(tid)
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    today = _profile_local_date(profile)
+    _update_today_summary_field(int(tid), profile, completed=True)
+    _bump_streak_on_mark(profile, today)
+
+    ws = min(100, int(profile.get("weekly_score") or 0) + 15)
+    profile["weekly_score"] = ws
+    cw = max(1, min(4, int(profile.get("current_week") or 1)))
+    scores = _week_scores_array(profile)
+    scores[cw - 1] = ws
+    profile["week_scores"] = scores
+
+    db_store.upsert_profile(int(tid), profile)
+    user_profiles[tid] = profile
+    return {"profile": _enrich_profile_for_api(profile, tid)}
 
 
 class TaskCreatePayload(BaseModel):

@@ -185,6 +185,118 @@ body {
   line-height: 1;
 }
 
+/* ——— 4-week journey ——— */
+.week-journey {
+  margin-bottom: 16px;
+}
+
+.week-journey__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.week-journey__book {
+  font-size: 18px;
+  letter-spacing: 0.2em;
+  color: var(--forest);
+  flex: 1;
+  text-align: center;
+}
+
+.week-journey__title {
+  font-family: 'Montserrat', 'DM Sans', sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--forest);
+}
+
+.week-journey__percent {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--forest);
+  font-family: 'Montserrat', 'DM Sans', sans-serif;
+}
+
+.week-journey__circles {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.week-circle {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.week-circle__dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--bg);
+  transition: background 0.25s ease, border-color 0.25s ease;
+}
+
+.week-circle__dot--filled {
+  background: var(--forest);
+  border-color: var(--forest);
+}
+
+.week-circle__dot--partial {
+  background: linear-gradient(90deg, var(--forest) 50%, var(--bg) 50%);
+  border-color: var(--forest);
+}
+
+.week-circle__dot--current {
+  border-color: var(--forest);
+  border-width: 3px;
+  background: var(--accent);
+}
+
+.week-circle__dot--future {
+  opacity: 0.45;
+}
+
+.week-circle__label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted-light);
+  text-transform: uppercase;
+}
+
+.week-circle__label--current {
+  color: var(--forest);
+}
+
+.week-journey__bar {
+  height: 8px;
+  background: var(--border);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.week-journey__fill {
+  height: 100%;
+  background: var(--forest);
+  border-radius: 99px;
+  transition: width 0.8s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.week-journey__bar-caption {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .streak-dots {
   display: flex;
   gap: 8px;
@@ -220,12 +332,12 @@ body {
 }
 
 .goal-card__title {
-  font-family: 'Playfair Display', Georgia, serif;
-  font-size: 18px;
-  font-weight: 600;
+  font-family: 'Montserrat', 'DM Sans', sans-serif;
+  font-size: 17px;
+  font-weight: 700;
   color: var(--forest);
   margin-bottom: 14px;
-  line-height: 1.3;
+  line-height: 1.35;
   word-wrap: break-word;
 }
 
@@ -303,13 +415,21 @@ body {
 }
 
 .plan-goal {
-  font-family: 'Playfair Display', Georgia, serif;
-  font-size: 24px;
-  font-weight: 600;
+  font-family: 'Montserrat', 'DM Sans', sans-serif;
+  font-size: 20px;
+  font-weight: 700;
   color: var(--forest);
-  line-height: 1.25;
+  line-height: 1.3;
   margin-top: 6px;
   word-wrap: break-word;
+}
+
+.task-item--focus .task-item__title {
+  font-weight: 500;
+}
+.task-item--focus .task-item__mark {
+  background: var(--forest);
+  color: #fff;
 }
 
 .plan-days {

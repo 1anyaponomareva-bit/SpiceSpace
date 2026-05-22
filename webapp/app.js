@@ -242,49 +242,108 @@
     ).trim();
   }
 
+  function effectiveStreak(profile) {
+    const fromApi = Number(profile.display_streak ?? profile.streak ?? 0);
+    if (fromApi > 0) return fromApi;
+    if (profile.today_completed) return 1;
+    if ((profile.today_task || '').trim()) return 1;
+    const today = localISODate();
+    const key = `spicespace_day_${today}`;
+    if (sessionStorage.getItem(key) === '1') return 1;
+    return 0;
+  }
+
+  function weekScores(profile) {
+    const raw = profile.week_scores;
+    if (Array.isArray(raw) && raw.length >= 4) {
+      return raw.slice(0, 4).map((x) => Math.max(0, Math.min(100, Number(x) || 0)));
+    }
+    const cw = Number(profile.current_week || 1);
+    const ws = Math.max(0, Math.min(100, Number(profile.weekly_score || 0)));
+    const out = [0, 0, 0, 0];
+    if (cw >= 1 && cw <= 4) out[cw - 1] = ws;
+    return out;
+  }
+
   function renderStreak(profile) {
-    const streak = Number(profile.streak || 0);
+    const streak = effectiveStreak(profile);
     const numEl = document.getElementById('streak-number');
     if (numEl) numEl.textContent = String(streak);
 
     const dotsEl = document.getElementById('streak-dots');
     if (!dotsEl) return;
     const total = 7;
-    const filled = Math.min(streak, total);
-    const todaySlot = Math.min(filled, total - 1);
+    const filled = Math.max(0, Math.min(streak, total));
     const parts = [];
     for (let i = 0; i < total; i++) {
       let cls = 'streak-dot';
       if (i < filled) cls += ' streak-dot--done';
-      else if (i === todaySlot && filled < total) cls += ' streak-dot--today';
+      else if (filled > 0 && i === filled) cls += ' streak-dot--today';
+      else if (filled === 0 && i === 0) cls += ' streak-dot--today';
       parts.push(`<span class="${cls}"></span>`);
     }
     dotsEl.innerHTML = parts.join('');
+  }
+
+  function renderWeekJourney(profile) {
+    const host = document.getElementById('week-journey');
+    if (!host) return;
+
+    const currentWeek = Math.max(1, Math.min(4, Number(profile.current_week || 1)));
+    const scores = weekScores(profile);
+    const percent = scores[currentWeek - 1] ?? 0;
+
+    const circles = scores.map((score, idx) => {
+      const w = idx + 1;
+      let dotCls = 'week-circle__dot';
+      if (w < currentWeek) {
+        dotCls += score >= 80 ? ' week-circle__dot--filled' : ' week-circle__dot--partial';
+      } else if (w === currentWeek) {
+        dotCls += ' week-circle__dot--current';
+        if (score >= 80) dotCls += ' week-circle__dot--filled';
+        else if (score > 0) dotCls += ' week-circle__dot--partial';
+      } else {
+        dotCls += ' week-circle__dot--future';
+      }
+      const labelCls = w === currentWeek
+        ? 'week-circle__label week-circle__label--current'
+        : 'week-circle__label';
+      return `
+        <div class="week-circle">
+          <div class="${dotCls}" title="Неделя ${w}: ${score}%"></div>
+          <span class="${labelCls}">${w}</span>
+        </div>`;
+    }).join('');
+
+    const bookLine = scores.map((score, idx) => {
+      const w = idx + 1;
+      if (w < currentWeek) return score >= 80 ? '●' : '◐';
+      if (w === currentWeek) return score >= 80 ? '●' : '◉';
+      return '○';
+    }).join('');
+
+    host.innerHTML = `
+      <div class="week-journey__head">
+        <span class="week-journey__title">Неделя ${currentWeek}</span>
+        <span class="week-journey__book" aria-hidden="true">${bookLine}</span>
+        <span class="week-journey__percent">${percent}%</span>
+      </div>
+      <div class="week-journey__circles">${circles}</div>
+      <div class="week-journey__bar">
+        <div class="week-journey__fill" style="width:${percent}%"></div>
+      </div>
+      <p class="week-journey__bar-caption">выполнено за эту неделю · кружок закрашен при &gt;80%</p>
+    `;
   }
 
   function renderGoals(profile) {
     const list = document.getElementById('goals-list');
     if (!list) return;
 
-    const week = Number(profile.current_week || 1);
-    const percent = Math.max(0, Math.min(100, Number(profile.weekly_score || 0)));
-    const streak = Number(profile.streak || 0);
-    const daysLabel = streak > 0
-      ? `${streak} ${pluralize(streak, ['день', 'дня', 'дней'])}`
-      : 'старт';
-
-    const cards = [];
     const title = goalTitle(profile);
-    cards.push(`
-      <article class="goal-card">
-        <h3 class="goal-card__title">${escapeHtml(title)}</h3>
-        <div class="goal-card__bar-row">
-          <div class="progress-bar"><div class="progress-fill" style="width:${percent}%"></div></div>
-          <span class="goal-card__percent">${percent}%</span>
-        </div>
-        <p class="goal-card__meta">Неделя ${week} из 4 · ${escapeHtml(daysLabel)}</p>
-      </article>
-    `);
+    const cards = [`<article class="goal-card">
+      <h3 class="goal-card__title">${escapeHtml(title)}</h3>
+    </article>`];
 
     const signals = Array.isArray(profile.goal_signals) ? profile.goal_signals : [];
     if ((profile.goal_type || '').toLowerCase() === 'qualitative' && signals.length) {
@@ -297,29 +356,28 @@
       };
       signals.forEach((sig) => {
         const name = SIGNAL_LABELS[sig] || sig;
-        cards.push(`
-          <article class="goal-card">
-            <h3 class="goal-card__title">${escapeHtml(name)}</h3>
-            <div class="goal-card__bar-row">
-              <div class="progress-bar"><div class="progress-fill" style="width:${percent}%"></div></div>
-              <span class="goal-card__percent">${percent}%</span>
-            </div>
-            <p class="goal-card__meta">Неделя ${week} из 4 · отслеживаем</p>
-          </article>
-        `);
+        cards.push(`<article class="goal-card">
+          <h3 class="goal-card__title">${escapeHtml(name)}</h3>
+        </article>`);
       });
     }
 
     list.innerHTML = cards.join('');
   }
 
+  function isDayMarked(profile) {
+    if (profile?.today_completed) return true;
+    const today = localISODate();
+    return sessionStorage.getItem(`spicespace_day_${today}`) === '1'
+      || profile?.last_streak_date === today;
+  }
+
   function renderMarkDayButton() {
     const btn = document.getElementById('btn-mark-day');
     if (!btn) return;
     const today = localISODate();
-    const key = `spicespace_day_${lastProfile ? 'u' : ''}_${today}`;
-    dayMarkedKey = key;
-    const marked = sessionStorage.getItem(key) === '1';
+    dayMarkedKey = `spicespace_day_${today}`;
+    const marked = isDayMarked(lastProfile || {});
     btn.disabled = marked;
     btn.classList.toggle('is-done', marked);
     btn.textContent = marked ? '✓ День отмечен' : '✓ Отметить день выполненным';
@@ -329,6 +387,7 @@
     lastProfile = profile;
     showMain();
     renderStreak(profile);
+    renderWeekJourney(profile);
     renderGoals(profile);
     renderMarkDayButton();
 
@@ -346,27 +405,54 @@
     tasksCache = Array.isArray(data.tasks) ? data.tasks : [];
   }
 
+  function tasksForDay(iso, todayIso) {
+    const list = tasksCache
+      .filter((t) => taskAppliesOnDate(t, iso))
+      .sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
+
+    if (iso !== todayIso || !lastProfile) return list;
+
+    const focus = (lastProfile.today_task || '').trim();
+    if (!focus) return list;
+
+    const dup = list.some((t) => {
+      const title = (t.title || '').trim().toLowerCase();
+      return title && (title === focus.toLowerCase() || focus.toLowerCase().includes(title));
+    });
+    if (dup) return list;
+
+    list.unshift({
+      id: '__today_focus__',
+      title: focus,
+      done: Boolean(lastProfile.today_completed),
+      virtual: true,
+    });
+    return list;
+  }
+
   function renderPlanDays() {
     const host = document.getElementById('plan-days');
     if (!host) return;
     const todayIso = localISODate();
     const days = [todayIso, addDaysISO(todayIso, 1), addDaysISO(todayIso, 2)];
     const blocks = days.map((iso) => {
-      const list = tasksCache
-        .filter((t) => taskAppliesOnDate(t, iso))
-        .sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
+      const list = tasksForDay(iso, todayIso);
       const head = formatDayHeader(iso, todayIso);
       if (!list.length) {
+        const hint = iso === todayIso && lastProfile
+          ? '<p class="day-card__empty">Обсуди шаг на сегодня с ботом утром — он появится здесь.</p>'
+          : '<p class="day-card__empty">Задач нет</p>';
         return `
           <div class="day-card">
             <div class="day-card__head"><strong>${escapeHtml(head)}</strong></div>
-            <p class="day-card__empty">Задач нет</p>
+            ${hint}
           </div>`;
       }
       const items = list.map((t) => {
         const done = Boolean(t.done);
+        const isFocus = Boolean(t.virtual);
         return `
-          <li class="task-item${done ? ' task-item--done' : ''}" data-task-id="${escapeHtml(t.id)}">
+          <li class="task-item${done ? ' task-item--done' : ''}${isFocus ? ' task-item--focus' : ''}" data-task-id="${escapeHtml(t.id)}">
             <span class="task-item__title">${escapeHtml(t.title || '')}</span>
             <button type="button" class="task-item__mark" data-act="done" data-id="${escapeHtml(t.id)}" ${done ? 'disabled' : ''}>
               ${done ? 'Готово' : 'Сделано'}
@@ -472,6 +558,10 @@
       if (!btn || btn.disabled) return;
       const id = btn.getAttribute('data-id');
       if (!id) return;
+      if (id === '__today_focus__') {
+        await markDayComplete();
+        return;
+      }
       const resp = await apiFetch(`/api/tasks/${encodeURIComponent(id)}/done`, { method: 'POST' });
       if (resp.ok) {
         haptic('success');
@@ -480,15 +570,33 @@
     });
   }
 
+  async function markDayComplete() {
+    const resp = await apiFetch('/api/mark-day', { method: 'POST' });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.profile) {
+        lastProfile = data.profile;
+        renderProfile(data.profile);
+        await refreshPlan();
+      }
+      sessionStorage.setItem(dayMarkedKey || `spicespace_day_${localISODate()}`, '1');
+      haptic('success');
+      return;
+    }
+    sessionStorage.setItem(dayMarkedKey || `spicespace_day_${localISODate()}`, '1');
+    if (lastProfile) {
+      lastProfile.today_completed = true;
+      lastProfile.display_streak = Math.max(1, effectiveStreak(lastProfile));
+      renderProfile(lastProfile);
+    }
+    haptic('success');
+  }
+
   function bindMarkDay() {
     document.getElementById('btn-mark-day')?.addEventListener('click', () => {
       const btn = document.getElementById('btn-mark-day');
       if (!btn || btn.disabled) return;
-      sessionStorage.setItem(dayMarkedKey || `spicespace_day_${localISODate()}`, '1');
-      btn.disabled = true;
-      btn.classList.add('is-done');
-      btn.textContent = '✓ День отмечен';
-      haptic('success');
+      markDayComplete();
     });
   }
 
@@ -509,8 +617,11 @@
       goal_type: 'measurable',
       main_goal: 'Демо без backend',
       streak: 3,
+      display_streak: 3,
       weekly_score: 35,
+      week_scores: [80, 35, 0, 0],
       current_week: 2,
+      today_task: 'Один маленький шаг к цели',
       goal_signals: [],
     };
   }

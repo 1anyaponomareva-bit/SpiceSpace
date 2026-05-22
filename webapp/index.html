@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600&family=DM+Sans:wght@400;500;600&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700&family=Playfair+Display:wght@500;600&family=DM+Sans:wght@400;500;600&display=swap"
     rel="stylesheet"
   />
   <link rel="stylesheet" href="./styles.css" />
@@ -45,11 +45,15 @@
 
         <div class="card card--dark streak-card">
           <div class="streak-card__top">
-            <span class="label">Серия дней</span>
+            <div>
+              <span class="label">Серия дней подряд</span>
+            </div>
             <span class="streak-card__num" id="streak-number">0</span>
           </div>
           <div class="streak-dots" id="streak-dots"></div>
         </div>
+
+        <div class="card week-journey" id="week-journey"></div>
 
         <div class="goals-list" id="goals-list"></div>
 
