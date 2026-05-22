@@ -9,8 +9,11 @@
     charcoal: '#1A1A1A',
   };
 
-  const BACKEND_URL = (
+  const BACKEND_META = (
     document.querySelector('meta[name="spicespace-backend"]')?.content || ''
+  ).trim();
+  const BACKEND_URL = (
+    BACKEND_META || window.location.origin || ''
   ).replace(/\/+$/, '');
   const BOT_USERNAME = (
     document.querySelector('meta[name="spicespace-bot-username"]')?.content || ''
@@ -272,10 +275,13 @@
       }
       const data = await resp.json();
       const profile = data.profile || data;
+      const hasGoal = profile && (
+        profile.main_goal || profile.raw_goal || profile.final_goal
+      );
       return {
-        profile: profile && profile.raw_goal ? profile : null,
+        profile: hasGoal ? profile : null,
         user: data.user || null,
-        status: profile && profile.raw_goal ? 'ok' : 'empty',
+        status: hasGoal ? 'ok' : 'empty',
       };
     } catch (e) {
       console.warn('fetchProfile failed', e);
