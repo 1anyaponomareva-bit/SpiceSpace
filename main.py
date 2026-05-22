@@ -58,7 +58,8 @@ from telegram import (
     BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    MenuButtonWebApp,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
     Update,
     WebAppInfo,
 )
@@ -75,6 +76,21 @@ from telegram.ext import (
 DATA_DIR = Path(__file__).resolve().parent
 WEBAPP_DIR = DATA_DIR / "webapp"
 load_dotenv(DATA_DIR / ".env")
+
+
+def _progress_reply_keyboard() -> ReplyKeyboardMarkup:
+    webapp_url = os.getenv(
+        "MINI_APP_URL", "https://spicespace-production.up.railway.app/webapp/"
+    )
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("📊 Мой прогресс", web_app=WebAppInfo(url=webapp_url))]],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+async def _bot_reply(message, text: str) -> None:
+    await message.reply_text(text, reply_markup=_progress_reply_keyboard())
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -1195,6 +1211,12 @@ def _is_gotovo_message(text: str) -> bool:
 
 
 def _auth_telegram_id(request: Request, telegram_id: str | None) -> str:
+    # Dev bypass: если SKIP_TMA_AUTH=true — принимаем telegram_id без валидации
+    if os.getenv("SKIP_TMA_AUTH") == "true":
+        tid = (telegram_id or "").strip()
+        if tid.isdigit():
+            return tid
+
     init_data = _extract_init_data(request)
     if init_data:
         user_obj = _validate_init_data(init_data)
@@ -1432,13 +1454,13 @@ async def _send_thinking_placeholder(message):
 
 
 async def _replace_with_reply(placeholder, message, text: str) -> None:
-    """Меняет «Думаю…» на финальный ответ. Если не вышло — шлёт новое сообщение."""
+    """Меняет «Думаю…» на финальный ответ с клавиатурой прогресса."""
+    keyboard = _progress_reply_keyboard()
     if placeholder is not None:
         with suppress(Exception):
-            await placeholder.edit_text(text)
-            return
+            await placeholder.delete()
     with suppress(Exception):
-        await message.reply_text(text)
+        await message.reply_text(text, reply_markup=keyboard)
 
 
 def _parse_daily_time(raw: str) -> str | None:
@@ -1544,11 +1566,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     prof = user_profiles.get(str(cid))
     if isinstance(prof, dict) and prof.get("name"):
         ob.start_returning_choice(onboarding, cid)
-        await update.message.reply_text(ob.greeting_returning(str(prof.get("name", ""))))
+        await _bot_reply(
+            update.message, ob.greeting_returning(str(prof.get("name", "")))
+        )
         return
 
     ob.start_new_onboarding(onboarding, cid)
-    await update.message.reply_text(ob.GREETING_NEW)
+    await _bot_reply(update.message, ob.GREETING_NEW)
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1563,8 +1587,16 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(prof, dict):
         prof["daily_enabled"] = False
         db_store.upsert_profile(cid, prof)
+    await _bot_reply(
+        update.message,
+        "Утренние и вечерние сообщения выключены. Напиши /start, чтобы снова включить.",
+    )
+
+
+async def app_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    keyboard = _progress_reply_keyboard()
     await update.message.reply_text(
-        "Утренние и вечерние сообщения выключены. Напиши /start, чтобы снова включить."
+        "Открываю твой прогресс 👇", reply_markup=keyboard
     )
 
 
@@ -1578,8 +1610,9 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     pending_natural_reminder.pop(cid, None)
     last_reminder_task_id.pop(cid, None)
     onboarding.pop(cid, None)
-    await update.message.reply_text(
-        "Контекст диалога сброшен. Можем начать с чистого листа. Чтобы пройти знакомство снова — /start."
+    await _bot_reply(
+        update.message,
+        "Контекст диалога сброшен. Можем начать с чистого листа. Чтобы пройти знакомство снова — /start.",
     )
 
 
@@ -1598,7 +1631,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if not user_profiles.get(str(cid)):
         ob.start_new_onboarding(onboarding, cid)
-        await update.message.reply_text(ob.GREETING_NEW)
+        await _bot_reply(update.message, ob.GREETING_NEW)
         return
 
     if _looks_like_reminder_capability_question(raw):
@@ -1606,7 +1639,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         prof_d = prof_raw if isinstance(prof_raw, dict) else None
         reply = _reminder_capability_reply(prof_d)
         _append_history_turn(cid, raw, reply)
-        await update.message.reply_text(reply)
+        await _bot_reply(update.message, reply)
         return
 
     prof_raw = user_profiles.get(str(cid))
@@ -1616,7 +1649,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if cid in pending_evening and prof_d:
         reply = await _handle_evening_reply(cid, raw, prof_d, model_names)
         _append_history_turn(cid, raw, reply)
-        await update.message.reply_text(reply)
+        await _bot_reply(update.message, reply)
         return
 
     if cid in pending_natural_reminder and prof_d:
@@ -1630,8 +1663,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 try:
                     task = _create_task_from_payload(cid, prof_d, base)
                 except ValueError:
-                    await update.message.reply_text(
-                        "Не вышло сохранить напоминание — проверь дату и время в сообщении."
+                    await _bot_reply(
+                        update.message,
+                        "Не вышло сохранить напоминание — проверь дату и время в сообщении.",
                     )
                     return
                 tail = f"в {task['time']}"
@@ -1640,7 +1674,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 elif task.get("repeat") == "weekly":
                     tail += ", по выбранным дням недели"
                 msg = f"Окей ✨ Напомню про «{task['title']}» {tail}."
-                await update.message.reply_text(msg)
+                await _bot_reply(update.message, msg)
                 _append_history_turn(cid, raw, msg)
                 return
 
@@ -1649,14 +1683,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if tid_key and _mark_task_done_by_id(tid_key, cid):
             last_reminder_task_id.pop(cid, None)
             msg = "Записала ✨ Красота."
-            await update.message.reply_text(msg)
+            await _bot_reply(update.message, msg)
             _append_history_turn(cid, raw, msg)
             return
         msg = (
             "Отметь в Mini App в разделе «План» или дождись напоминания от меня — "
             "тогда «готово» сработает сразу."
         )
-        await update.message.reply_text(msg)
+        await _bot_reply(update.message, msg)
         _append_history_turn(cid, raw, msg)
         return
 
@@ -1667,7 +1701,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if need_title:
                 pending_natural_reminder[cid] = dict(parsed)
                 msg = "Что напомнить?"
-                await update.message.reply_text(msg)
+                await _bot_reply(update.message, msg)
                 _append_history_turn(cid, raw, msg)
                 return
             try:
@@ -1681,7 +1715,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 elif task.get("repeat") == "weekly":
                     tail += ", по выбранным дням недели"
                 msg = f"Окей ✨ Напомню про «{task['title']}» {tail}."
-                await update.message.reply_text(msg)
+                await _bot_reply(update.message, msg)
                 _append_history_turn(cid, raw, msg)
                 return
 
@@ -1726,12 +1760,14 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
     st_ob = onboarding.get(cid)
     if st_ob and int(st_ob.get("step") or 0) > 0:
-        await update.effective_message.reply_text(
-            "Давай до конца знакомство текстом — голос чуть позже 💛"
+        await _bot_reply(
+            update.effective_message,
+            "Давай до конца знакомство текстом — голос чуть позже 💛",
         )
         return
-    await update.effective_message.reply_text(
-        "Голосовые сообщения пока не расшифровываю — напиши текстом, так диалог стабильнее."
+    await _bot_reply(
+        update.effective_message,
+        "Голосовые сообщения пока не расшифровываю — напиши текстом, так диалог стабильнее.",
     )
 
 
@@ -1858,6 +1894,7 @@ scheduler: AsyncIOScheduler | None = None
 
 def _register_telegram_handlers(app_: Application) -> None:
     app_.add_handler(CommandHandler("start", cmd_start))
+    app_.add_handler(CommandHandler("app", app_command))
     app_.add_handler(CommandHandler("stop", cmd_stop))
     app_.add_handler(CommandHandler("reset", cmd_reset))
     app_.add_handler(MessageHandler(filters.VOICE, on_voice))
@@ -1886,6 +1923,7 @@ async def _bootstrap_bot() -> None:
     telegram_app = Application.builder().token(token).build()
     telegram_app.bot_data["claude_model_names"] = model_chain
     telegram_app.bot_data["mini_app_url"] = _mini_app_url()
+    telegram_app.bot_data["progress_reply_keyboard"] = _progress_reply_keyboard
     _register_telegram_handlers(telegram_app)
 
     bot = telegram_app.bot
@@ -1915,7 +1953,19 @@ async def _bootstrap_bot() -> None:
                     try:
                         text = _morning_message_text(cid)
                         pending_morning[cid] = text
-                        await bot.send_message(chat_id=cid, text=text)
+                        webapp_url = os.getenv(
+                            "MINI_APP_URL",
+                            "https://spicespace-production.up.railway.app/webapp/",
+                        )
+                        keyboard = InlineKeyboardMarkup([[
+                            InlineKeyboardButton(
+                                "Открыть SpiceSpace",
+                                web_app=WebAppInfo(url=webapp_url),
+                            )
+                        ]])
+                        await bot.send_message(
+                            chat_id=cid, text=text, reply_markup=keyboard
+                        )
                         profile["last_morning_sent_date"] = today
                         profile["last_daily_sent_date"] = today
                         user_profiles[key] = profile
@@ -1926,7 +1976,21 @@ async def _bootstrap_bot() -> None:
                 if evening_time == now_hm and profile.get("last_evening_sent_date") != today:
                     try:
                         pending_evening[cid] = {"date": today}
-                        await bot.send_message(chat_id=cid, text=evening_opening())
+                        webapp_url = os.getenv(
+                            "MINI_APP_URL",
+                            "https://spicespace-production.up.railway.app/webapp/",
+                        )
+                        keyboard = InlineKeyboardMarkup([[
+                            InlineKeyboardButton(
+                                "Открыть SpiceSpace",
+                                web_app=WebAppInfo(url=webapp_url),
+                            )
+                        ]])
+                        await bot.send_message(
+                            chat_id=cid,
+                            text=evening_opening(),
+                            reply_markup=keyboard,
+                        )
                         profile["last_evening_sent_date"] = today
                         user_profiles[key] = profile
                         db_store.upsert_profile(cid, profile)
@@ -1969,6 +2033,7 @@ async def _bootstrap_bot() -> None:
         await bot.set_my_commands(
             [
                 BotCommand("start", "Собрать цель и запустить онбординг"),
+                BotCommand("app", "Открыть SpiceSpace Mini App"),
                 BotCommand("reset", "Пересобрать цель заново"),
                 BotCommand("stop", "Отключить ежедневные сообщения"),
             ]
@@ -1976,18 +2041,6 @@ async def _bootstrap_bot() -> None:
         log.info("Bot commands registered in Telegram menu.")
     except Exception as e:
         log.warning("set_my_commands failed: %s", e)
-
-    try:
-        mini_url = _mini_app_url()
-        await bot.set_chat_menu_button(
-            menu_button=MenuButtonWebApp(
-                text="Открыть SpiceSpace",
-                web_app=WebAppInfo(mini_url),
-            )
-        )
-        log.info("Menu button «Открыть SpiceSpace» → WebApp %s", mini_url)
-    except Exception as e:
-        log.warning("set_chat_menu_button failed: %s", e)
 
 
 async def _shutdown_bot() -> None:

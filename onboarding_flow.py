@@ -564,15 +564,21 @@ async def handle_onboarding_turn(
             }
         ]
 
+        progress_kb = None
+        fn = context.bot_data.get("progress_reply_keyboard")
+        if callable(fn):
+            progress_kb = fn()
+
         await msg.reply_text(
             f"Всё, запомнила ✨\n\n"
-            f"Буду писать тебе утром в {mt} и вечером в {et}."
+            f"Буду писать тебе утром в {mt} и вечером в {et}.",
+            reply_markup=progress_kb,
         )
 
         first_q = await _first_question_after_onboard(
             name, str(profile.get("main_goal", "")), model_names
         )
-        await msg.reply_text(first_q)
+        await msg.reply_text(first_q, reply_markup=progress_kb)
         histories[cid].append({"role": "model", "parts": [first_q]})
         return
 
