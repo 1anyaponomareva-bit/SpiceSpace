@@ -366,6 +366,7 @@
 
     tasks = await fetchTasks();
     renderAll(result.user || tg?.initDataUnsafe?.user);
+    document.querySelector('.settings-block')?.classList.add('loaded');
   }
 
   if (document.readyState === 'loading') {

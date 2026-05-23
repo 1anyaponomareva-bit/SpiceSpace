@@ -58,8 +58,6 @@ from pydantic import BaseModel, Field
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
     Update,
     WebAppInfo,
 )
@@ -78,19 +76,8 @@ WEBAPP_DIR = DATA_DIR / "webapp"
 load_dotenv(DATA_DIR / ".env")
 
 
-def _progress_reply_keyboard() -> ReplyKeyboardMarkup:
-    webapp_url = os.getenv(
-        "MINI_APP_URL", "https://spicespace-production.up.railway.app/webapp/"
-    )
-    return ReplyKeyboardMarkup(
-        [[KeyboardButton("📊 Мой прогресс", web_app=WebAppInfo(url=webapp_url))]],
-        resize_keyboard=True,
-        is_persistent=True,
-    )
-
-
 async def _bot_reply(message, text: str) -> None:
-    await message.reply_text(text, reply_markup=_progress_reply_keyboard())
+    await message.reply_text(text)
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -1599,13 +1586,12 @@ async def _send_thinking_placeholder(message):
 
 
 async def _replace_with_reply(placeholder, message, text: str) -> None:
-    """Меняет «Думаю…» на финальный ответ с клавиатурой прогресса."""
-    keyboard = _progress_reply_keyboard()
+    """Меняет «Думаю…» на финальный ответ."""
     if placeholder is not None:
         with suppress(Exception):
             await placeholder.delete()
     with suppress(Exception):
-        await message.reply_text(text, reply_markup=keyboard)
+        await message.reply_text(text)
 
 
 def _parse_daily_time(raw: str) -> str | None:
@@ -2194,7 +2180,6 @@ async def _bootstrap_bot() -> None:
     telegram_app = Application.builder().token(token).build()
     telegram_app.bot_data["claude_model_names"] = model_chain
     telegram_app.bot_data["mini_app_url"] = _mini_app_url()
-    telegram_app.bot_data["progress_reply_keyboard"] = _progress_reply_keyboard
     _register_telegram_handlers(telegram_app)
 
     bot = telegram_app.bot

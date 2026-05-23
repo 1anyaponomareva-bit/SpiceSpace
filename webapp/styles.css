@@ -322,6 +322,12 @@ body.tg-app { background: var(--bg); }
   margin-top: 8px;
   padding: 0 20px 24px;
   padding-bottom: calc(24px + var(--safe-bottom));
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.settings-block.loaded {
+  opacity: 1;
 }
 
 .settings-btn {
