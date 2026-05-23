@@ -320,6 +320,22 @@
       renderTasks(profile, tasks);
       renderStreak(profile);
     });
+
+    document.getElementById('btn-reset')?.addEventListener('click', async () => {
+      if (!confirm('Сбросить всю память бота? Это удалит твой профиль и историю.')) return;
+      await apiFetch('/api/profile/reset', { method: 'POST' });
+      if (tg) tg.close();
+    });
+
+    document.getElementById('btn-subscription')?.addEventListener('click', () => {
+      alert('Подписка скоро будет доступна 💳');
+    });
+
+    document.getElementById('btn-stop')?.addEventListener('click', async () => {
+      await apiFetch('/api/profile/stop', { method: 'POST' });
+      alert('Бот остановлен. Напиши /start чтобы возобновить.');
+      if (tg) tg.close();
+    });
   }
 
   async function start() {

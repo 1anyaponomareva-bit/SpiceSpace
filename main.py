@@ -17,6 +17,7 @@ Optional .env:
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
@@ -55,7 +56,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from telegram import (
-    BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
@@ -1300,6 +1300,63 @@ def _morning_message_text(chat_id: int) -> str:
     )
 
 
+_EVENING_PERSONAL_SYSTEM = (
+    "Ты Спейс. Пользователь уже рассказал тебе как прошёл день. "
+    "Напиши короткое вечернее сообщение — подведи итог и спроси поставим задачу на завтра "
+    "или утром займёмся. Используй то что знаешь из summary. 2-3 предложения максимум."
+)
+
+
+async def _evening_message_text(
+    chat_id: int,
+    profile: dict,
+    model_names: list[str],
+) -> str:
+    today = _profile_local_date(profile)
+    today_summary = db_store.get_daily_summary(chat_id, today) or {}
+    summary_text = str(today_summary.get("summary") or "").strip()
+    if not summary_text:
+        return evening_opening()
+
+    name = str(profile.get("name") or "").strip() or "подруга"
+    goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
+    parts = [f"summary: {summary_text}"]
+    mood = str(today_summary.get("mood") or "").strip()
+    key_detail = str(today_summary.get("key_detail") or "").strip()
+    task = str(today_summary.get("task") or "").strip()
+    if mood:
+        parts.append(f"mood: {mood}")
+    if key_detail:
+        parts.append(f"key_detail: {key_detail}")
+    if task:
+        parts.append(f"task: {task}")
+
+    user_content = (
+        f"Профиль:\n"
+        f"Имя: {name}\n"
+        f"Цель: {goal or 'не указана'}\n\n"
+        f"Сегодня:\n" + "\n".join(parts)
+    )
+
+    def call() -> str:
+        for mid in model_names:
+            try:
+                text = claude_generate(
+                    mid,
+                    [{"role": "user", "content": user_content}],
+                    system=_EVENING_PERSONAL_SYSTEM,
+                    max_tokens=200,
+                    cache_core=False,
+                ).strip()
+                if text:
+                    return text
+            except Exception as e:
+                log.warning("evening personal message %s: %s", mid, e)
+        return evening_opening()
+
+    return await asyncio.to_thread(call)
+
+
 def _profile_local_date(profile: dict) -> date:
     tz_name = str(profile.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     try:
@@ -1439,6 +1496,83 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
         maybe_save_daily_summary(chat_id, prof, histories.get(chat_id, []), model_names)
     )
 
+    return reply
+
+
+_VISION_MODEL = "claude-sonnet-4-20250514"
+
+
+async def _coach_reply_photo(
+    chat_id: int,
+    photo_b64: str,
+    caption: str,
+    model_names: list[str],
+) -> str:
+    prof = user_profiles.get(str(chat_id)) or {}
+    tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
+    yesterday = db_store.get_yesterday_summary(chat_id, tz_name)
+    today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
+    system = build_chat_system(prof, yesterday, today_summary, extra="")
+
+    user_label = (caption or "Что на фото?").strip()
+    user_content = [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": photo_b64,
+            },
+        },
+        {"type": "text", "text": user_label},
+    ]
+
+    hist = histories.setdefault(chat_id, [])
+    history_prefixes: list[list[dict]] = [list(hist)]
+    if len(hist) > 20:
+        history_prefixes.append(hist[-20:])
+
+    last_err: BaseException | None = None
+
+    def try_models(hist_prefix: list[dict]) -> str | None:
+        nonlocal last_err
+        messages = _hist_to_claude_messages(hist_prefix, None)
+        messages.append({"role": "user", "content": user_content})
+        try:
+            reply_text = claude_generate(
+                _VISION_MODEL,
+                messages,
+                system=system,
+                cache_core=False,
+            )
+            log.info("Claude vision ответ через модель %s", _VISION_MODEL)
+            return reply_text
+        except anthropic.RateLimitError as e:
+            last_err = e
+            log.warning("Claude 429 (квота) на модели %s", _VISION_MODEL)
+            return None
+        except anthropic.NotFoundError:
+            log.warning("Claude 404 для модели %s", _VISION_MODEL)
+            return None
+        except Exception as e:
+            log.warning("Claude vision %s: %s", _VISION_MODEL, e)
+            return None
+
+    reply: str | None = None
+    for prefix in history_prefixes:
+        reply = await asyncio.to_thread(try_models, prefix)
+        if reply is not None:
+            break
+
+    if reply is None:
+        if isinstance(last_err, anthropic.RateLimitError):
+            raise last_err
+        raise RuntimeError("Claude vision не ответила")
+
+    _append_history_turn(chat_id, user_label, reply)
+    asyncio.create_task(
+        maybe_save_daily_summary(chat_id, prof, histories.get(chat_id, []), model_names)
+    )
     return reply
 
 
@@ -1767,6 +1901,62 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _replace_with_reply(placeholder, update.message, reply)
 
 
+async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or not update.message or not update.message.photo:
+        return
+    cid = update.effective_chat.id
+    msg = update.message
+
+    st_ob = onboarding.get(cid)
+    if st_ob is not None and int(st_ob.get("step") or 0) > 0:
+        await _bot_reply(
+            msg,
+            "Давай до конца знакомство текстом — фото чуть позже 💛",
+        )
+        return
+
+    if not user_profiles.get(str(cid)):
+        ob.start_new_onboarding(onboarding, cid)
+        await _bot_reply(msg, ob.GREETING_NEW)
+        return
+
+    model_names: list[str] = context.bot_data["claude_model_names"]
+    caption = (msg.caption or "").strip() or "Что на фото?"
+
+    log.info("incoming photo chat_id=%s caption_len=%s", cid, len(caption))
+
+    placeholder = await _send_thinking_placeholder(msg)
+    typing_task = asyncio.create_task(_typing_loop(context.bot, cid))
+    try:
+        tg_file = await context.bot.get_file(msg.photo[-1].file_id)
+        photo_bytes = await tg_file.download_as_bytearray()
+        photo_b64 = base64.b64encode(photo_bytes).decode()
+        try:
+            reply = await _coach_reply_photo(cid, photo_b64, caption, model_names)
+        except anthropic.RateLimitError:
+            log.exception("Claude quota exhausted (photo)")
+            await _replace_with_reply(
+                placeholder,
+                msg,
+                "У Claude API сейчас лимит запросов (ошибка 429). Подожди 1–2 минуты и отправь фото снова.",
+            )
+            return
+        except Exception:
+            log.exception("Photo reply failed chat_id=%s", cid)
+            await _replace_with_reply(
+                placeholder,
+                msg,
+                "Не получилось разобрать фото. Попробуй ещё раз или опиши текстом.",
+            )
+            return
+    finally:
+        typing_task.cancel()
+        with suppress(Exception):
+            await typing_task
+
+    await _replace_with_reply(placeholder, msg, reply)
+
+
 async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_chat or not update.effective_message:
         return
@@ -1978,6 +2168,7 @@ def _register_telegram_handlers(app_: Application) -> None:
     app_.add_handler(CommandHandler("stop", cmd_stop))
     app_.add_handler(CommandHandler("reset", cmd_reset))
     app_.add_handler(MessageHandler(filters.VOICE, on_voice))
+    app_.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app_.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
 
@@ -2056,6 +2247,7 @@ async def _bootstrap_bot() -> None:
                 if evening_time == now_hm and profile.get("last_evening_sent_date") != today:
                     try:
                         pending_evening[cid] = {"date": today}
+                        evening_text = await _evening_message_text(cid, profile, model_chain)
                         webapp_url = os.getenv(
                             "MINI_APP_URL",
                             "https://spicespace-production.up.railway.app/webapp/",
@@ -2068,7 +2260,7 @@ async def _bootstrap_bot() -> None:
                         ]])
                         await bot.send_message(
                             chat_id=cid,
-                            text=evening_opening(),
+                            text=evening_text,
                             reply_markup=keyboard,
                         )
                         profile["last_evening_sent_date"] = today
@@ -2110,15 +2302,8 @@ async def _bootstrap_bot() -> None:
     )
 
     try:
-        await bot.set_my_commands(
-            [
-                BotCommand("start", "Собрать цель и запустить онбординг"),
-                BotCommand("app", "Открыть SpiceSpace Mini App"),
-                BotCommand("reset", "Пересобрать цель заново"),
-                BotCommand("stop", "Отключить ежедневные сообщения"),
-            ]
-        )
-        log.info("Bot commands registered in Telegram menu.")
+        await bot.set_my_commands([])
+        log.info("Bot commands menu cleared.")
     except Exception as e:
         log.warning("set_my_commands failed: %s", e)
 
@@ -2215,6 +2400,56 @@ async def get_profile(
         "profile": _enrich_profile_for_api(profile, tid),
         "user": user_obj if isinstance(user_obj, dict) else None,
     }
+
+
+def _purge_user_runtime(chat_id: int) -> None:
+    """Очистка RAM-состояния пользователя после сброса профиля."""
+    tid = str(chat_id)
+    histories.pop(chat_id, None)
+    onboarding.pop(chat_id, None)
+    pending_morning.pop(chat_id, None)
+    pending_evening.pop(chat_id, None)
+    pending_natural_reminder.pop(chat_id, None)
+    last_reminder_task_id.pop(chat_id, None)
+    subscribers.discard(chat_id)
+    user_profiles.pop(tid, None)
+    with tasks_lock:
+        before = len(tasks_store)
+        tasks_store[:] = [
+            t for t in tasks_store if int(t.get("telegram_id") or 0) != chat_id
+        ]
+        if len(tasks_store) != before:
+            _save_tasks_to_disk_locked()
+
+
+@app.post("/api/profile/reset")
+async def reset_profile_endpoint(
+    request: Request,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+) -> dict:
+    tid = _auth_telegram_id(request, telegram_id)
+    db_store.delete_profile(tid)
+    _purge_user_runtime(int(tid))
+    return {"ok": True}
+
+
+@app.post("/api/profile/stop")
+async def stop_profile_endpoint(
+    request: Request,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+) -> dict:
+    tid = _auth_telegram_id(request, telegram_id)
+    cid = int(tid)
+    subscribers.discard(cid)
+    pending_morning.pop(cid, None)
+    pending_evening.pop(cid, None)
+    db_store.save_subscriber(cid, False)
+    prof = user_profiles.get(tid) or db_store.get_profile(tid)
+    if isinstance(prof, dict):
+        prof["daily_enabled"] = False
+        db_store.upsert_profile(cid, prof)
+        user_profiles[tid] = prof
+    return {"ok": True}
 
 
 @app.post("/api/mark-day")

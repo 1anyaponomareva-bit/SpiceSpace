@@ -114,6 +114,32 @@ def get_profile(user_id: int | str) -> dict | None:
     return p if isinstance(p, dict) else None
 
 
+def delete_profile(user_id: int | str) -> None:
+    key = str(user_id)
+    if _use_supabase:
+        _request("DELETE", f"user_profiles?user_id=eq.{key}")
+        _request("DELETE", f"daily_summaries?user_id=eq.{key}")
+
+    profiles = _load_json(USER_PROFILES_PATH, {})
+    if isinstance(profiles, dict):
+        profiles.pop(key, None)
+        _save_json(USER_PROFILES_PATH, profiles)
+
+    store = _load_json(DAILY_SUMMARIES_PATH, {})
+    if isinstance(store, dict):
+        store.pop(key, None)
+        _save_json(DAILY_SUMMARIES_PATH, store)
+
+    subs = _load_json(SUBSCRIBERS_PATH, [])
+    if isinstance(subs, list):
+        try:
+            uid = int(key)
+            subs = [x for x in subs if int(x) != uid]
+            _save_json(SUBSCRIBERS_PATH, subs)
+        except (TypeError, ValueError):
+            pass
+
+
 def upsert_profile(user_id: int | str, profile: dict) -> None:
     key = str(user_id)
     row = _profile_to_row(profile)
@@ -287,6 +313,8 @@ def _profile_to_row(p: dict) -> dict:
         "last_evening_sent_date": last_e if last_e else None,
         "streak": p.get("streak", 0),
         "current_week": p.get("current_week", 1),
+        "weekly_goal": p.get("weekly_goal"),
+        "time_per_day": p.get("time_per_day"),
     }
 
 
@@ -309,6 +337,8 @@ def _row_to_profile(row: dict) -> dict:
     p.setdefault("completed_tasks", [])
     p.setdefault("missed_tasks", [])
     p.setdefault("current_week", 1)
+    p.setdefault("weekly_goal", p.get("weekly_goal") or "")
+    p.setdefault("time_per_day", p.get("time_per_day") or "")
     return p
 
 

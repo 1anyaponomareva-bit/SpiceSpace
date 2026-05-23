@@ -14,7 +14,11 @@ from telegram.ext import ContextTypes
 
 import db
 from claude_client import generate as claude_generate
-from prompts import FIRST_QUESTION_AFTER_ONBOARD, GOAL_DIALOG_SYSTEM
+from prompts import (
+    FIRST_QUESTION_AFTER_ONBOARD,
+    GOAL_DIALOG_SYSTEM,
+    WEEKLY_GOAL_PROPOSAL_SYSTEM,
+)
 from summaries import save_onboarding_summary
 
 if TYPE_CHECKING:
@@ -30,6 +34,8 @@ OB_ASK_NAME = 1
 OB_GOAL_DIALOG = 2
 OB_ASK_MORNING_TIME = 3
 OB_ASK_EVENING_TIME = 4
+OB_ASK_TIME_PER_DAY = 7
+OB_WEEKLY_GOAL = 8
 
 GREETING_NEW = "Привет! 👋 Меня зовут Спейс. Как тебя зовут?"
 
@@ -95,6 +101,41 @@ MORNING_TIME_QUESTION = (
 )
 
 EVENING_TIME_QUESTION = "И ещё — в какое время вечером мне спрашивать как прошёл день? 🌙"
+
+TIME_PER_DAY_QUESTION = (
+    "Последний вопрос — сколько времени в день ты реально можешь уделять своей цели?\n"
+    "Например: 30 минут, час, два часа."
+)
+
+_WEEKLY_GOAL_AGREE = (
+    "да",
+    "ок",
+    "окей",
+    "подходит",
+    "давай",
+    "соглас",
+    "согласна",
+    "верно",
+    "хорошо",
+    "угу",
+    "yes",
+    "ага",
+    "конечно",
+    "именно",
+    "точно",
+)
+
+_WEEKLY_GOAL_DISAGREE = (
+    "нет",
+    "не подходит",
+    "не то",
+    "другой",
+    "другая",
+    "измени",
+    "переделай",
+    "не хочу",
+    "не надо",
+)
 
 
 def greeting_returning(name: str) -> str:
@@ -304,6 +345,108 @@ def parse_time_nl(raw: str) -> str | None:
     return None
 
 
+def parse_time_per_day(raw: str) -> str | None:
+    """Свободный ответ: «час», «30 минут», «2 часа», «полчаса»."""
+    text = (raw or "").strip().lower()
+    if not text or len(text) < 2:
+        return None
+
+    if "полчас" in text or "пол час" in text:
+        return "30 минут"
+
+    m = re.search(r"(\d+)\s*(мин|минут|минуты|мин\.?|м\b)", text)
+    if m:
+        n = int(m.group(1))
+        if 1 <= n <= 480:
+            return f"{n} минут"
+
+    m = re.search(r"(\d+)\s*(час|часа|часов|ч\b|h\b)", text)
+    if m:
+        n = int(m.group(1))
+        if 1 <= n <= 12:
+            word = "час" if n == 1 else "часа" if 2 <= n <= 4 else "часов"
+            return f"{n} {word}"
+
+    for word, hour in _WORD_HOURS.items():
+        if re.search(rf"\b{word}\b", text) and "час" in text:
+            w = "час" if hour == 1 else "часа" if 2 <= hour <= 4 else "часов"
+            return f"{hour} {w}"
+
+    if re.fullmatch(r"час[аом]?", text) or text in ("час", "часик", "hour"):
+        return "1 час"
+    if "два час" in text or "2 час" in text:
+        return "2 часа"
+    if "три час" in text or "3 час" in text:
+        return "3 часа"
+
+    if any(x in text for x in ("мин", "час", "часов", "hour", "min")):
+        return (raw or "").strip()[:200]
+
+    return None
+
+
+def _is_weekly_goal_agreement(raw: str) -> bool:
+    low = (raw or "").strip().lower()
+    if not low:
+        return False
+    if low in _WEEKLY_GOAL_AGREE or low.startswith("да"):
+        return True
+    return any(w in low for w in ("подходит", "давай", "соглас", "окей", "ок "))
+
+
+def _is_weekly_goal_disagreement(raw: str) -> bool:
+    low = (raw or "").strip().lower()
+    if not low:
+        return False
+    if any(low.startswith(w) or w in low for w in _WEEKLY_GOAL_DISAGREE):
+        return True
+    return False
+
+
+def _extract_weekly_goal_from_proposal(proposal: str) -> str:
+    text = (proposal or "").strip()
+    m = re.search(
+        r"предлагаю:\s*(.+?)(?:\.\s*подходит|\.\s*$)",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if m:
+        return m.group(1).strip()[:2000]
+    return text[:2000]
+
+
+async def _claude_weekly_goal_proposal(
+    main_goal: str,
+    time_per_day: str,
+    model_names: list[str],
+) -> str:
+    user_msg = (
+        f"Цель на месяц: {main_goal or 'не указана'}\n"
+        f"Время в день: {time_per_day or 'не указано'}"
+    )
+
+    def call() -> str:
+        for mid in model_names:
+            try:
+                text = claude_generate(
+                    mid,
+                    [{"role": "user", "content": user_msg}],
+                    system=WEEKLY_GOAL_PROPOSAL_SYSTEM,
+                    max_tokens=200,
+                    cache_core=False,
+                ).strip()
+                if text:
+                    return text
+            except Exception as e:
+                log.warning("weekly_goal_proposal %s: %s", mid, e)
+        return (
+            f"На первую неделю предлагаю: сделать первый конкретный шаг к цели "
+            f"«{(main_goal or 'твоя цель')[:80]}» — по {time_per_day or '30 минут'} в день. Подходит?"
+        )
+
+    return await asyncio.to_thread(call)
+
+
 def looks_like_restart_onboarding(raw: str) -> bool:
     low = (raw or "").strip().lower()
     return any(
@@ -363,6 +506,8 @@ def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
         "completed_tasks": [],
         "missed_tasks": [],
         "current_week": 1,
+        "weekly_goal": str(st.get("weekly_goal", "")).strip()[:2000],
+        "time_per_day": str(st.get("time_per_day", "")).strip()[:200],
     }
     db.upsert_profile(cid, profile)
     db.save_subscriber(cid, True)
@@ -411,6 +556,60 @@ async def _first_question_after_onboard(
         return "Расскажи — с чего для тебя логичнее начать прямо сейчас?"
 
     return await asyncio.to_thread(call)
+
+
+async def _complete_onboarding(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    cid: int,
+    st: dict,
+    onboarding: dict[int, dict],
+    histories: dict[int, list],
+    user_profiles: dict[str, dict],
+    subscribers: set[int],
+    model_names: list[str],
+) -> None:
+    msg = update.message
+    if not msg:
+        return
+
+    profile = await asyncio.to_thread(persist_profile, cid, st, model_names)
+    onboarding.pop(cid, None)
+    user_profiles[str(cid)] = profile
+    subscribers.add(cid)
+
+    name = profile.get("name", "")
+    mt = profile.get("morning_time", "09:30")
+    et = profile.get("evening_time", "21:00")
+    main_goal = str(profile.get("main_goal", ""))
+    weekly_goal = str(profile.get("weekly_goal", ""))
+
+    histories[cid] = [
+        {
+            "role": "user",
+            "parts": [
+                f"[SpiceSpace] Онбординг: {name}, цель месяца — {main_goal}, "
+                f"неделя — {weekly_goal}, утро {mt}, вечер {et}."
+            ],
+        }
+    ]
+
+    progress_kb = None
+    fn = context.bot_data.get("progress_reply_keyboard")
+    if callable(fn):
+        progress_kb = fn()
+
+    await msg.reply_text(
+        f"Всё, запомнила ✨\n\n"
+        f"Цель месяца: {main_goal}\n"
+        f"Цель этой недели: {weekly_goal}\n\n"
+        f"Буду писать тебе утром в {mt} и вечером в {et}.",
+        reply_markup=progress_kb,
+    )
+
+    first_q = await _first_question_after_onboard(name, main_goal, model_names)
+    await msg.reply_text(first_q, reply_markup=progress_kb)
+    histories[cid].append({"role": "model", "parts": [first_q]})
 
 
 async def handle_returning_choice(
@@ -545,41 +744,91 @@ async def handle_onboarding_turn(
             return
         st["evening_time"] = parsed
         st["timezone"] = _default_timezone()
+        st["step"] = OB_ASK_TIME_PER_DAY
+        await msg.reply_text(TIME_PER_DAY_QUESTION)
+        return
 
-        profile = await asyncio.to_thread(persist_profile, cid, st, model_names)
-        onboarding.pop(cid, None)
-        user_profiles[str(cid)] = profile
-        subscribers.add(cid)
+    if step == OB_ASK_TIME_PER_DAY:
+        parsed = parse_time_per_day(raw)
+        if not parsed:
+            await msg.reply_text(
+                "Не совсем поняла. Напиши, например: 30 минут, час или два часа."
+            )
+            return
+        st["time_per_day"] = parsed
+        st["step"] = OB_WEEKLY_GOAL
+        st["weekly_goal_phase"] = "proposal_sent"
+        proposal = await _claude_weekly_goal_proposal(
+            str(st.get("main_goal", "")),
+            parsed,
+            model_names,
+        )
+        st["weekly_goal_proposal"] = proposal
+        await msg.reply_text(proposal)
+        return
 
-        name = profile.get("name", "")
-        mt = profile.get("morning_time", "09:30")
-        et = profile.get("evening_time", "21:00")
-        histories[cid] = [
-            {
-                "role": "user",
-                "parts": [
-                    f"[SpiceSpace] Онбординг: {name}, цель — {profile.get('main_goal')}, "
-                    f"утро {mt}, вечер {et}."
-                ],
-            }
-        ]
+    if step == OB_WEEKLY_GOAL:
+        phase = str(st.get("weekly_goal_phase") or "proposal_sent")
 
-        progress_kb = None
-        fn = context.bot_data.get("progress_reply_keyboard")
-        if callable(fn):
-            progress_kb = fn()
+        if phase == "awaiting_custom":
+            custom = raw.strip()[:2000]
+            if len(custom) < 3:
+                await msg.reply_text("Напиши коротко — что хочешь сделать за первую неделю.")
+                return
+            st["weekly_goal"] = custom
+            await _complete_onboarding(
+                update,
+                context,
+                cid,
+                st,
+                onboarding,
+                histories,
+                user_profiles,
+                subscribers,
+                model_names,
+            )
+            return
+
+        if _is_weekly_goal_agreement(raw):
+            proposal = str(st.get("weekly_goal_proposal", "")).strip()
+            st["weekly_goal"] = _extract_weekly_goal_from_proposal(proposal) or proposal
+            await _complete_onboarding(
+                update,
+                context,
+                cid,
+                st,
+                onboarding,
+                histories,
+                user_profiles,
+                subscribers,
+                model_names,
+            )
+            return
+
+        if _is_weekly_goal_disagreement(raw):
+            st["weekly_goal_phase"] = "awaiting_custom"
+            await msg.reply_text("Окей — напиши свой вариант цели на первую неделю.")
+            return
+
+        custom = raw.strip()[:2000]
+        if len(custom) >= 8:
+            st["weekly_goal"] = custom
+            await _complete_onboarding(
+                update,
+                context,
+                cid,
+                st,
+                onboarding,
+                histories,
+                user_profiles,
+                subscribers,
+                model_names,
+            )
+            return
 
         await msg.reply_text(
-            f"Всё, запомнила ✨\n\n"
-            f"Буду писать тебе утром в {mt} и вечером в {et}.",
-            reply_markup=progress_kb,
+            'Напиши «да» / «подходит» или свой вариант цели на первую неделю.'
         )
-
-        first_q = await _first_question_after_onboard(
-            name, str(profile.get("main_goal", "")), model_names
-        )
-        await msg.reply_text(first_q, reply_markup=progress_kb)
-        histories[cid].append({"role": "model", "parts": [first_q]})
         return
 
     await msg.reply_text("Что-то сбилось. Нажми /start — начнём сначала.")
