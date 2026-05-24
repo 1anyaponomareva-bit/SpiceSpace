@@ -290,6 +290,16 @@ _MALE_NAME_EXCEPTIONS = frozenset(
 )
 _AMBIGUOUS_NAMES = frozenset({"женя", "саша"})
 
+
+def strip_markdown(text: str) -> str:
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)  # **bold**
+    text = re.sub(r"\*(.*?)\*", r"\1", text)  # *italic*
+    text = re.sub(r"__(.*?)__", r"\1", text)  # __bold__
+    text = re.sub(r"_(.*?)_", r"\1", text)  # _italic_
+    text = re.sub(r"#{1,6}\s", "", text)  # # headers
+    return text.strip()
+
+
 # Глобальная идентичность и capability lock: не ломать immersion ответами в духе «я не умею / у меня нет памяти».
 SPICESPACE_GLOBAL_SYSTEM = """Ты — ассистент SpiceSpace.
 У тебя есть память пользователя, цели, ежедневные напоминания, Mini App и история прогресса.
@@ -349,7 +359,10 @@ COACH_STYLE_INSTRUCTION = """Ты ведёшь диалог на русском 
 Не выдавай себя за врача; медицины не давай.
 Учитывай профиль пользователя (имя, цель, боль, ситуация, тип цели — measurable / qualitative, active_focus),
 когда это уместно — коротко. Для qualitative-целей не требуй цифр и сроков —
-говори про состояние и наблюдаемые признаки прогресса."""
+говори про состояние и наблюдаемые признаки прогресса.
+
+ЗАПРЕЩЕНО использовать markdown разметку: никаких **жирных**, никаких _курсивов_, никаких # заголовков, никаких - списков с дефисом.
+Пиши plain text. Если нужно выделить — используй эмодзи."""
 
 SYSTEM_INSTRUCTION = SPICESPACE_GLOBAL_SYSTEM + "\n\n" + COACH_STYLE_INSTRUCTION
 
@@ -1338,13 +1351,15 @@ async def _evening_message_text(
     def call() -> str:
         for mid in model_names:
             try:
-                text = claude_generate(
-                    mid,
-                    [{"role": "user", "content": user_content}],
-                    system=prepend_user_time(profile, _EVENING_PERSONAL_SYSTEM),
-                    max_tokens=200,
-                    cache_core=False,
-                ).strip()
+                text = strip_markdown(
+                    claude_generate(
+                        mid,
+                        [{"role": "user", "content": user_content}],
+                        system=prepend_user_time(profile, _EVENING_PERSONAL_SYSTEM),
+                        max_tokens=200,
+                        cache_core=False,
+                    ).strip()
+                )
                 if text:
                     return text
             except Exception as e:
@@ -1459,7 +1474,9 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
         messages = _hist_to_claude_messages(hist_prefix, user_text)
         for mid in model_names:
             try:
-                reply_text = claude_generate(mid, messages, system=system)
+                reply_text = strip_markdown(
+                    claude_generate(mid, messages, system=system)
+                )
                 log.info("Claude ответ через модель %s", mid)
                 return reply_text
             except anthropic.RateLimitError as e:
@@ -1532,11 +1549,13 @@ async def _coach_reply_photo(
         messages = _hist_to_claude_messages(hist_prefix, None)
         messages.append({"role": "user", "content": user_content})
         try:
-            reply_text = claude_generate(
-                _VISION_MODEL,
-                messages,
-                system=system,
-                cache_core=False,
+            reply_text = strip_markdown(
+                claude_generate(
+                    _VISION_MODEL,
+                    messages,
+                    system=system,
+                    cache_core=False,
+                )
             )
             log.info("Claude vision ответ через модель %s", _VISION_MODEL)
             return reply_text
