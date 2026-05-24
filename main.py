@@ -2197,6 +2197,13 @@ async def _bootstrap_bot() -> None:
                 profile = user_profiles.get(key)
                 if not isinstance(profile, dict):
                     continue
+
+                # Always reload fresh profile from DB to pick up time changes
+                fresh = db_store.get_profile(key)
+                if isinstance(fresh, dict):
+                    profile = fresh
+                    user_profiles[key] = fresh
+
                 if not profile.get("daily_enabled", True):
                     continue
                 tz_name = _profile_timezone_name(profile)
