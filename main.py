@@ -40,7 +40,7 @@ import onboarding_flow as ob
 from claude_client import build_model_chain, configure as configure_claude, generate as claude_generate
 from claude_client import select_model_id
 from prompts import (
-    MORNING_TASK_PROMPT,
+    MORNING_MESSAGE_PROMPT,
     build_chat_system,
     evening_opening,
     evening_reply_done,
@@ -1300,14 +1300,67 @@ def _history_context_snippet(chat_id: int, max_turns: int = 14, max_chars: int =
     return "\n".join(lines)
 
 
-def _morning_message_text(chat_id: int) -> str:
-    prof = user_profiles.get(str(chat_id)) or {}
-    tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
+def _format_time_per_day_for_prompt(profile: dict) -> str:
+    raw = str(profile.get("time_per_day") or "").strip()
+    if not raw:
+        return "не указано"
+    if re.search(r"мин|час|hour|min", raw, re.I):
+        return raw
+    return f"{raw} минут"
+
+
+async def _morning_message_text(
+    chat_id: int,
+    profile: dict,
+    model_names: list[str],
+) -> str:
+    tz_name = str(profile.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name) or {}
-    return morning_opening(
-        str(prof.get("name", "")),
-        str(yesterday.get("key_detail") or ""),
+    name = str(profile.get("name", "")).strip() or "подруга"
+    main_goal = str(
+        profile.get("main_goal") or profile.get("final_goal") or ""
+    ).strip() or "не указана"
+    weekly_goal = str(profile.get("weekly_goal") or "").strip() or main_goal
+    last_summary = str(
+        yesterday.get("summary") or yesterday.get("key_detail") or ""
+    ).strip() or "нет"
+    time_per_day = _format_time_per_day_for_prompt(profile)
+
+    user_content = MORNING_MESSAGE_PROMPT.format(
+        name=name,
+        main_goal=main_goal,
+        weekly_goal=weekly_goal,
+        last_summary=last_summary,
+        time_per_day=time_per_day,
     )
+
+    def call() -> str:
+        for mid in model_names:
+            try:
+                text = strip_markdown(
+                    claude_generate(
+                        mid,
+                        [{"role": "user", "content": user_content}],
+                        system=prepend_user_time(
+                            profile,
+                            "Напиши только текст утреннего сообщения для Telegram. Без markdown.",
+                        ),
+                        max_tokens=360,
+                        cache_core=False,
+                    )
+                ).strip()
+                if text:
+                    return text
+            except Exception as e:
+                log.warning("morning message %s: %s", mid, e)
+        return morning_opening(
+            name,
+            weekly_goal=weekly_goal,
+            main_goal=main_goal,
+            key_detail=str(yesterday.get("key_detail") or ""),
+        )
+
+    return await asyncio.to_thread(call)
 
 
 _EVENING_PERSONAL_SYSTEM = (
@@ -1446,22 +1499,6 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
     extra = ""
 
-    morning_user_answer = ""
-    if chat_id in pending_morning:
-        morning_q = pending_morning.pop(chat_id)
-        morning_user_answer = user_text.strip()
-        extra = MORNING_TASK_PROMPT.format(
-            name=prof.get("name", ""),
-            main_goal=prof.get("main_goal", ""),
-            user_answer=morning_user_answer,
-            yesterday_summary=(yesterday or {}).get("summary") or "мало контекста",
-        )
-        user_text = (
-            f"(Утро. Ответ на «{morning_q}»: «{morning_user_answer}». "
-            "Помоги поставить одну задачу на сегодня.)\n\n"
-            f"{morning_user_answer}"
-        )
-
     system = build_chat_system(prof, yesterday, today_summary, extra=extra)
 
     hist = histories.setdefault(chat_id, [])
@@ -1502,14 +1539,6 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
         raise RuntimeError("Ни одна модель Claude не ответила")
 
     _append_history_turn(chat_id, user_text, reply)
-    if extra:
-        task = _sanitize_today_task(reply)
-        if not task:
-            wg = str(prof.get("weekly_goal") or "").strip()
-            if wg and len(wg) <= 120 and not _looks_like_greeting_or_chat(wg):
-                task = _short_task_title(wg)
-        if task:
-            _update_today_summary_field(chat_id, prof, task=task)
     asyncio.create_task(
         maybe_save_daily_summary(chat_id, prof, histories.get(chat_id, []), model_names)
     )
@@ -2320,8 +2349,10 @@ async def _bootstrap_bot() -> None:
 
                 if _time_in_window(morning_time, now_hm) and profile.get("last_morning_sent_date") != today:
                     try:
-                        text = _morning_message_text(cid)
-                        pending_morning[cid] = text
+                        text = await _morning_message_text(cid, profile, model_chain)
+                        histories.setdefault(cid, []).append(
+                            {"role": "model", "parts": [text]}
+                        )
                         webapp_url = os.getenv(
                             "MINI_APP_URL",
                             "https://spicespace-production.up.railway.app/webapp/",
