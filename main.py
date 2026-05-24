@@ -96,6 +96,44 @@ OB_GOAL_DIALOG = ob.OB_GOAL_DIALOG
 OB_ASK_MORNING_TIME = ob.OB_MORNING_TIME
 OB_ASK_EVENING_TIME = ob.OB_EVENING_TIME
 
+CHANGE_GOAL_TRIGGERS = [
+    "поменять цель",
+    "изменить цель",
+    "новая цель",
+    "хочу другую цель",
+    "смени цель",
+    "давай поменяем цель",
+    "хочу поменять цель",
+    "поменяй цель",
+    "начать заново",
+    "новый цикл",
+    "change goal",
+    "new goal",
+    "reset goal",
+    "поменять недельную цель",
+    "изменить цель на неделю",
+    "другая задача на неделю",
+]
+
+CHANGE_WEEKLY_TRIGGERS = [
+    "поменять цель на неделю",
+    "изменить недельную цель",
+    "другая цель на эту неделю",
+    "поменяй недельную",
+    "давай поменяем план на неделю",
+]
+
+
+def _wants_to_change_12w_goal(text: str) -> bool:
+    text_lower = (text or "").lower()
+    return any(t in text_lower for t in CHANGE_GOAL_TRIGGERS)
+
+
+def _wants_to_change_weekly_goal(text: str) -> bool:
+    text_lower = (text or "").lower()
+    return any(t in text_lower for t in CHANGE_WEEKLY_TRIGGERS)
+
+
 GENDER_ROWS: list[tuple[str, str]] = [
     ("male", "Он"),
     ("female", "Она"),
@@ -1855,6 +1893,20 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     prof_raw = user_profiles.get(str(cid))
     prof_d = prof_raw if isinstance(prof_raw, dict) else None
     model_names: list[str] = context.bot_data["claude_model_names"]
+
+    if prof_d:
+        if _wants_to_change_weekly_goal(raw):
+            ob.start_change_weekly(onboarding, cid, prof_d)
+            opening = ob.change_weekly_opening(prof_d)
+            await _bot_reply(update.message, opening)
+            _append_history_turn(cid, raw, opening)
+            return
+        if _wants_to_change_12w_goal(raw):
+            ob.start_change_12w(onboarding, cid, prof_d)
+            opening = ob.change_12w_choice_prompt()
+            await _bot_reply(update.message, opening)
+            _append_history_turn(cid, raw, opening)
+            return
 
     if cid in pending_evening and prof_d:
         reply = await _handle_evening_reply(cid, raw, prof_d, model_names)

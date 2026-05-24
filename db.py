@@ -140,6 +140,15 @@ def delete_profile(user_id: int | str) -> None:
             pass
 
 
+def update_profile(user_id: int | str, fields: dict) -> dict:
+    """Merge fields into existing profile and persist."""
+    key = str(user_id)
+    profile = dict(get_profile(user_id) or {})
+    profile.update(fields)
+    upsert_profile(user_id, profile)
+    return profile
+
+
 def upsert_profile(user_id: int | str, profile: dict) -> None:
     key = str(user_id)
     row = _profile_to_row(profile)
@@ -315,6 +324,7 @@ def _profile_to_row(p: dict) -> dict:
         "streak": p.get("streak", 0),
         "current_week": p.get("current_week", 1),
         "weekly_goal": p.get("weekly_goal"),
+        "weekly_score": p.get("weekly_score", 0),
         "time_per_day": p.get("time_per_day"),
     }
 
