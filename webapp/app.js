@@ -306,7 +306,7 @@
     const week = Number(prof.current_week || 1);
     const pct = Math.max(0, Math.min(100, Number(prof.weekly_score || 0)));
 
-    document.getElementById('week-badge').textContent = `Неделя ${week}`;
+    document.getElementById('week-badge').textContent = `Неделя ${week} из 12`;
     document.getElementById('week-goal').textContent = weeklyGoalText(prof);
     document.getElementById('week-pct').textContent = `${pct}%`;
 

@@ -140,6 +140,7 @@ def save_onboarding_summary(
 
     prompt = ONBOARDING_SUMMARY_PROMPT.format(
         name=profile.get("name", ""),
+        vision=profile.get("vision", ""),
         main_goal=profile.get("main_goal", ""),
         morning_time=profile.get("morning_time") or profile.get("daily_time", "09:30"),
         evening_time=profile.get("evening_time", "21:00"),
@@ -174,9 +175,9 @@ def save_onboarding_summary(
     upsert_daily_summary(
         user_id,
         today,
-        summary=f"Знакомство: {profile.get('name')}. Цель: {profile.get('main_goal')}.",
+        summary=f"Знакомство: {profile.get('name')}. Цель 12 нед: {profile.get('main_goal')}.",
         mood="начало",
-        key_detail=str(profile.get("main_goal", ""))[:500],
+        key_detail=str(profile.get("vision") or profile.get("main_goal", ""))[:500],
         task="",
         completed=False,
     )

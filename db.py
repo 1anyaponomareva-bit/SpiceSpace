@@ -303,6 +303,7 @@ def _profile_to_row(p: dict) -> dict:
         "has_kids": p.get("has_kids"),
         "works": p.get("works"),
         "main_goal": p.get("main_goal"),
+        "vision": p.get("vision"),
         "daily_time": morning,
         "morning_time": morning,
         "evening_time": evening,
@@ -337,6 +338,7 @@ def _row_to_profile(row: dict) -> dict:
     p.setdefault("completed_tasks", [])
     p.setdefault("missed_tasks", [])
     p.setdefault("current_week", 1)
+    p.setdefault("vision", p.get("vision") or "")
     p.setdefault("weekly_goal", p.get("weekly_goal") or "")
     p.setdefault("time_per_day", p.get("time_per_day") or "")
     return p

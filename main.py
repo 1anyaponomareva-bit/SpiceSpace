@@ -91,10 +91,10 @@ TASKS_PATH = DATA_DIR / "tasks.json"
 
 # Онбординг — см. onboarding_flow.py (без кнопок)
 OB_RETURNING = ob.OB_RETURNING
-OB_ASK_NAME = ob.OB_ASK_NAME
+OB_ASK_NAME = ob.OB_NAME
 OB_GOAL_DIALOG = ob.OB_GOAL_DIALOG
-OB_ASK_MORNING_TIME = ob.OB_ASK_MORNING_TIME
-OB_ASK_EVENING_TIME = ob.OB_ASK_EVENING_TIME
+OB_ASK_MORNING_TIME = ob.OB_MORNING_TIME
+OB_ASK_EVENING_TIME = ob.OB_EVENING_TIME
 
 GENDER_ROWS: list[tuple[str, str]] = [
     ("male", "Он"),
@@ -1320,6 +1320,7 @@ async def _morning_message_text(
     main_goal = str(
         profile.get("main_goal") or profile.get("final_goal") or ""
     ).strip() or "не указана"
+    vision = str(profile.get("vision") or "").strip() or "не указана"
     weekly_goal = str(profile.get("weekly_goal") or "").strip() or main_goal
     last_summary = str(
         yesterday.get("summary") or yesterday.get("key_detail") or ""
@@ -1328,6 +1329,7 @@ async def _morning_message_text(
 
     user_content = MORNING_MESSAGE_PROMPT.format(
         name=name,
+        vision=vision,
         main_goal=main_goal,
         weekly_goal=weekly_goal,
         last_summary=last_summary,
@@ -1357,6 +1359,7 @@ async def _morning_message_text(
             name,
             weekly_goal=weekly_goal,
             main_goal=main_goal,
+            vision=vision,
             key_detail=str(yesterday.get("key_detail") or ""),
         )
 
@@ -2190,11 +2193,14 @@ def _sanitize_today_task(text: str) -> str:
 
 def _week_scores_array(profile: dict) -> list[int]:
     raw = profile.get("week_scores")
+    if isinstance(raw, list) and len(raw) >= 12:
+        return [max(0, min(100, int(x or 0))) for x in raw[:12]]
     if isinstance(raw, list) and len(raw) >= 4:
-        return [max(0, min(100, int(x or 0))) for x in raw[:4]]
-    cw = max(1, min(4, int(profile.get("current_week") or 1)))
+        padded = [max(0, min(100, int(x or 0))) for x in raw[:4]]
+        return padded + [0] * (12 - len(padded))
+    cw = max(1, min(12, int(profile.get("current_week") or 1)))
     ws = max(0, min(100, int(profile.get("weekly_score") or 0)))
-    out = [0, 0, 0, 0]
+    out = [0] * 12
     out[cw - 1] = ws
     return out
 
@@ -2254,6 +2260,7 @@ def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> di
     p.setdefault("completed_tasks", [])
     p.setdefault("missed_tasks", [])
     p.setdefault("current_week", 1)
+    p.setdefault("vision", p.get("vision") or "")
     mt = p.get("morning_time") or p.get("daily_time")
     if mt:
         p.setdefault("morning_time", mt)
@@ -2695,7 +2702,7 @@ async def mark_day_endpoint(
 
     ws = min(100, int(profile.get("weekly_score") or 0) + 15)
     profile["weekly_score"] = ws
-    cw = max(1, min(4, int(profile.get("current_week") or 1)))
+    cw = max(1, min(12, int(profile.get("current_week") or 1)))
     scores = _week_scores_array(profile)
     scores[cw - 1] = ws
     profile["week_scores"] = scores
