@@ -1488,7 +1488,7 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
     return reply
 
 
-_VISION_MODEL = "claude-sonnet-4-20250514"
+_VISION_MODEL = "claude-sonnet-4-5"
 
 
 async def _coach_reply_photo(
