@@ -219,10 +219,28 @@
     document.querySelector('.settings-block')?.classList.add('loaded');
   }
 
+  const TODAY_TASK_FALLBACK = 'Обсуди задачу с ботом утром';
+
+  function displayTodayTask(prof) {
+    const raw = (prof.today_task || '').trim();
+    if (!raw || raw.length > 120) return '';
+    const low = raw.toLowerCase();
+    if (
+      /^привет[,\s!👋]/.test(low)
+      || low.includes('доброе утро')
+      || low.includes('давай начн')
+      || low.includes('продуктивн')
+      || (low.match(/\?/g) || []).length >= 2
+    ) {
+      return '';
+    }
+    return raw;
+  }
+
   function weeklyGoalText(prof) {
     const wg = (prof.weekly_goal || '').trim();
     if (wg) return wg;
-    const tt = (prof.today_task || '').trim();
+    const tt = displayTodayTask(prof);
     if (tt) return tt;
     const method = (prof.method || '').trim();
     if (method) return method;
@@ -252,7 +270,7 @@
       .filter((t) => taskAppliesToday(t, todayIso))
       .sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
 
-    const focus = (prof.today_task || '').trim();
+    const focus = displayTodayTask(prof);
     if (!focus) return out;
 
     const dup = out.some((t) => {
@@ -308,7 +326,10 @@
     const todayItems = todayTasksList(prof, list);
 
     if (!todayItems.length) {
-      host.innerHTML = '<p class="task-empty">Пока нет задач — обсуди шаг с ботом утром.</p>';
+      const emptyMsg = displayTodayTask(prof)
+        ? 'Пока нет задач — обсуди шаг с ботом утром.'
+        : TODAY_TASK_FALLBACK;
+      host.innerHTML = `<p class="task-empty">${escapeHtml(emptyMsg)}</p>`;
       return;
     }
 
@@ -330,7 +351,6 @@
 
   function renderStreak(prof) {
     const streak = effectiveStreak(prof);
-    const todayIdx = mondayIndex();
     const countEl = document.getElementById('streak-count');
     if (countEl) {
       countEl.textContent = streak > 0 ? `${streak} ${pluralizeDays(streak)} 🔥` : 'начни сегодня';
@@ -339,17 +359,16 @@
     const host = document.getElementById('streak-dots');
     if (!host) return;
 
+    // 7 dots left→right: previous days black, today green, rest grey (not a week calendar)
+    const filled = Math.min(7, Math.max(0, streak));
     const parts = [];
     for (let i = 0; i < 7; i++) {
       let cls = 'streak-dot';
-      if (i === todayIdx) {
-        cls += ' today';
-        if (streak > 0 && i >= todayIdx - streak) cls += ' done-today';
-      } else if (i < todayIdx && i >= todayIdx - streak) {
-        cls += ' done';
+      if (filled > 0) {
+        if (i < filled - 1) cls += ' done';
+        else if (i === filled - 1) cls += ' today';
       }
-      const delay = i * 0.05;
-      parts.push(`<div class="${cls}" style="animation-delay:${delay}s"></div>`);
+      parts.push(`<div class="${cls}" style="animation-delay:${i * 0.05}s"></div>`);
     }
     host.innerHTML = parts.join('');
   }

@@ -18,6 +18,28 @@ from prompts import DAILY_SUMMARY_PROMPT, ONBOARDING_SUMMARY_PROMPT
 log = logging.getLogger("coach_bot")
 
 
+def _sanitize_summary_task(task: str) -> str:
+    t = (task or "").strip()
+    if not t or len(t) > 120:
+        return ""
+    low = t.lower()
+    if any(
+        m in low
+        for m in (
+            "привет",
+            "доброе утро",
+            "добрый день",
+            "давай начн",
+            "продуктивн",
+            "сколько времени",
+        )
+    ):
+        return ""
+    if low.count("?") >= 2:
+        return ""
+    return t[:140]
+
+
 def _parse_summary_json(text: str) -> dict | None:
     text = text.strip()
     m = re.search(r"\{[\s\S]*\}", text)
@@ -30,7 +52,7 @@ def _parse_summary_json(text: str) -> dict | None:
                 "summary": str(data.get("summary", ""))[:4000],
                 "mood": str(data.get("mood", ""))[:200],
                 "key_detail": str(data.get("key_detail", ""))[:500],
-                "task": str(data.get("task", ""))[:500],
+                "task": _sanitize_summary_task(str(data.get("task", ""))),
             }
             if "completed" in data:
                 out["completed"] = bool(data.get("completed"))

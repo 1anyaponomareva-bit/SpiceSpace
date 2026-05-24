@@ -1446,18 +1446,20 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
     extra = ""
 
+    morning_user_answer = ""
     if chat_id in pending_morning:
         morning_q = pending_morning.pop(chat_id)
+        morning_user_answer = user_text.strip()
         extra = MORNING_TASK_PROMPT.format(
             name=prof.get("name", ""),
             main_goal=prof.get("main_goal", ""),
-            user_answer=user_text,
+            user_answer=morning_user_answer,
             yesterday_summary=(yesterday or {}).get("summary") or "мало контекста",
         )
         user_text = (
-            f"(Утро. Ответ на «{morning_q}»: «{user_text}». "
+            f"(Утро. Ответ на «{morning_q}»: «{morning_user_answer}». "
             "Помоги поставить одну задачу на сегодня.)\n\n"
-            f"{user_text}"
+            f"{morning_user_answer}"
         )
 
     system = build_chat_system(prof, yesterday, today_summary, extra=extra)
@@ -1501,7 +1503,13 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
 
     _append_history_turn(chat_id, user_text, reply)
     if extra:
-        _update_today_summary_field(chat_id, prof, task=reply[:500])
+        task = _sanitize_today_task(reply)
+        if not task:
+            wg = str(prof.get("weekly_goal") or "").strip()
+            if wg and len(wg) <= 120 and not _looks_like_greeting_or_chat(wg):
+                task = _short_task_title(wg)
+        if task:
+            _update_today_summary_field(chat_id, prof, task=task)
     asyncio.create_task(
         maybe_save_daily_summary(chat_id, prof, histories.get(chat_id, []), model_names)
     )
@@ -2091,6 +2099,66 @@ def _short_task_title(text: str) -> str:
     return line
 
 
+_GREETING_TASK_MARKERS = (
+    "привет",
+    "доброе утро",
+    "добрый день",
+    "добрый вечер",
+    "давай начн",
+    "давай начнем",
+    "продуктивн",
+    "начнём день",
+    "начнем день",
+    "рада тебя",
+    "рад тебя",
+    "как дела",
+    "сколько времени",
+)
+
+
+def _looks_like_greeting_or_chat(text: str) -> bool:
+    low = (text or "").strip().lower()
+    if not low:
+        return True
+    if len(low) > 120:
+        return True
+    if low.count("?") >= 2:
+        return True
+    if re.match(r"^привет[,\s!👋]", low):
+        return True
+    return any(m in low for m in _GREETING_TASK_MARKERS)
+
+
+def _extract_action_task(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    for pattern in (
+        r"задача на сегодня:\s*(.+)",
+        r"задача:\s*(.+)",
+        r"сегодня:\s*(.+)",
+        r"шаг на сегодня:\s*(.+)",
+        r"план на сегодня:\s*(.+)",
+    ):
+        m = re.search(pattern, raw, re.IGNORECASE)
+        if m:
+            line = m.group(1).split("\n")[0].strip()
+            if line and not _looks_like_greeting_or_chat(line):
+                return _short_task_title(line)
+    parts = [p.strip() for p in re.split(r"[.!?]\s+", raw) if p.strip()]
+    for cand in reversed(parts):
+        if 8 <= len(cand) <= 120 and not _looks_like_greeting_or_chat(cand):
+            return _short_task_title(cand)
+    cleaned = _short_task_title(raw)
+    if _looks_like_greeting_or_chat(cleaned):
+        return ""
+    return cleaned
+
+
+def _sanitize_today_task(text: str) -> str:
+    return _extract_action_task(text)
+
+
 def _week_scores_array(profile: dict) -> list[int]:
     raw = profile.get("week_scores")
     if isinstance(raw, list) and len(raw) >= 4:
@@ -2169,8 +2237,9 @@ def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> di
         summ = db_store.get_daily_summary(tid, today)
         if isinstance(summ, dict):
             task_raw = str(summ.get("task") or "").strip()
-            if task_raw:
-                p["today_task"] = _short_task_title(task_raw)
+            task_clean = _sanitize_today_task(task_raw)
+            if task_clean:
+                p["today_task"] = task_clean
             if summ.get("completed"):
                 p["today_completed"] = True
 
