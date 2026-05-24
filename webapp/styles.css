@@ -311,6 +311,14 @@ body.tg-app { background: var(--bg); }
   color: #fff;
 }
 
+.task-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  min-width: 4.5rem;
+}
+
 .task-text {
   font-size: 13px;
   color: var(--text-soft);

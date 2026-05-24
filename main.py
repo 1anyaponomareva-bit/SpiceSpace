@@ -1610,6 +1610,18 @@ def _parse_daily_time(raw: str) -> str | None:
     return f"{h:02d}:{mi:02d}"
 
 
+def _time_in_window(target_hm: str, now_hm: str, window_minutes: int = 5) -> bool:
+    """Returns True if now_hm is within window_minutes after target_hm."""
+    try:
+        th, tm = map(int, target_hm.split(":"))
+        nh, nm = map(int, now_hm.split(":"))
+        target_total = th * 60 + tm
+        now_total = nh * 60 + nm
+        return 0 <= (now_total - target_total) < window_minutes
+    except Exception:
+        return False
+
+
 def _profile_has_daily_time(profile: dict | None) -> bool:
     if not profile:
         return False
@@ -2218,7 +2230,7 @@ async def _bootstrap_bot() -> None:
                 morning_time = profile.get("morning_time") or profile.get("daily_time", "09:30")
                 evening_time = profile.get("evening_time") or "21:00"
 
-                if morning_time == now_hm and profile.get("last_morning_sent_date") != today:
+                if _time_in_window(morning_time, now_hm) and profile.get("last_morning_sent_date") != today:
                     try:
                         text = _morning_message_text(cid)
                         pending_morning[cid] = text
@@ -2242,7 +2254,7 @@ async def _bootstrap_bot() -> None:
                     except Exception as e:
                         log.warning("Morning message failed for %s: %s", cid, e)
 
-                if evening_time == now_hm and profile.get("last_evening_sent_date") != today:
+                if _time_in_window(evening_time, now_hm) and profile.get("last_evening_sent_date") != today:
                     try:
                         pending_evening[cid] = {"date": today}
                         evening_text = await _evening_message_text(cid, profile, model_chain)

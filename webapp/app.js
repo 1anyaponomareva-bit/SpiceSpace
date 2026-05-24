@@ -120,6 +120,21 @@
     return `${String(Number(m[1])).padStart(2, '0')}:${m[2]}`;
   }
 
+  function formatTime(hhmm) {
+    if (!hhmm) return '';
+    const parts = String(hhmm).trim().match(/^(\d{1,2}):(\d{2})/);
+    if (!parts) return String(hhmm);
+    const h = Number(parts[1]);
+    const m = Number(parts[2]);
+    const period = h >= 12 ? 'PM' : 'AM';
+    const hour = h % 12 || 12;
+    return `${hour}:${String(m).padStart(2, '0')} ${period}`;
+  }
+
+  function formatTimeForDisplay(hhmm, fallback) {
+    return formatTime(formatTimeHHMM(hhmm, fallback));
+  }
+
   function profileMorningTime(prof) {
     return formatTimeHHMM(prof?.morning_time || prof?.daily_time, '09:00');
   }
@@ -300,9 +315,14 @@
     host.innerHTML = todayItems.map((t) => {
       const done = Boolean(t.done);
       const id = escapeHtml(t.id);
+      const timeLabel = t.time ? formatTimeForDisplay(t.time, '') : '';
+      const timeHtml = timeLabel
+        ? `<span class="task-time">${escapeHtml(timeLabel)}</span>`
+        : '';
       return `
         <div class="task-row">
           <button type="button" class="task-check${done ? ' done' : ''}" data-id="${id}" ${done ? 'disabled' : ''} aria-label="Отметить выполненным">${done ? '✓' : ''}</button>
+          ${timeHtml}
           <span class="task-text${done ? ' done' : ''}">${escapeHtml(t.title || '')}</span>
         </div>`;
     }).join('');
@@ -337,8 +357,15 @@
   function renderTimes(prof) {
     const morningEl = document.getElementById('morning-time-val');
     const eveningEl = document.getElementById('evening-time-val');
-    if (morningEl) morningEl.textContent = profileMorningTime(prof);
-    if (eveningEl) eveningEl.textContent = profileEveningTime(prof);
+    if (morningEl) {
+      morningEl.textContent = formatTimeForDisplay(
+        prof?.morning_time || prof?.daily_time,
+        '09:00',
+      );
+    }
+    if (eveningEl) {
+      eveningEl.textContent = formatTimeForDisplay(prof?.evening_time, '21:00');
+    }
   }
 
   function renderAll(user) {
