@@ -9,7 +9,7 @@ import os
 import re
 from typing import TYPE_CHECKING
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import ContextTypes
 
 import db
@@ -490,7 +490,61 @@ async def _claude_weekly_goal_proposal(
     return await asyncio.to_thread(call)
 
 
+def looks_like_time_update_request(raw: str) -> bool:
+    low = (raw or "").strip().lower()
+    if not low:
+        return False
+    if any(
+        p in low
+        for p in (
+            "обновить время",
+            "изменить время",
+            "поменять время",
+            "сменить время",
+            "утреннее время",
+            "вечернее время",
+            "время утр",
+            "время вечер",
+            "поменять утро",
+            "поменять вечер",
+        )
+    ):
+        return True
+    if "время" in low and any(
+        v in low for v in ("обнов", "измен", "помен", "смен", "настро", "постав")
+    ):
+        return True
+    if ("утр" in low or "вечер" in low) and any(
+        v in low for v in ("обнов", "измен", "помен", "смен", "время")
+    ):
+        return True
+    return False
+
+
+def _mini_app_reply_markup(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    url = str(context.bot_data.get("mini_app_url") or os.getenv("MINI_APP_URL") or "").strip().rstrip("/")
+    if not url:
+        url = "https://spicespace-production.up.railway.app/webapp"
+    elif not url.endswith("/webapp"):
+        url = f"{url}/webapp"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Открыть SpiceSpace", web_app=WebAppInfo(url=url))],
+    ])
+
+
+async def _reply_time_update_via_miniapp(
+    msg,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    await msg.reply_text(
+        "Зайди в мини апп — там кнопка ✏️ Изменить рядом со временем. Меняется за секунду 👇",
+        reply_markup=_mini_app_reply_markup(context),
+    )
+
+
 def looks_like_restart_onboarding(raw: str) -> bool:
+    if looks_like_time_update_request(raw):
+        return False
     low = (raw or "").strip().lower()
     return any(
         w in low
@@ -673,6 +727,11 @@ async def handle_returning_choice(
 
     prof = user_profiles.get(str(cid)) or {}
     name = str(prof.get("name", "")).strip() or "подруга"
+
+    if looks_like_time_update_request(raw):
+        onboarding.pop(cid, None)
+        await _reply_time_update_via_miniapp(msg, context)
+        return True
 
     if looks_like_restart_onboarding(raw):
         start_reonboarding(onboarding, cid, name)
