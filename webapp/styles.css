@@ -36,21 +36,70 @@ body.tg-app { background: var(--bg); }
   margin: 0 auto;
 }
 
-/* Gate */
-.gate {
+/* Sync banner */
+.sync-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: calc(12px + var(--safe-top)) 16px 0;
+  padding: 12px 14px;
+  background: #FFF9E6;
+  border: 1px solid #F0E4B8;
+  border-radius: 14px;
+}
+.sync-banner[hidden] { display: none !important; }
+
+.sync-banner__text {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.35;
+  color: #5c4a00;
+  font-weight: 500;
+}
+
+.sync-banner__btn {
+  flex-shrink: 0;
+  background: var(--dark);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* Empty state (no goal yet) */
+.empty-state {
   min-height: 100vh;
   min-height: 100dvh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 32px 24px;
+  text-align: center;
 }
-.gate[hidden] { display: none !important; }
+.empty-state[hidden] { display: none !important; }
 
-.gate-card { text-align: center; max-width: 300px; }
-.gate-title { font-size: 24px; font-weight: 700; margin-bottom: 12px; }
-.gate-text { font-size: 15px; color: var(--muted); line-height: 1.5; margin-bottom: 24px; }
-.gate-btn {
+.empty-state__title {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.empty-state__text {
+  font-size: 15px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 24px;
+  max-width: 300px;
+}
+
+.empty-state__btn {
   background: var(--dark);
   color: #fff;
   border: none;
@@ -79,7 +128,27 @@ body.tg-app { background: var(--bg); }
 }
 
 .greeting { font-size: 12px; color: var(--muted); }
+
+.user-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .user-name { font-size: 22px; font-weight: 700; color: var(--dark); line-height: 1.2; }
+
+.edit-name-btn {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+.edit-name-btn[hidden] { display: none !important; }
+.edit-name-btn:active { opacity: 1; }
 
 .avatar {
   width: 42px;
@@ -346,6 +415,82 @@ body.tg-app { background: var(--bg); }
 
 .settings-btn.danger {
   color: #999;
+}
+
+.edit-name-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.edit-name-sheet[hidden] { display: none !important; }
+
+.edit-name-sheet__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.edit-name-sheet__card {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  background: var(--bg);
+  border-radius: 24px 24px 0 0;
+  padding: 20px 20px calc(22px + var(--safe-bottom));
+}
+
+.edit-name-sheet__heading {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 16px;
+  color: var(--dark);
+}
+
+.edit-name-sheet__input {
+  width: 100%;
+  border: 1.5px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  font-size: 16px;
+  font-family: inherit;
+  background: var(--card);
+  color: var(--dark);
+  margin-bottom: 16px;
+}
+.edit-name-sheet__input:focus {
+  outline: none;
+  border-color: var(--dark);
+}
+
+.edit-name-sheet__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.edit-name-sheet__cancel {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.edit-name-sheet__save {
+  border: none;
+  background: var(--dark);
+  color: #fff;
+  border-radius: 999px;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
 }
 
 @media (prefers-reduced-motion: reduce) {

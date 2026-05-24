@@ -95,6 +95,19 @@
     return n || 'друг';
   }
 
+  function haptic(type = 'light') {
+    try { tg?.HapticFeedback?.impactOccurred?.(type); } catch (_) {}
+  }
+
+  function hapticSuccess() {
+    try { tg?.HapticFeedback?.notificationOccurred?.('success'); } catch (_) {}
+  }
+
+  function setCanEditName(enabled) {
+    const btn = document.getElementById('edit-name-btn');
+    if (btn) btn.hidden = !enabled;
+  }
+
   function initTelegram() {
     if (!tg) return;
     document.body.classList.add('tg-app');
@@ -111,14 +124,61 @@
     }
   }
 
-  function showGate() {
-    document.getElementById('gate').hidden = false;
-    document.getElementById('main').hidden = true;
+  function buildDemoProfile() {
+    return {
+      name: 'Привет! 👋',
+      main_goal: 'Открой через бота чтобы увидеть свои цели',
+      weekly_goal: '',
+      streak: 0,
+      display_streak: 0,
+      current_week: 1,
+      weekly_score: 0,
+    };
+  }
+
+  function openBotChat() {
+    const link = `https://t.me/${BOT_USERNAME}`;
+    if (tg?.openTelegramLink) {
+      try { tg.openTelegramLink(link); return; } catch (_) {}
+    }
+    window.open(link, '_blank');
+  }
+
+  function showSyncBanner() {
+    const el = document.getElementById('sync-banner');
+    if (el) el.hidden = false;
+  }
+
+  function hideSyncBanner() {
+    const el = document.getElementById('sync-banner');
+    if (el) el.hidden = true;
   }
 
   function showMain() {
-    document.getElementById('gate').hidden = true;
+    document.getElementById('empty-state').hidden = true;
     document.getElementById('main').hidden = false;
+  }
+
+  function showEmptyState() {
+    document.getElementById('empty-state').hidden = false;
+    document.getElementById('main').hidden = true;
+    hideSyncBanner();
+    document.querySelector('.settings-block')?.classList.add('loaded');
+  }
+
+  function isNoInitData() {
+    return !tg?.initData && !DEMO_TG;
+  }
+
+
+  function startDemoMode(user) {
+    profile = buildDemoProfile();
+    tasks = [];
+    setCanEditName(false);
+    showSyncBanner();
+    showMain();
+    renderAll(user);
+    document.querySelector('.settings-block')?.classList.add('loaded');
   }
 
   function weeklyGoalText(prof) {
@@ -262,6 +322,20 @@
     document.getElementById('today-date').textContent = formatTodayTag();
   }
 
+  function syncTimezone(prof) {
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const cur = (prof?.timezone || '').trim();
+      if (cur && cur !== 'pending' && cur !== 'Asia/Ho_Chi_Minh') return;
+      if (!tz) return;
+      apiFetch('/api/profile/timezone', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ timezone: tz }),
+      }).catch(() => {});
+    } catch (_) {}
+  }
+
   async function fetchProfile() {
     const resp = await apiFetch('/api/profile');
     if (resp.status === 401 || resp.status === 404) return { ok: false, status: resp.status };
@@ -301,14 +375,61 @@
     if (resp.ok) tasks = await fetchTasks();
   }
 
-  function bindEvents() {
-    document.getElementById('gate-open-bot')?.addEventListener('click', () => {
-      const link = `https://t.me/${BOT_USERNAME}`;
-      if (tg?.openTelegramLink) {
-        try { tg.openTelegramLink(link); return; } catch (_) {}
-      }
-      window.open(link, '_blank');
+  async function saveEditName() {
+    const input = document.getElementById('edit-name-input');
+    const newName = (input?.value || '').trim().slice(0, 50);
+    if (!newName) return;
+
+    const saveBtn = document.getElementById('edit-name-save');
+    if (saveBtn) saveBtn.disabled = true;
+
+    const resp = await apiFetch('/api/profile', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
     });
+
+    if (saveBtn) saveBtn.disabled = false;
+    if (!resp.ok) return;
+
+    const data = await resp.json();
+    if (data.profile) profile = data.profile;
+    else if (profile) profile.name = newName;
+
+    document.getElementById('user-name').textContent = newName;
+    closeEditNameSheet();
+    hapticSuccess();
+  }
+
+  function openEditNameSheet() {
+    const sheet = document.getElementById('edit-name-sheet');
+    const input = document.getElementById('edit-name-input');
+    if (!sheet || !input) return;
+    const current = (profile?.name || document.getElementById('user-name')?.textContent || '').trim();
+    input.value = current === '—' ? '' : current;
+    sheet.hidden = false;
+    setTimeout(() => input.focus(), 50);
+    haptic('light');
+  }
+
+  function closeEditNameSheet() {
+    const sheet = document.getElementById('edit-name-sheet');
+    if (sheet) sheet.hidden = true;
+  }
+
+  function bindEditName() {
+    document.getElementById('edit-name-btn')?.addEventListener('click', openEditNameSheet);
+    document.getElementById('edit-name-backdrop')?.addEventListener('click', closeEditNameSheet);
+    document.getElementById('edit-name-cancel')?.addEventListener('click', closeEditNameSheet);
+    document.getElementById('edit-name-save')?.addEventListener('click', saveEditName);
+    document.getElementById('edit-name-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') saveEditName();
+    });
+  }
+
+  function bindEvents() {
+    document.getElementById('sync-banner-open')?.addEventListener('click', openBotChat);
+    document.getElementById('empty-open-bot')?.addEventListener('click', openBotChat);
 
     document.getElementById('task-list')?.addEventListener('click', async (e) => {
       const btn = e.target.closest('.task-check');
@@ -341,31 +462,41 @@
   async function start() {
     initTelegram();
     bindEvents();
+    bindEditName();
 
-    if (!BACKEND_URL) {
-      showGate();
+    const tgUser = tg?.initDataUnsafe?.user || null;
+
+    if (isNoInitData()) {
+      startDemoMode(tgUser);
       return;
     }
 
-    if (!tg?.initData && !DEMO_TG) {
-      showGate();
+    if (!BACKEND_URL) {
+      startDemoMode(tgUser);
       return;
     }
 
     const result = await fetchProfile();
     if (!result.ok) {
-      showGate();
+      if (result.status === 404 && (tg?.initData || DEMO_TG)) {
+        showEmptyState();
+        return;
+      }
+      startDemoMode(tgUser);
       return;
     }
 
     profile = result.profile;
+    hideSyncBanner();
     showMain();
+    setCanEditName(true);
 
     const marked = await markDay();
     if (marked) profile = marked;
 
     tasks = await fetchTasks();
-    renderAll(result.user || tg?.initDataUnsafe?.user);
+    renderAll(result.user || tgUser);
+    syncTimezone(profile);
     document.querySelector('.settings-block')?.classList.add('loaded');
   }
 

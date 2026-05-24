@@ -19,19 +19,25 @@
 
 <div class="app" id="app">
 
-  <div class="gate" id="gate" hidden>
-    <div class="gate-card">
-      <h1 class="gate-title">Открой через бота</h1>
-      <p class="gate-text">Mini App работает из чата SpiceSpace — нажми кнопку меню у бота или команду /app.</p>
-      <button type="button" class="gate-btn" id="gate-open-bot">Открыть чат</button>
-    </div>
+  <div class="sync-banner" id="sync-banner" hidden>
+    <p class="sync-banner__text">Открой через бота для синхронизации данных</p>
+    <button type="button" class="sync-banner__btn" id="sync-banner-open">Открыть чат</button>
+  </div>
+
+  <div class="empty-state" id="empty-state" hidden>
+    <h2 class="empty-state__title">Пока цель не настроена</h2>
+    <p class="empty-state__text">Напиши /start в боте SpiceSpace — пройди знакомство, и цели появятся здесь.</p>
+    <button type="button" class="empty-state__btn" id="empty-open-bot">Перейти в чат с ботом</button>
   </div>
 
   <main class="screen" id="main" hidden>
     <header class="header">
       <div class="header-left">
         <p class="greeting" id="greeting">Добрый день,</p>
-        <h1 class="user-name" id="user-name">—</h1>
+        <div class="user-name-row">
+          <span class="user-name" id="user-name">—</span>
+          <button type="button" class="edit-name-btn" id="edit-name-btn" hidden aria-label="Изменить имя">✏️</button>
+        </div>
       </div>
       <div class="avatar" id="avatar" aria-hidden="true"></div>
     </header>
@@ -83,6 +89,18 @@
     <button type="button" class="settings-btn" id="btn-reset">🧠 Сбросить память бота</button>
     <button type="button" class="settings-btn" id="btn-subscription">💳 Подписка</button>
     <button type="button" class="settings-btn danger" id="btn-stop">🔕 Остановить бота</button>
+  </div>
+
+  <div class="edit-name-sheet" id="edit-name-sheet" hidden>
+    <div class="edit-name-sheet__backdrop" id="edit-name-backdrop"></div>
+    <div class="edit-name-sheet__card" id="edit-name-card" role="dialog" aria-modal="true" aria-labelledby="edit-name-heading">
+      <div class="edit-name-sheet__heading" id="edit-name-heading">Изменить имя</div>
+      <input class="edit-name-sheet__input" id="edit-name-input" type="text" maxlength="50" placeholder="Твоё имя" autocomplete="name" />
+      <div class="edit-name-sheet__actions">
+        <button type="button" class="edit-name-sheet__cancel" id="edit-name-cancel">Отмена</button>
+        <button type="button" class="edit-name-sheet__save" id="edit-name-save">Сохранить</button>
+      </div>
+    </div>
   </div>
 
 </div>

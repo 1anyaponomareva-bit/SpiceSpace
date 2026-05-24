@@ -46,6 +46,7 @@ from prompts import (
     evening_reply_done,
     evening_reply_missed,
     morning_opening,
+    prepend_user_time,
 )
 from summaries import maybe_save_daily_summary
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -772,9 +773,14 @@ def _init_tasks_store() -> None:
 def _profile_timezone_name(profile: dict | None) -> str:
     if isinstance(profile, dict):
         tz = str(profile.get("timezone") or "").strip()
-        if tz:
+        if tz and tz.lower() != "pending":
             return tz
     return os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
+
+
+def _is_placeholder_timezone(tz: str | None) -> bool:
+    name = (tz or "").strip()
+    return not name or name.lower() == "pending" or name == "Asia/Ho_Chi_Minh"
 
 
 def _zone_or_default(name: str) -> ZoneInfo:
@@ -1331,7 +1337,7 @@ async def _evening_message_text(
                 text = claude_generate(
                     mid,
                     [{"role": "user", "content": user_content}],
-                    system=_EVENING_PERSONAL_SYSTEM,
+                    system=prepend_user_time(profile, _EVENING_PERSONAL_SYSTEM),
                     max_tokens=200,
                     cache_core=False,
                 ).strip()
@@ -1345,11 +1351,7 @@ async def _evening_message_text(
 
 
 def _profile_local_date(profile: dict) -> date:
-    tz_name = str(profile.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception:
-        tz = ZoneInfo("Asia/Ho_Chi_Minh")
+    tz = _zone_or_default(_profile_timezone_name(profile))
     return datetime.now(tz).date()
 
 
@@ -2193,7 +2195,7 @@ async def _bootstrap_bot() -> None:
                     continue
                 if not profile.get("daily_enabled", True):
                     continue
-                tz_name = str(profile.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
+                tz_name = _profile_timezone_name(profile)
                 try:
                     user_tz = ZoneInfo(tz_name)
                 except Exception:
@@ -2434,6 +2436,67 @@ async def stop_profile_endpoint(
         prof["daily_enabled"] = False
         db_store.upsert_profile(cid, prof)
         user_profiles[tid] = prof
+    return {"ok": True}
+
+
+class TimezonePayload(BaseModel):
+    timezone: str = Field(min_length=1, max_length=64)
+
+
+class ProfilePatchPayload(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=50)
+
+
+@app.patch("/api/profile")
+async def patch_profile_endpoint(
+    request: Request,
+    payload: ProfilePatchPayload,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+) -> dict:
+    tid = _auth_telegram_id(request, telegram_id)
+    profile = _resolve_user_profile(tid)
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    if payload.name is None:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    new_name = payload.name.strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="name is required")
+    profile["name"] = new_name[:50]
+
+    db_store.upsert_profile(int(tid), profile)
+    user_profiles[tid] = profile
+    return {"ok": True, "profile": _enrich_profile_for_api(profile, tid)}
+
+
+@app.patch("/api/profile/timezone")
+async def patch_profile_timezone_endpoint(
+    request: Request,
+    payload: TimezonePayload,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+) -> dict:
+    tid = _auth_telegram_id(request, telegram_id)
+    profile = _resolve_user_profile(tid)
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    new_tz = payload.timezone.strip()
+    if not new_tz:
+        raise HTTPException(status_code=400, detail="timezone is required")
+    try:
+        ZoneInfo(new_tz)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid timezone") from exc
+
+    current = str(profile.get("timezone") or "").strip()
+    if not _is_placeholder_timezone(current):
+        return {"ok": True}
+
+    profile["timezone"] = new_tz
+    db_store.upsert_profile(int(tid), profile)
+    user_profiles[tid] = profile
     return {"ok": True}
 
 

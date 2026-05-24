@@ -1,5 +1,11 @@
 """SpiceSpace prompts — голос Спейс, daily loop, онбординг."""
 
+from __future__ import annotations
+
+from datetime import datetime
+
+import pytz
+
 SPICESPACE_CORE_SYSTEM = """Ты — Спейс, AI companion. Ты не бот и не коуч.
 
 Ты — лучшая подруга которая реально переживает. Помнишь что она говорила вчера. Знаешь её цель. Не даёшь ей сливаться — но с любовью.
@@ -92,6 +98,54 @@ ONBOARDING_SUMMARY_PROMPT = """Онбординг завершён. JSON без 
 Вечер: {evening_time}"""
 
 
+_WEEKDAYS_RU = (
+    "понедельник",
+    "вторник",
+    "среда",
+    "четверг",
+    "пятница",
+    "суббота",
+    "воскресенье",
+)
+
+_MONTHS_RU = (
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+)
+
+
+def get_current_time_for_user(profile: dict | None) -> str:
+    tz_name = "UTC"
+    if isinstance(profile, dict):
+        raw = str(profile.get("timezone") or "").strip()
+        if raw and raw.lower() not in ("pending", ""):
+            tz_name = raw
+    try:
+        tz = pytz.timezone(tz_name)
+    except Exception:
+        tz = pytz.UTC
+    now = datetime.now(tz)
+    weekday = _WEEKDAYS_RU[now.weekday()]
+    month = _MONTHS_RU[now.month - 1]
+    return f"{now.strftime('%H:%M')}, {weekday} {now.day} {month}"
+
+
+def prepend_user_time(profile: dict | None, system: str) -> str:
+    line = f"Текущее время пользователя: {get_current_time_for_user(profile)}"
+    body = (system or "").strip()
+    return f"{line}\n\n{body}" if body else line
+
+
 def build_chat_system(
     profile: dict,
     yesterday: dict | None,
@@ -125,7 +179,7 @@ def build_chat_system(
     if extra:
         lines.append(f"\n{extra}")
 
-    return SPICESPACE_CORE_SYSTEM + "\n\n" + "\n".join(lines)
+    return prepend_user_time(profile, SPICESPACE_CORE_SYSTEM + "\n\n" + "\n".join(lines))
 
 
 def morning_opening(name: str, key_detail: str) -> str:

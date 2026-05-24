@@ -743,7 +743,7 @@ async def handle_onboarding_turn(
             )
             return
         st["evening_time"] = parsed
-        st["timezone"] = _default_timezone()
+        st["timezone"] = "pending"
         st["step"] = OB_ASK_TIME_PER_DAY
         await msg.reply_text(TIME_PER_DAY_QUESTION)
         return
