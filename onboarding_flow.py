@@ -305,37 +305,80 @@ async def _claude_goal_dialog(
     return await asyncio.to_thread(call)
 
 
-def parse_time_nl(raw: str) -> str | None:
+def parse_time_nl(raw: str, context: str = "morning") -> str | None:
+    """Parse natural-language time. context: 'morning' or 'evening'."""
     text = (raw or "").strip().lower()
     if not text:
         return None
 
+    ctx = context if context in ("morning", "evening") else "morning"
+
+    def fmt(h: int, mi: int = 0) -> str | None:
+        if 0 <= h <= 23 and 0 <= mi <= 59:
+            return f"{h:02d}:{mi:02d}"
+        return None
+
+    def resolve_ambiguous(h: int, mi: int = 0) -> str | None:
+        if ctx == "evening":
+            if 1 <= h <= 11:
+                return fmt(h + 12, mi)
+            return fmt(h, mi)
+        # morning: 1–12 without marker → AM (5–12 per spec; 1–4 also AM)
+        if 1 <= h <= 12:
+            return fmt(h, mi)
+        return fmt(h, mi)
+
+    def resolve_marked(h: int, mi: int, marker: str | None) -> str | None:
+        mk = (marker or "").strip()
+        if mk in ("утра", "утром"):
+            return fmt(h, mi)
+        if mk in ("вечера", "вечером", "ночи", "ночью"):
+            if 1 <= h <= 11:
+                return fmt(h + 12, mi)
+            return fmt(h, mi)
+        return resolve_ambiguous(h, mi)
+
     m = re.fullmatch(r"(\d{1,2}):(\d{2})", text)
     if m:
         h, mi = int(m.group(1)), int(m.group(2))
-        if h <= 23 and mi <= 59:
-            return f"{h:02d}:{mi:02d}"
+        return fmt(h, mi)
 
     m = re.search(r"(\d{1,2})\s*:\s*(\d{2})", text)
     if m:
         h, mi = int(m.group(1)), int(m.group(2))
-        if h <= 23 and mi <= 59:
-            return f"{h:02d}:{mi:02d}"
+        return fmt(h, mi)
 
-    m = re.search(r"(?:в\s+)?(\d{1,2})(?:\s*[:.]\s*(\d{2}))?\s*(?:утра|утром|вечера|вечером|час|часов)?", text)
+    m = re.fullmatch(r"(\d{1,2})(?:\s*[:.]\s*(\d{2}))?", text)
     if m:
         h = int(m.group(1))
         mi = int(m.group(2)) if m.group(2) else 0
-        if 0 <= h <= 23 and 0 <= mi <= 59:
-            return f"{h:02d}:{mi:02d}"
+        return resolve_ambiguous(h, mi)
+
+    m = re.search(
+        r"(?:в\s+)?(\d{1,2})(?:\s*[:.]\s*(\d{2}))?\s*(утра|утром|вечера|вечером|ночи|ночью|час|часов)?",
+        text,
+    )
+    if m:
+        h = int(m.group(1))
+        mi = int(m.group(2)) if m.group(2) else 0
+        marker = m.group(3)
+        if marker in ("утра", "утром", "вечера", "вечером", "ночи", "ночью"):
+            return resolve_marked(h, mi, marker)
+        return resolve_ambiguous(h, mi)
 
     for word, hour in _WORD_HOURS.items():
         if re.search(rf"\b{word}\b", text):
+            mi = 30 if "половин" in text else 0
+            marker = None
+            if re.search(r"(утра|утром)", text):
+                marker = "утра"
+            elif re.search(r"(вечера|вечером|ночи|ночью)", text):
+                marker = "вечера"
             if "половин" in text and "девят" in text:
                 return "09:30"
-            if "половин" in text:
-                return f"{hour:02d}:30"
-            return f"{hour:02d}:00"
+            if marker:
+                return resolve_marked(hour, mi, marker)
+            return resolve_ambiguous(hour, mi)
 
     if "полдевят" in text or "пол 9" in text:
         return "08:30"
@@ -724,7 +767,7 @@ async def handle_onboarding_turn(
         return
 
     if step == OB_ASK_MORNING_TIME:
-        parsed = parse_time_nl(raw)
+        parsed = parse_time_nl(raw, "morning")
         if not parsed:
             await msg.reply_text(
                 "Не совсем поняла. Напиши, пожалуйста, в формате 09:30."
@@ -736,7 +779,7 @@ async def handle_onboarding_turn(
         return
 
     if step == OB_ASK_EVENING_TIME:
-        parsed = parse_time_nl(raw)
+        parsed = parse_time_nl(raw, "evening")
         if not parsed:
             await msg.reply_text(
                 "Не совсем поняла. Напиши вечернее время как 21:00 или «в 9 вечера»."

@@ -108,6 +108,26 @@
     if (btn) btn.hidden = !enabled;
   }
 
+  function setCanEditTimes(enabled) {
+    const btn = document.getElementById('edit-times-btn');
+    if (btn) btn.hidden = !enabled;
+  }
+
+  function formatTimeHHMM(raw, fallback) {
+    const s = String(raw || '').trim();
+    const m = s.match(/^(\d{1,2}):(\d{2})/);
+    if (!m) return fallback;
+    return `${String(Number(m[1])).padStart(2, '0')}:${m[2]}`;
+  }
+
+  function profileMorningTime(prof) {
+    return formatTimeHHMM(prof?.morning_time || prof?.daily_time, '09:00');
+  }
+
+  function profileEveningTime(prof) {
+    return formatTimeHHMM(prof?.evening_time, '21:00');
+  }
+
   function initTelegram() {
     if (!tg) return;
     document.body.classList.add('tg-app');
@@ -133,6 +153,8 @@
       display_streak: 0,
       current_week: 1,
       weekly_score: 0,
+      morning_time: '09:00',
+      evening_time: '21:00',
     };
   }
 
@@ -175,6 +197,7 @@
     profile = buildDemoProfile();
     tasks = [];
     setCanEditName(false);
+    setCanEditTimes(false);
     showSyncBanner();
     showMain();
     renderAll(user);
@@ -311,6 +334,13 @@
     host.innerHTML = parts.join('');
   }
 
+  function renderTimes(prof) {
+    const morningEl = document.getElementById('morning-time-val');
+    const eveningEl = document.getElementById('evening-time-val');
+    if (morningEl) morningEl.textContent = profileMorningTime(prof);
+    if (eveningEl) eveningEl.textContent = profileEveningTime(prof);
+  }
+
   function renderAll(user) {
     if (!profile) return;
     applyGreeting();
@@ -319,6 +349,7 @@
     renderWeekCard(profile);
     renderTasks(profile, tasks);
     renderStreak(profile);
+    renderTimes(profile);
     document.getElementById('today-date').textContent = formatTodayTag();
   }
 
@@ -427,6 +458,59 @@
     });
   }
 
+  async function saveEditTimes() {
+    const morning = document.getElementById('et-morning')?.value || '';
+    const evening = document.getElementById('et-evening')?.value || '';
+    if (!morning || !evening) return;
+
+    const saveBtn = document.getElementById('edit-times-save');
+    if (saveBtn) saveBtn.disabled = true;
+
+    const resp = await apiFetch('/api/profile/times', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ morning_time: morning, evening_time: evening }),
+    });
+
+    if (saveBtn) saveBtn.disabled = false;
+    if (!resp.ok) return;
+
+    const data = await resp.json();
+    if (data.profile) profile = data.profile;
+    else if (profile) {
+      profile.morning_time = morning;
+      profile.daily_time = morning;
+      profile.evening_time = evening;
+    }
+
+    renderTimes(profile);
+    closeEditTimesSheet();
+    hapticSuccess();
+  }
+
+  function openEditTimesSheet() {
+    const sheet = document.getElementById('edit-times-sheet');
+    const morningInput = document.getElementById('et-morning');
+    const eveningInput = document.getElementById('et-evening');
+    if (!sheet || !morningInput || !eveningInput) return;
+    morningInput.value = profileMorningTime(profile);
+    eveningInput.value = profileEveningTime(profile);
+    sheet.hidden = false;
+    haptic('light');
+  }
+
+  function closeEditTimesSheet() {
+    const sheet = document.getElementById('edit-times-sheet');
+    if (sheet) sheet.hidden = true;
+  }
+
+  function bindEditTimes() {
+    document.getElementById('edit-times-btn')?.addEventListener('click', openEditTimesSheet);
+    document.getElementById('edit-times-backdrop')?.addEventListener('click', closeEditTimesSheet);
+    document.getElementById('edit-times-cancel')?.addEventListener('click', closeEditTimesSheet);
+    document.getElementById('edit-times-save')?.addEventListener('click', saveEditTimes);
+  }
+
   function bindEvents() {
     document.getElementById('sync-banner-open')?.addEventListener('click', openBotChat);
     document.getElementById('empty-open-bot')?.addEventListener('click', openBotChat);
@@ -463,6 +547,7 @@
     initTelegram();
     bindEvents();
     bindEditName();
+    bindEditTimes();
 
     const tgUser = tg?.initDataUnsafe?.user || null;
 
@@ -490,6 +575,7 @@
     hideSyncBanner();
     showMain();
     setCanEditName(true);
+    setCanEditTimes(true);
 
     const marked = await markDay();
     if (marked) profile = marked;

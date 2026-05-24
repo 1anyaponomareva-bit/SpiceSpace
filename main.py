@@ -308,7 +308,11 @@ Mini App, цели, трекинг прогресса, еженедельные 
 — ссылаться на то, что ты «не настоящий» человек — ты персональный ассистент SpiceSpace в Telegram.
 
 Если что-то технически пошло не так — не выдумывай системные ограничения: коротко поддержи и предложи продолжить диалог;
-про сбои расписания пользователю сообщит отдельное сервисное уведомление, не нужно оправдываться фантазией про «нельзя»."""
+про сбои расписания пользователю сообщит отдельное сервисное уведомление, не нужно оправдываться фантазией про «нельзя».
+
+Если пользователь хочет изменить время утреннего или вечернего сообщения:
+НЕ говори что поменяла время — ты не можешь менять данные напрямую.
+Скажи: "Зайди в мини апп (кнопка внизу чата) → там видно время утреннего и вечернего сообщения, нажми ✏️ Изменить."""
 
 COACH_STYLE_INSTRUCTION = """Ты ведёшь диалог на русском как живой человек: просто, по делу, без шаблонов и «мотивационных» речей.
 Тон: мягкий вход, дальше конкретика. Запрещено спрашивать «как настроение», «как спалось», «представь что уже есть»,
@@ -2447,6 +2451,11 @@ class ProfilePatchPayload(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=50)
 
 
+class TimesPatchPayload(BaseModel):
+    morning_time: str | None = None
+    evening_time: str | None = None
+
+
 @app.patch("/api/profile")
 async def patch_profile_endpoint(
     request: Request,
@@ -2465,6 +2474,38 @@ async def patch_profile_endpoint(
     if not new_name:
         raise HTTPException(status_code=400, detail="name is required")
     profile["name"] = new_name[:50]
+
+    db_store.upsert_profile(int(tid), profile)
+    user_profiles[tid] = profile
+    return {"ok": True, "profile": _enrich_profile_for_api(profile, tid)}
+
+
+@app.patch("/api/profile/times")
+async def patch_profile_times_endpoint(
+    request: Request,
+    payload: TimesPatchPayload,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+) -> dict:
+    tid = _auth_telegram_id(request, telegram_id)
+    profile = _resolve_user_profile(tid)
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    if payload.morning_time is None and payload.evening_time is None:
+        raise HTTPException(status_code=400, detail="at least one time is required")
+
+    if payload.morning_time is not None:
+        parsed = _parse_daily_time(payload.morning_time.strip())
+        if not parsed:
+            raise HTTPException(status_code=400, detail="invalid morning_time")
+        profile["morning_time"] = parsed
+        profile["daily_time"] = parsed
+
+    if payload.evening_time is not None:
+        parsed = _parse_daily_time(payload.evening_time.strip())
+        if not parsed:
+            raise HTTPException(status_code=400, detail="invalid evening_time")
+        profile["evening_time"] = parsed
 
     db_store.upsert_profile(int(tid), profile)
     user_profiles[tid] = profile

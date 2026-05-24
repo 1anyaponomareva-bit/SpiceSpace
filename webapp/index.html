@@ -83,6 +83,23 @@
       </div>
       <div class="streak-dots" id="streak-dots"></div>
     </section>
+
+    <section class="times-card">
+      <div class="times-row">
+        <div class="time-item">
+          <div class="time-icon">🌅</div>
+          <div class="time-label">Утро</div>
+          <div class="time-value" id="morning-time-val">09:00</div>
+        </div>
+        <div class="time-divider"></div>
+        <div class="time-item">
+          <div class="time-icon">🌙</div>
+          <div class="time-label">Вечер</div>
+          <div class="time-value" id="evening-time-val">21:00</div>
+        </div>
+        <button type="button" class="time-edit-btn" id="edit-times-btn" hidden>✏️ Изменить</button>
+      </div>
+    </section>
   </main>
 
   <div class="settings-block">
@@ -99,6 +116,19 @@
       <div class="edit-name-sheet__actions">
         <button type="button" class="edit-name-sheet__cancel" id="edit-name-cancel">Отмена</button>
         <button type="button" class="edit-name-sheet__save" id="edit-name-save">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="edit-times-sheet" id="edit-times-sheet" hidden>
+    <div class="edit-times-sheet__backdrop" id="edit-times-backdrop"></div>
+    <div class="edit-times-sheet__card" id="edit-times-card" role="dialog" aria-modal="true" aria-labelledby="edit-times-heading">
+      <p class="edit-times-sheet__heading sheet-title" id="edit-times-heading">Время сообщений</p>
+      <label class="edit-times-sheet__field">🌅 Утреннее сообщение<input id="et-morning" type="time" /></label>
+      <label class="edit-times-sheet__field">🌙 Вечернее сообщение<input id="et-evening" type="time" /></label>
+      <div class="edit-times-sheet__actions">
+        <button type="button" class="edit-times-sheet__cancel" id="edit-times-cancel">Отмена</button>
+        <button type="button" class="edit-times-sheet__save" id="edit-times-save">Сохранить</button>
       </div>
     </div>
   </div>

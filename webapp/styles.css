@@ -378,6 +378,68 @@ body.tg-app { background: var(--bg); }
   box-shadow: inset 0 0 0 3px var(--dark);
 }
 
+/* Times card */
+.times-card {
+  background: var(--card);
+  border-radius: 20px;
+  padding: 16px 18px;
+}
+
+.times-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.time-item {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
+.time-icon {
+  font-size: 20px;
+  line-height: 1;
+  margin-bottom: 6px;
+}
+
+.time-label {
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.time-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--dark);
+  margin-top: 4px;
+}
+
+.time-divider {
+  width: 1px;
+  height: 52px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.time-edit-btn {
+  flex-shrink: 0;
+  border: none;
+  background: var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  color: var(--dark);
+  white-space: nowrap;
+}
+.time-edit-btn[hidden] { display: none !important; }
+
 @keyframes popIn {
   0% { transform: scale(0); opacity: 0; }
   80% { transform: scale(1.15); }
@@ -482,6 +544,88 @@ body.tg-app { background: var(--bg); }
 }
 
 .edit-name-sheet__save {
+  border: none;
+  background: var(--dark);
+  color: #fff;
+  border-radius: 999px;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.edit-times-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.edit-times-sheet[hidden] { display: none !important; }
+
+.edit-times-sheet__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.edit-times-sheet__card {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  background: var(--bg);
+  border-radius: 24px 24px 0 0;
+  padding: 20px 20px calc(22px + var(--safe-bottom));
+}
+
+.edit-times-sheet__heading {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 16px;
+  color: var(--dark);
+}
+
+.edit-times-sheet__field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--dark);
+}
+
+.edit-times-sheet__field input {
+  width: 100%;
+  border: 1.5px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  font-size: 16px;
+  font-family: inherit;
+  background: var(--card);
+  color: var(--dark);
+}
+
+.edit-times-sheet__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.edit-times-sheet__cancel {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.edit-times-sheet__save {
   border: none;
   background: var(--dark);
   color: #fff;
