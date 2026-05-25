@@ -22,7 +22,7 @@ from prompts import (
     GOAL_POLISH_PROMPT,
     NAME_EXTRACT_PROMPT,
     VISION_DIALOG_SYSTEM,
-    WEEKLY_TACTICS_PROPOSAL_SYSTEM,
+    WEEKLY_TACTICS_DIALOG_SYSTEM,
 )
 from summaries import save_onboarding_summary
 
@@ -655,14 +655,11 @@ async def _dispatch_goal_confirm_after(
 
     if after == "main_to_weekly":
         st["step"] = OB_WEEKLY_TACTICS
-        st["weekly_tactics_phase"] = "proposal_sent"
-        tactics = await _claude_weekly_tactics_options(
-            str(st.get("main_goal") or ""), model_names
-        )
-        st["weekly_tactics_options"] = tactics
+        main = str(st.get("main_goal") or "").strip()
         await msg.reply_text(
-            weekly_tactics_message(str(st.get("main_goal") or ""), tactics)
+            f"Отлично 🎯 Цель на 12 недель: {main}\n\nТеперь первая неделя."
         )
+        await _start_weekly_tactics_dialog(msg, st, model_names)
         return
 
     if after == "weekly_to_morning":
@@ -757,46 +754,100 @@ async def _claude_goal_dialog(
     return await asyncio.to_thread(call)
 
 
-async def _claude_weekly_tactics_options(
+def _fallback_weekly_tactics_reply(
+    turns: list[dict],
+    *,
     main_goal: str,
-    model_names: list[str],
-) -> str:
-    user_msg = f"Цель на 12 недель: {main_goal or 'не указана'}"
+    user_message: str,
+) -> dict:
+    last_user = (user_message or "").strip()
+    if not last_user:
+        g = (main_goal or "твоя цель")[:60]
+        return {
+            "message": (
+                f"На первую неделю могу предложить: маленький шаг к «{g}» / "
+                f"30 минут на самое простое / одно действие с видимым результатом. "
+                f"Что берёшь или своё?"
+            ),
+            "ready": False,
+            "weekly_goal": "",
+        }
+    if len(last_user) >= 12:
+        return {
+            "message": f"Окей, как поймёшь что «{last_user[:80]}» на этой неделе выполнено?",
+            "ready": False,
+            "weekly_goal": "",
+        }
+    return {
+        "message": "Расскажи — что хочешь сделать на этой неделе?",
+        "ready": False,
+        "weekly_goal": "",
+    }
 
-    def call() -> str:
+
+async def _claude_weekly_tactics_dialog(
+    weekly_turns: list[dict],
+    model_names: list[str],
+    *,
+    main_goal: str,
+    user_message: str,
+    extra_user_hint: str = "",
+) -> dict:
+    messages = [
+        {"role": t["role"], "content": t["content"]}
+        for t in weekly_turns
+        if t.get("role") in ("user", "assistant") and t.get("content")
+    ]
+    if extra_user_hint:
+        messages.append({"role": "user", "content": extra_user_hint})
+
+    dialog_history = _format_dialog_history(weekly_turns)
+    system = WEEKLY_TACTICS_DIALOG_SYSTEM.format(
+        main_goal=(main_goal or "не указана").strip()[:2000],
+        user_message=(user_message or "").strip()[:2000] or "(начало диалога)",
+        dialog_history=dialog_history,
+    )
+
+    def call() -> dict:
         for mid in model_names:
             try:
                 text = claude_generate(
                     mid,
-                    [{"role": "user", "content": user_msg}],
-                    system=WEEKLY_TACTICS_PROPOSAL_SYSTEM,
-                    max_tokens=200,
+                    messages,
+                    system=system,
+                    max_tokens=400,
                     cache_core=False,
                 ).strip()
-                if text:
-                    return text.replace("\n", " ").strip()
+                parsed = _parse_weekly_change_json(text)
+                if parsed:
+                    return parsed
+                log.warning("weekly_tactics_dialog bad JSON model=%s raw=%s", mid, text[:400])
             except Exception as e:
-                log.warning("weekly_tactics %s: %s", mid, e)
-        g = (main_goal or "твоя цель")[:60]
-        return (
-            f"первый маленький шаг к «{g}» / "
-            f"30 минут на самое простое из цели / "
-            f"одно действие, после которого будет виден прогресс"
+                log.warning("weekly_tactics_dialog %s: %s", mid, e, exc_info=True)
+        return _fallback_weekly_tactics_reply(
+            weekly_turns,
+            main_goal=main_goal,
+            user_message=user_message,
         )
 
     return await asyncio.to_thread(call)
 
 
-def weekly_tactics_message(goal: str, tactics: str) -> str:
-    g = (goal or "твоя цель").strip()
-    t = (tactics or "").strip()
-    return (
-        f"Отлично 🎯 Цель на 12 недель: {g}\n\n"
-        f"Теперь первая неделя. Что можно сделать на этой неделе "
-        f"чтобы сделать первый шаг к этой цели?\n\n"
-        f"Я предлагаю: {t}\n\n"
-        "Что берёшь или предложи своё?"
+async def _start_weekly_tactics_dialog(
+    msg,
+    st: dict,
+    model_names: list[str],
+) -> None:
+    st["weekly_turns"] = []
+    result = await _claude_weekly_tactics_dialog(
+        [],
+        model_names,
+        main_goal=str(st.get("main_goal") or ""),
+        user_message="[начало — предложи 2-3 варианта на первую неделю]",
     )
+    reply = (result.get("message") or "Что хочешь сделать на этой неделе?").strip()
+    st["weekly_turns"].append({"role": "assistant", "content": reply[:2000]})
+    await msg.reply_text(reply)
 
 
 def parse_time_nl(raw: str, context: str = "morning") -> str | None:
@@ -1415,36 +1466,38 @@ async def handle_onboarding_turn(
         return
 
     if step == OB_WEEKLY_TACTICS:
-        phase = str(st.get("weekly_tactics_phase") or "proposal_sent")
-        options = str(st.get("weekly_tactics_options") or "")
+        turns = st.setdefault("weekly_turns", [])
+        turns.append({"role": "user", "content": raw.strip()[:2000]})
 
-        if phase == "awaiting_custom":
-            custom = raw.strip()[:2000]
-            if len(custom) < 3:
-                await msg.reply_text("Напиши коротко — что хочешь сделать за первую неделю.")
-                return
-            await _complete_weekly_tactics_pick(custom)
-            return
-
-        if _is_weekly_goal_agreement(raw):
-            picked = _pick_weekly_tactic_from_reply(raw, options)
-            await _complete_weekly_tactics_pick(picked)
-            return
-
-        if _is_weekly_goal_disagreement(raw):
-            st["weekly_tactics_phase"] = "awaiting_custom"
-            await msg.reply_text("Окей — напиши свой вариант на первую неделю.")
-            return
-
-        custom = raw.strip()[:2000]
-        if len(custom) >= 4:
-            picked = _pick_weekly_tactic_from_reply(custom, options)
-            await _complete_weekly_tactics_pick(picked)
-            return
-
-        await msg.reply_text(
-            'Напиши «да», номер варианта (1/2/3) или свой вариант на первую неделю.'
+        prev_reply = _last_assistant_reply(turns)
+        result = await _claude_weekly_tactics_dialog(
+            turns,
+            model_names,
+            main_goal=str(st.get("main_goal") or ""),
+            user_message=raw,
         )
+        reply = (result.get("message") or "Расскажи подробнее?").strip()
+
+        if prev_reply and _normalize_text(reply) == _normalize_text(prev_reply):
+            result = await _claude_weekly_tactics_dialog(
+                turns,
+                model_names,
+                main_goal=str(st.get("main_goal") or ""),
+                user_message=raw,
+                extra_user_hint=(
+                    "Не повторяй прошлый ответ. Учти что написал пользователь. "
+                    "Если отверг твои варианты — работай только с её формулировкой."
+                ),
+            )
+            reply = (result.get("message") or "").strip() or reply
+
+        turns.append({"role": "assistant", "content": reply[:2000]})
+
+        if result.get("ready") and result.get("weekly_goal"):
+            await msg.reply_text(reply)
+            await _complete_weekly_tactics_pick(result["weekly_goal"])
+        else:
+            await msg.reply_text(reply)
         return
 
     await msg.reply_text("Что-то сбилось. Нажми /start — начнём сначала.")
