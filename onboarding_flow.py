@@ -20,6 +20,7 @@ from prompts import (
     CHANGE_WEEKLY_GOAL_SYSTEM,
     GOAL_DIALOG_SYSTEM,
     GOAL_POLISH_PROMPT,
+    NAME_EXTRACT_PROMPT,
     VISION_DIALOG_SYSTEM,
     WEEKLY_TACTICS_PROPOSAL_SYSTEM,
 )
@@ -395,20 +396,65 @@ def _fallback_vision_reply(turns: list[dict]) -> dict:
     }
 
 
+def _format_dialog_history(turns: list[dict]) -> str:
+    lines: list[str] = []
+    for t in turns:
+        if t.get("role") not in ("user", "assistant"):
+            continue
+        content = str(t.get("content", "")).strip()
+        if not content:
+            continue
+        label = "Пользователь" if t.get("role") == "user" else "Спейс"
+        lines.append(f"{label}: {content}")
+    return "\n".join(lines)[:4000] if lines else "пока пусто"
+
+
 def _fallback_goal_reply(turns: list[dict]) -> dict:
     user_texts = [t["content"] for t in turns if t["role"] == "user"]
     last = (user_texts[-1] if user_texts else "").strip()
-    if len(last) >= 12:
+    if len(user_texts) >= 3 and len(last) >= 20:
         return {
-            "message": "Звучит конкретно — зафиксирую и пойдём к первой неделе?",
-            "ready": True,
-            "goal": last[:2000],
+            "message": f"Получается твоя цель: {last}. Так?",
+            "ready": False,
+            "goal": "",
         }
     return {
-        "message": "Как поймёшь через 12 недель, что цель достигнута?",
+        "message": "Расскажи подробнее — что именно хочешь изменить за эти 12 недель?",
         "ready": False,
         "goal": "",
     }
+
+
+async def _extract_name(user_message: str, model_names: list[str]) -> str:
+    raw = (user_message or "").strip()
+    if not raw:
+        return "подруга"
+    prompt = NAME_EXTRACT_PROMPT.format(
+        user_message=raw.replace('"', "'")[:500],
+    )
+
+    def call() -> str:
+        for mid in model_names:
+            try:
+                text = claude_generate(
+                    mid,
+                    [{"role": "user", "content": prompt}],
+                    system="Верни только имя, одно слово или имя целиком.",
+                    max_tokens=60,
+                    cache_core=False,
+                ).strip()
+                if text:
+                    name = text.strip().strip('"').strip("'")[:120]
+                    if name:
+                        return name
+            except Exception as e:
+                log.warning("extract_name %s: %s", mid, e)
+        parts = [p for p in raw.split() if p.strip()]
+        if parts:
+            return parts[-1][:120]
+        return "подруга"
+
+    return await asyncio.to_thread(call)
 
 
 async def _claude_vision_dialog(
@@ -684,9 +730,11 @@ async def _claude_goal_dialog(
     if extra_user_hint:
         messages.append({"role": "user", "content": extra_user_hint})
 
-    system = GOAL_DIALOG_SYSTEM
-    if vision.strip():
-        system = f"Мечта пользователя (3 месяца):\n{vision[:2000]}\n\n{system}"
+    dialog_history = _format_dialog_history(goal_turns)
+    system = GOAL_DIALOG_SYSTEM.format(
+        vision=(vision or "не указана").strip()[:2000],
+        dialog_history=dialog_history,
+    )
 
     def call() -> dict:
         for mid in model_names:
@@ -1240,7 +1288,7 @@ async def handle_onboarding_turn(
         return
 
     if step == OB_NAME:
-        name = raw.strip()[:120] or "подруга"
+        name = (await _extract_name(raw, model_names)).strip()[:120] or "подруга"
         st["name"] = name
         st["step"] = OB_VISION_DIALOG
         st["vision_turns"] = []
@@ -1291,7 +1339,10 @@ async def handle_onboarding_turn(
                 turns,
                 model_names,
                 vision=str(st.get("vision") or ""),
-                extra_user_hint="Задай другой вопрос или подтверди цель (ready: true, goal: текст).",
+                extra_user_hint=(
+                    "Предложи конкретную формулировку цели («Получается твоя цель: … Так?») "
+                    "или задай другой уточняющий вопрос. ready=true только после согласия пользователя."
+                ),
             )
             reply = (result.get("message") or "").strip() or reply
 
