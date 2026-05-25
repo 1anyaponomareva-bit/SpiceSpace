@@ -2408,6 +2408,17 @@ async def _bootstrap_bot() -> None:
 
                 if _time_in_window(morning_time, now_hm) and profile.get("last_morning_sent_date") != today:
                     try:
+                        # Save FIRST, then send — prevents duplicate if scheduler fires again
+                        profile["last_morning_sent_date"] = today
+                        profile["last_daily_sent_date"] = today
+                        user_profiles[key] = profile
+                        db_store.update_profile(
+                            cid,
+                            {
+                                "last_morning_sent_date": today,
+                                "last_daily_sent_date": today,
+                            },
+                        )
                         text = await _morning_message_text(cid, profile, model_chain)
                         histories.setdefault(cid, []).append(
                             {"role": "model", "parts": [text]}
@@ -2425,10 +2436,6 @@ async def _bootstrap_bot() -> None:
                         await bot.send_message(
                             chat_id=cid, text=text, reply_markup=keyboard
                         )
-                        profile["last_morning_sent_date"] = today
-                        profile["last_daily_sent_date"] = today
-                        user_profiles[key] = profile
-                        db_store.upsert_profile(cid, profile)
                     except Exception as e:
                         log.warning("Morning message failed for %s: %s", cid, e)
 

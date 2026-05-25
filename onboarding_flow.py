@@ -19,6 +19,7 @@ from claude_client import generate as claude_generate
 from prompts import (
     CHANGE_WEEKLY_GOAL_SYSTEM,
     GOAL_DIALOG_SYSTEM,
+    GOAL_POLISH_PROMPT,
     VISION_DIALOG_SYSTEM,
     WEEKLY_TACTICS_PROPOSAL_SYSTEM,
 )
@@ -43,6 +44,41 @@ OB_EVENING_TIME = 8
 OB_DONE = 9
 OB_CHANGE_WEEKLY = 10
 OB_CHANGE_12W = 11
+
+GOAL_TYPE_12W = "12-недельная цель"
+GOAL_TYPE_WEEKLY = "цель на неделю"
+
+_GOAL_CONFIRM_YES = (
+    "да",
+    "ок",
+    "окей",
+    "верно",
+    "верна",
+    "подходит",
+    "соглас",
+    "согласна",
+    "yes",
+    "ага",
+    "угу",
+    "именно",
+    "точно",
+    "всё верно",
+    "все верно",
+    "записывай",
+    "запиши",
+)
+
+_GOAL_CONFIRM_NO = (
+    "нет",
+    "не верно",
+    "не то",
+    "не подходит",
+    "измени",
+    "перепиши",
+    "другой",
+    "другая",
+    "не надо",
+)
 
 # Совместимость с main.py
 OB_ASK_NAME = OB_NAME
@@ -465,22 +501,143 @@ async def _claude_change_weekly_dialog(
     return await asyncio.to_thread(call)
 
 
+def _is_goal_confirm_yes(raw: str) -> bool:
+    low = (raw or "").strip().lower()
+    if not low:
+        return False
+    if low in _GOAL_CONFIRM_YES or low.startswith("да"):
+        return True
+    return any(w in low for w in ("верно", "подходит", "соглас", "записывай", "запиши"))
+
+
+def _is_goal_confirm_no(raw: str) -> bool:
+    low = (raw or "").strip().lower()
+    if not low:
+        return False
+    return any(low.startswith(w) or w in low for w in _GOAL_CONFIRM_NO)
+
+
+async def _polish_goal(
+    raw_goal: str,
+    goal_type: str,
+    model_names: list[str],
+) -> str:
+    raw = (raw_goal or "").strip()
+    if not raw:
+        return ""
+    prompt = GOAL_POLISH_PROMPT.format(
+        raw_goal=raw.replace('"', "'")[:1500],
+        goal_type=goal_type,
+    )
+
+    def call() -> str:
+        for mid in model_names:
+            try:
+                text = claude_generate(
+                    mid,
+                    [{"role": "user", "content": prompt}],
+                    system="Верни только отшлифованную цель, без кавычек и пояснений.",
+                    max_tokens=220,
+                    cache_core=False,
+                ).strip()
+                if text:
+                    return text.strip().strip('"').strip()[:2000]
+            except Exception as e:
+                log.warning("polish_goal %s: %s", mid, e)
+        return raw[:2000]
+
+    return await asyncio.to_thread(call)
+
+
+async def _propose_goal_confirm(
+    msg,
+    st: dict,
+    *,
+    field: str,
+    raw: str,
+    goal_type: str,
+    model_names: list[str],
+    after: str,
+) -> None:
+    polished = await _polish_goal(raw, goal_type, model_names)
+    if not polished.strip():
+        polished = (raw or "").strip()[:2000]
+    st["goal_confirm"] = {
+        "field": field,
+        "polished": polished,
+        "raw": (raw or "").strip()[:2000],
+        "after": after,
+        "goal_type": goal_type,
+    }
+    await msg.reply_text(f"Записала ✨ {polished.strip()}. Верно?")
+
+
 async def _finish_change_weekly(
     cid: int,
     new_weekly: str,
     user_profiles: dict[str, dict],
     onboarding: dict[int, dict],
 ) -> str:
+    weekly = new_weekly.strip()
     profile = db.update_profile(
         cid,
         {
-            "weekly_goal": new_weekly[:2000],
+            "weekly_goal": weekly[:2000],
             "weekly_score": 0,
         },
     )
     user_profiles[str(cid)] = profile
     onboarding.pop(cid, None)
-    return f"Записала 💙 На эту неделю: {new_weekly.strip()}. Погнали."
+    return f"Записала 💙 Цель на эту неделю: {weekly}. Погнали."
+
+
+async def _dispatch_goal_confirm_after(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    cid: int,
+    st: dict,
+    onboarding: dict[int, dict],
+    histories: dict[int, list],
+    user_profiles: dict[str, dict],
+    subscribers: set[int],
+    model_names: list[str],
+    after: str,
+) -> None:
+    msg = update.message
+    if not msg:
+        return
+
+    if after == "main_to_weekly":
+        st["step"] = OB_WEEKLY_TACTICS
+        st["weekly_tactics_phase"] = "proposal_sent"
+        tactics = await _claude_weekly_tactics_options(
+            str(st.get("main_goal") or ""), model_names
+        )
+        st["weekly_tactics_options"] = tactics
+        await msg.reply_text(
+            weekly_tactics_message(str(st.get("main_goal") or ""), tactics)
+        )
+        return
+
+    if after == "weekly_to_morning":
+        st["step"] = OB_MORNING_TIME
+        await msg.reply_text(MORNING_TIME_QUESTION)
+        return
+
+    if after == "finish_weekly":
+        weekly = str(st.get("weekly_goal") or "").strip()
+        done_msg = await _finish_change_weekly(
+            cid, weekly, user_profiles, onboarding
+        )
+        await msg.reply_text(done_msg)
+        return
+
+    if after == "finish_12w":
+        done_msg = await _finish_change_12w(cid, st, user_profiles, onboarding)
+        await msg.reply_text(done_msg)
+        return
+
+    log.warning("unknown goal_confirm after=%s cid=%s", after, cid)
 
 
 async def _finish_change_12w(
@@ -985,6 +1142,39 @@ async def handle_onboarding_turn(
     _note_kids_from_answer(st, raw)
     model_names = context.bot_data.get("claude_model_names") or []
 
+    if st.get("goal_confirm"):
+        confirm = st["goal_confirm"]
+        if _is_goal_confirm_yes(raw):
+            field = str(confirm.get("field") or "weekly_goal")
+            st[field] = str(confirm.get("polished") or "")[:2000]
+            after = str(confirm.get("after") or "")
+            st.pop("goal_confirm", None)
+            await _dispatch_goal_confirm_after(
+                update,
+                context,
+                cid,
+                st,
+                onboarding,
+                histories,
+                user_profiles,
+                subscribers,
+                model_names,
+                after,
+            )
+            return
+        if _is_goal_confirm_no(raw):
+            st.pop("goal_confirm", None)
+            if confirm.get("goal_type") == GOAL_TYPE_12W:
+                hint = "12-недельную цель"
+            else:
+                hint = "цель на эту неделю"
+            await msg.reply_text(
+                f"Окей, напиши {hint} своими словами — как хочешь чтобы звучало."
+            )
+            return
+        await msg.reply_text('Напиши «да» / «верно» — или перепиши цель.')
+        return
+
     if step == OB_CHANGE_WEEKLY:
         turns = st.setdefault("weekly_turns", [])
         turns.append({"role": "user", "content": raw.strip()[:2000]})
@@ -1009,10 +1199,16 @@ async def handle_onboarding_turn(
         turns.append({"role": "assistant", "content": reply[:2000]})
 
         if result.get("ready") and result.get("weekly_goal"):
-            wg = result["weekly_goal"][:2000]
-            done_msg = await _finish_change_weekly(cid, wg, user_profiles, onboarding)
             await msg.reply_text(reply)
-            await msg.reply_text(done_msg)
+            await _propose_goal_confirm(
+                msg,
+                st,
+                field="weekly_goal",
+                raw=result["weekly_goal"],
+                goal_type=GOAL_TYPE_WEEKLY,
+                model_names=model_names,
+                after="finish_weekly",
+            )
         else:
             await msg.reply_text(reply)
         return
@@ -1102,26 +1298,36 @@ async def handle_onboarding_turn(
         turns.append({"role": "assistant", "content": reply[:2000]})
 
         if result.get("ready") and result.get("goal"):
-            st["main_goal"] = result["goal"][:2000]
-            st["step"] = OB_WEEKLY_TACTICS
-            st["weekly_tactics_phase"] = "proposal_sent"
-            tactics = await _claude_weekly_tactics_options(st["main_goal"], model_names)
-            st["weekly_tactics_options"] = tactics
             await msg.reply_text(reply)
-            await msg.reply_text(weekly_tactics_message(st["main_goal"], tactics))
+            await _propose_goal_confirm(
+                msg,
+                st,
+                field="main_goal",
+                raw=result["goal"],
+                goal_type=GOAL_TYPE_12W,
+                model_names=model_names,
+                after="main_to_weekly",
+            )
         else:
             await msg.reply_text(reply)
         return
 
     async def _complete_weekly_tactics_pick(weekly_goal: str) -> None:
-        st["weekly_goal"] = weekly_goal[:2000]
         mode = str(st.get("change_mode") or "")
-        if mode in ("adjust_12w", "new_12w"):
-            done_msg = await _finish_change_12w(cid, st, user_profiles, onboarding)
-            await msg.reply_text(done_msg)
-            return
-        st["step"] = OB_MORNING_TIME
-        await msg.reply_text(MORNING_TIME_QUESTION)
+        after = (
+            "finish_12w"
+            if mode in ("adjust_12w", "new_12w")
+            else "weekly_to_morning"
+        )
+        await _propose_goal_confirm(
+            msg,
+            st,
+            field="weekly_goal",
+            raw=weekly_goal,
+            goal_type=GOAL_TYPE_WEEKLY,
+            model_names=model_names,
+            after=after,
+        )
 
     if step == OB_MORNING_TIME:
         parsed = parse_time_nl(raw, "morning")
