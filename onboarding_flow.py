@@ -656,11 +656,11 @@ async def _dispatch_goal_confirm_after(
 
     if after == "main_to_weekly":
         st["step"] = OB_WEEKLY_TACTICS
+        if st.get("weekly_turns"):
+            return
         main = str(st.get("main_goal") or "").strip()
-        await msg.reply_text(
-            f"Отлично 🎯 Цель на 12 недель: {main}\n\nТеперь первая неделя."
-        )
-        await _start_weekly_tactics_dialog(msg, st, model_names)
+        intro = f"Отлично 🎯 Цель на 12 недель: {main}\n\nТеперь первая неделя."
+        await _start_weekly_tactics_dialog(msg, st, model_names, intro=intro)
         return
 
     if after == "weekly_to_morning":
@@ -838,17 +838,22 @@ async def _start_weekly_tactics_dialog(
     msg,
     st: dict,
     model_names: list[str],
+    *,
+    intro: str = "",
 ) -> None:
     st["weekly_turns"] = []
     result = await _claude_weekly_tactics_dialog(
         [],
         model_names,
         main_goal=str(st.get("main_goal") or ""),
-        user_message="[начало — предложи 2-3 варианта на первую неделю]",
+        user_message="",
     )
     reply = (result.get("message") or "Что хочешь сделать на этой неделе?").strip()
     st["weekly_turns"].append({"role": "assistant", "content": reply[:2000]})
-    await msg.reply_text(reply)
+    text = reply
+    if intro.strip():
+        text = f"{intro.strip()}\n\n{reply}"
+    await msg.reply_text(text)
 
 
 def parse_time_nl(raw: str, context: str = "morning") -> str | None:
@@ -1385,7 +1390,6 @@ async def handle_onboarding_turn(
         turns.append({"role": "assistant", "content": reply[:2000]})
 
         if result.get("ready") and result.get("goal"):
-            await msg.reply_text(reply)
             await _propose_goal_confirm(
                 msg,
                 st,
@@ -1479,7 +1483,6 @@ async def handle_onboarding_turn(
         turns.append({"role": "assistant", "content": reply[:2000]})
 
         if result.get("ready") and result.get("weekly_goal"):
-            await msg.reply_text(reply)
             await _complete_weekly_tactics_pick(result["weekly_goal"])
         else:
             await msg.reply_text(reply)
