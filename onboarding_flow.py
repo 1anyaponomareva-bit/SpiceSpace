@@ -658,6 +658,8 @@ async def _dispatch_goal_confirm_after(
         st["step"] = OB_WEEKLY_TACTICS
         if st.get("weekly_turns"):
             return
+        main = str(st.get("main_goal") or "").strip()
+        await msg.reply_text(f"Отлично 🎯 Теперь первая неделя.")
         await _start_weekly_tactics_dialog(msg, st, model_names)
         return
 
@@ -761,12 +763,11 @@ def _fallback_weekly_tactics_reply(
 ) -> dict:
     last_user = (user_message or "").strip()
     if not last_user:
-        g = (main_goal or "твоя цель")[:60]
+        g = (main_goal or "твоя цель")[:80]
         return {
             "message": (
-                f"Первая неделя. Исходя из твоей цели «{g}» — "
-                f"что хочешь сделать на этой неделе? Можешь выбрать одно из: "
-                f"собрать первых тестировщиков / настроить оплату / запустить первый контент. "
+                f"Что хочешь сделать на этой неделе чтобы приблизиться к «{g}»? "
+                f"Можно: собрать первых тестировщиков / настроить оплату / запустить первый контент. "
                 f"Или предложи своё."
             ),
             "ready": False,
@@ -798,6 +799,9 @@ async def _claude_weekly_tactics_dialog(
         for t in weekly_turns
         if t.get("role") in ("user", "assistant") and t.get("content")
     ]
+    # Claude needs at least one message — add system instruction as user message if empty
+    if not messages:
+        messages = [{"role": "user", "content": f"Предложи 2-3 варианта задач на первую неделю для цели: {main_goal}"}]
     if extra_user_hint:
         messages.append({"role": "user", "content": extra_user_hint})
 
@@ -806,7 +810,7 @@ async def _claude_weekly_tactics_dialog(
         dialog_history = ""
     system = WEEKLY_TACTICS_DIALOG_SYSTEM.format(
         main_goal=(main_goal or "не указана").strip()[:2000],
-        user_message=(user_message or "").strip()[:2000] or "(начало диалога)",
+        user_message=(user_message or "").strip()[:2000] or "",
         dialog_history=dialog_history,
     )
 
