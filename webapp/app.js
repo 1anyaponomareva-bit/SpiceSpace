@@ -176,7 +176,7 @@
   }
 
   function openBotChat() {
-    const link = `https://t.me/${BOT_USERNAME}`;
+    const link = `https://t.me/${BOT_USERNAME}?start=webapp`;
     if (tg?.openTelegramLink) {
       try { tg.openTelegramLink(link); return; } catch (_) {}
     }

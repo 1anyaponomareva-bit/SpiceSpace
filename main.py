@@ -1847,7 +1847,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
     subscribers.add(cid)
 
-    prof = user_profiles.get(str(cid))
+    # /start and /start webapp (Mini App deep link) — одинаковый сценарий
+    tid = str(cid)
+    prof = db_store.get_profile(cid) or user_profiles.get(tid)
+    if isinstance(prof, dict):
+        user_profiles[tid] = prof
     if isinstance(prof, dict) and prof.get("name"):
         ob.start_returning_choice(onboarding, cid)
         await _bot_reply(
