@@ -1103,7 +1103,8 @@ def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
     db.upsert_profile(cid, profile)
     db.save_subscriber(cid, True)
     save_onboarding_summary(cid, profile, model_names)
-    return profile
+    fresh = db.get_profile(cid)
+    return fresh if isinstance(fresh, dict) else profile
 
 
 def start_new_onboarding(onboarding: dict[int, dict], cid: int) -> None:

@@ -1290,8 +1290,8 @@ def _auth_telegram_id(request: Request, telegram_id: str | None) -> str:
 
 
 def _resolve_user_profile(tid: str) -> dict | None:
-    """Профиль из JSON/Supabase + кэш в памяти (после онбординга в боте)."""
-    profile = db_store.get_profile(tid) or user_profiles.get(tid)
+    """Профиль всегда из БД (Supabase/JSON), затем синхронизация в RAM-кэш."""
+    profile = db_store.get_profile(tid)
     if isinstance(profile, dict):
         user_profiles[tid] = profile
         return profile
@@ -2772,10 +2772,11 @@ async def get_profile(
     """
     tid = _auth_telegram_id(request, telegram_id)
 
-    profile = _resolve_user_profile(tid)
+    profile = db_store.get_profile(tid)
     if not isinstance(profile, dict):
-        log.info("api/profile 404 user_id=%s (нет онбординга на этом сервере)", tid)
+        log.info("api/profile 404 user_id=%s (нет профиля в БД)", tid)
         raise HTTPException(status_code=404, detail="profile not found")
+    user_profiles[tid] = profile
 
     user_obj = _validate_init_data(_extract_init_data(request))
     return {
