@@ -396,9 +396,10 @@ def _fallback_vision_reply(turns: list[dict]) -> dict:
     }
 
 
-def _format_dialog_history(turns: list[dict]) -> str:
+def _format_dialog_history(turns: list[dict], *, exclude_last: bool = False) -> str:
+    use_turns = turns[:-1] if exclude_last and turns else turns
     lines: list[str] = []
-    for t in turns:
+    for t in use_turns:
         if t.get("role") not in ("user", "assistant"):
             continue
         content = str(t.get("content", "")).strip()
@@ -406,7 +407,7 @@ def _format_dialog_history(turns: list[dict]) -> str:
             continue
         label = "Пользователь" if t.get("role") == "user" else "Спейс"
         lines.append(f"{label}: {content}")
-    return "\n".join(lines)[:4000] if lines else "пока пусто"
+    return "\n".join(lines)[:4000] if lines else "Начало диалога"
 
 
 def _fallback_goal_reply(turns: list[dict]) -> dict:
@@ -727,7 +728,7 @@ async def _claude_goal_dialog(
     if extra_user_hint:
         messages.append({"role": "user", "content": extra_user_hint})
 
-    dialog_history = _format_dialog_history(goal_turns)
+    dialog_history = _format_dialog_history(goal_turns, exclude_last=True)
     system = GOAL_DIALOG_SYSTEM.format(
         vision=(vision or "не указана").strip()[:2000],
         dialog_history=dialog_history,
@@ -801,7 +802,7 @@ async def _claude_weekly_tactics_dialog(
     if extra_user_hint:
         messages.append({"role": "user", "content": extra_user_hint})
 
-    dialog_history = _format_dialog_history(weekly_turns)
+    dialog_history = _format_dialog_history(weekly_turns, exclude_last=True)
     system = WEEKLY_TACTICS_DIALOG_SYSTEM.format(
         main_goal=(main_goal or "не указана").strip()[:2000],
         user_message=(user_message or "").strip()[:2000] or "(начало диалога)",
