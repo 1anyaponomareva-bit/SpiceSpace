@@ -658,9 +658,7 @@ async def _dispatch_goal_confirm_after(
         st["step"] = OB_WEEKLY_TACTICS
         if st.get("weekly_turns"):
             return
-        main = str(st.get("main_goal") or "").strip()
-        intro = f"Отлично 🎯 Цель на 12 недель: {main}\n\nТеперь первая неделя."
-        await _start_weekly_tactics_dialog(msg, st, model_names, intro=intro)
+        await _start_weekly_tactics_dialog(msg, st, model_names)
         return
 
     if after == "weekly_to_morning":
@@ -804,6 +802,8 @@ async def _claude_weekly_tactics_dialog(
         messages.append({"role": "user", "content": extra_user_hint})
 
     dialog_history = _format_dialog_history(weekly_turns, exclude_last=True)
+    if dialog_history == "Начало диалога":
+        dialog_history = ""
     system = WEEKLY_TACTICS_DIALOG_SYSTEM.format(
         main_goal=(main_goal or "не указана").strip()[:2000],
         user_message=(user_message or "").strip()[:2000] or "(начало диалога)",
@@ -843,8 +843,6 @@ async def _start_weekly_tactics_dialog(
     msg,
     st: dict,
     model_names: list[str],
-    *,
-    intro: str = "",
 ) -> None:
     st["weekly_turns"] = []
     result = await _claude_weekly_tactics_dialog(
@@ -855,10 +853,7 @@ async def _start_weekly_tactics_dialog(
     )
     reply = (result.get("message") or "Что хочешь сделать на этой неделе?").strip()
     st["weekly_turns"].append({"role": "assistant", "content": reply[:2000]})
-    text = reply
-    if intro.strip():
-        text = f"{intro.strip()}\n\n{reply}"
-    await msg.reply_text(text)
+    await msg.reply_text(reply)
 
 
 def parse_time_nl(raw: str, context: str = "morning") -> str | None:
@@ -1488,6 +1483,7 @@ async def handle_onboarding_turn(
         turns.append({"role": "assistant", "content": reply[:2000]})
 
         if result.get("ready") and result.get("weekly_goal"):
+            await msg.reply_text(reply)
             await _complete_weekly_tactics_pick(result["weekly_goal"])
         else:
             await msg.reply_text(reply)
