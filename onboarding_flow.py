@@ -1172,6 +1172,33 @@ async def _complete_onboarding(
         reply_markup=progress_kb,
     )
 
+    first_msg_prompt = f"""Ты — Спейс. Онбординг только что завершился.
+Пользователь поставила цель на 12 недель: {st.get('main_goal', '')}
+Цель первой недели: {st.get('weekly_goal', '')}
+
+Напиши одно живое сообщение — продолжи разговор как подруга.
+Не повторяй цели — она их только что видела.
+Задай один конкретный вопрос про первую неделю — что уже сделала, с кого начнёшь, что мешает.
+Тон: тёплый, живой, без коуч-языка. 1-2 предложения максимум.
+ЗАПРЕЩЕНО: "Удачи!", "Увидимся", прощания, markdown."""
+
+    def get_first_msg() -> str:
+        for mid in model_names:
+            try:
+                return claude_generate(
+                    mid,
+                    [{"role": "user", "content": first_msg_prompt}],
+                    max_tokens=150,
+                    cache_core=False,
+                ).strip()
+            except Exception:
+                pass
+        return "Кому первому отправишь бота на тест? 💙"
+
+    first_msg = await asyncio.to_thread(get_first_msg)
+    await asyncio.sleep(1)
+    await msg.reply_text(first_msg)
+
 
 async def handle_returning_choice(
     update: Update,
