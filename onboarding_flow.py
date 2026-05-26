@@ -1088,27 +1088,6 @@ def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
     db.upsert_profile(cid, profile)
     db.save_subscriber(cid, True)
     save_onboarding_summary(cid, profile, model_names)
-    wg = str(profile.get("weekly_goal") or "").strip()
-    if wg and len(wg) <= 120 and "?" not in wg:
-        tz_name = str(profile.get("timezone") or "pending")
-        try:
-            tz = ZoneInfo(tz_name) if tz_name not in ("", "pending") else ZoneInfo(
-                os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh")
-            )
-        except Exception:
-            tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
-        today = datetime.now(tz).date()
-        existing = db.get_daily_summary(cid, today) or {}
-        if not str(existing.get("task") or "").strip():
-            db.upsert_daily_summary(
-                cid,
-                today,
-                summary=str(existing.get("summary") or ""),
-                mood=str(existing.get("mood") or ""),
-                key_detail=str(existing.get("key_detail") or ""),
-                task=wg[:140],
-                completed=existing.get("completed"),
-            )
     return profile
 
 

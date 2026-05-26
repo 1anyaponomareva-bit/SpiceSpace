@@ -18,7 +18,23 @@ from prompts import DAILY_SUMMARY_PROMPT, ONBOARDING_SUMMARY_PROMPT
 log = logging.getLogger("coach_bot")
 
 
-def _sanitize_summary_task(task: str) -> str:
+def _normalize_goal_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def _task_equals_weekly_goal(task: str, weekly_goal: str) -> bool:
+    a = _normalize_goal_text(task)
+    b = _normalize_goal_text(weekly_goal)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if len(a) >= 12 and len(b) >= 12 and (a in b or b in a):
+        return True
+    return False
+
+
+def _sanitize_summary_task(task: str, weekly_goal: str = "") -> str:
     t = (task or "").strip()
     if not t or len(t) > 120:
         return ""
@@ -37,10 +53,12 @@ def _sanitize_summary_task(task: str) -> str:
         return ""
     if low.count("?") >= 2:
         return ""
+    if weekly_goal and _task_equals_weekly_goal(t, weekly_goal):
+        return ""
     return t[:140]
 
 
-def _parse_summary_json(text: str) -> dict | None:
+def _parse_summary_json(text: str, weekly_goal: str = "") -> dict | None:
     text = text.strip()
     m = re.search(r"\{[\s\S]*\}", text)
     if not m:
@@ -52,7 +70,9 @@ def _parse_summary_json(text: str) -> dict | None:
                 "summary": str(data.get("summary", ""))[:4000],
                 "mood": str(data.get("mood", ""))[:200],
                 "key_detail": str(data.get("key_detail", ""))[:500],
-                "task": _sanitize_summary_task(str(data.get("task", ""))),
+                "task": _sanitize_summary_task(
+                    str(data.get("task", "")), weekly_goal=weekly_goal
+                ),
             }
             if "completed" in data:
                 out["completed"] = bool(data.get("completed"))
@@ -95,7 +115,11 @@ def save_summary_for_today(
     if not conv.strip():
         return
 
-    prompt = DAILY_SUMMARY_PROMPT.format(conversation=conv)
+    weekly_goal = str(profile.get("weekly_goal") or "").strip()
+    prompt = DAILY_SUMMARY_PROMPT.format(
+        conversation=conv,
+        weekly_goal=weekly_goal or "не указана",
+    )
 
     for mid in model_names:
         try:
@@ -106,7 +130,7 @@ def save_summary_for_today(
                 max_tokens=400,
                 cache_core=False,
             )
-            parsed = _parse_summary_json(raw)
+            parsed = _parse_summary_json(raw, weekly_goal=weekly_goal)
             if parsed:
                 upsert_daily_summary(
                     user_id,

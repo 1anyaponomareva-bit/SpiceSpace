@@ -221,6 +221,19 @@
 
   const TODAY_TASK_FALLBACK = 'Обсуди задачу с ботом утром';
 
+  function normalizeGoalText(text) {
+    return String(text || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
+  function taskEqualsWeekly(task, weekly) {
+    const a = normalizeGoalText(task);
+    const b = normalizeGoalText(weekly);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (a.length >= 12 && b.length >= 12 && (a.includes(b) || b.includes(a))) return true;
+    return false;
+  }
+
   function displayTodayTask(prof) {
     const raw = (prof.today_task || '').trim();
     if (!raw || raw.length > 120) return '';
@@ -234,14 +247,13 @@
     ) {
       return '';
     }
+    if (taskEqualsWeekly(raw, prof.weekly_goal)) return '';
     return raw;
   }
 
   function weeklyGoalText(prof) {
     const wg = (prof.weekly_goal || '').trim();
     if (wg) return wg;
-    const tt = displayTodayTask(prof);
-    if (tt) return tt;
     const method = (prof.method || '').trim();
     if (method) return method;
     const main = (prof.main_goal || prof.final_goal || '').trim();

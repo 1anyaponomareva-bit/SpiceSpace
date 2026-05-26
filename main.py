@@ -41,6 +41,7 @@ from claude_client import build_model_chain, configure as configure_claude, gene
 from claude_client import select_model_id
 from prompts import (
     MORNING_MESSAGE_PROMPT,
+    TODAY_TASK_PROMPT,
     build_chat_system,
     evening_opening,
     evening_reply_done,
@@ -1580,6 +1581,7 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
         raise RuntimeError("Ни одна модель Claude не ответила")
 
     _append_history_turn(chat_id, user_text, reply)
+    _maybe_save_task_from_user_reply(chat_id, prof, user_text)
     asyncio.create_task(
         maybe_save_daily_summary(chat_id, prof, histories.get(chat_id, []), model_names)
     )
@@ -2183,6 +2185,119 @@ def _short_task_title(text: str) -> str:
     return line
 
 
+def _normalize_goal_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def _task_equals_weekly_goal(task: str, weekly_goal: str) -> bool:
+    a = _normalize_goal_text(task)
+    b = _normalize_goal_text(weekly_goal)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if len(a) >= 12 and len(b) >= 12 and (a in b or b in a):
+        return True
+    return False
+
+
+def _extract_morning_task_options(text: str) -> list[str]:
+    m = re.search(
+        r"сегодня можно:\s*(.+?)(?:\.\s*что берёшь|\?\s*что берёшь|\.\s*$)",
+        text or "",
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return []
+    blob = m.group(1).strip().rstrip(".")
+    return [p.strip() for p in re.split(r"\s*/\s*", blob) if p.strip()][:3]
+
+
+async def _generate_today_task(profile: dict, model_names: list[str]) -> str:
+    weekly_goal = str(profile.get("weekly_goal") or "").strip() or "не указана"
+    main_goal = str(
+        profile.get("main_goal") or profile.get("final_goal") or ""
+    ).strip() or "не указана"
+    time_per_day = _format_time_per_day_for_prompt(profile)
+    prompt = TODAY_TASK_PROMPT.format(
+        weekly_goal=weekly_goal,
+        main_goal=main_goal,
+        time_per_day=time_per_day,
+    )
+
+    def call() -> str:
+        for mid in model_names:
+            try:
+                text = claude_generate(
+                    mid,
+                    [{"role": "user", "content": prompt}],
+                    system="Верни только задачу на сегодня.",
+                    max_tokens=120,
+                    cache_core=False,
+                ).strip()
+                if text:
+                    return text.strip().strip('"')[:140]
+            except Exception as e:
+                log.warning("generate_today_task %s: %s", mid, e)
+        return ""
+
+    return await asyncio.to_thread(call)
+
+
+async def _ensure_today_task_from_morning(
+    chat_id: int,
+    profile: dict,
+    morning_text: str,
+    model_names: list[str],
+) -> None:
+    weekly = str(profile.get("weekly_goal") or "").strip()
+    today = _profile_local_date(profile)
+    existing = db_store.get_daily_summary(chat_id, today) or {}
+    current = str(existing.get("task") or "").strip()
+    if current and not _task_equals_weekly_goal(current, weekly):
+        return
+
+    task = ""
+    for option in _extract_morning_task_options(morning_text):
+        candidate = _sanitize_today_task(option, weekly_goal=weekly)
+        if candidate:
+            task = candidate
+            break
+
+    if not task:
+        generated = await _generate_today_task(profile, model_names)
+        task = _sanitize_today_task(generated, weekly_goal=weekly)
+
+    if not task:
+        return
+
+    _update_today_summary_field(chat_id, profile, task=task)
+
+
+def _maybe_save_task_from_user_reply(
+    chat_id: int,
+    profile: dict,
+    user_text: str,
+) -> None:
+    weekly = str(profile.get("weekly_goal") or "").strip()
+    raw = (user_text or "").strip()
+    if len(raw) < 4 or len(raw) > 120:
+        return
+    if _looks_like_greeting_or_chat(raw):
+        return
+
+    today = _profile_local_date(profile)
+    existing = db_store.get_daily_summary(chat_id, today) or {}
+    current = str(existing.get("task") or "").strip()
+    picked = _sanitize_today_task(raw, weekly_goal=weekly)
+    if not picked:
+        return
+    if current == picked:
+        return
+    if not current or _task_equals_weekly_goal(current, weekly):
+        _update_today_summary_field(chat_id, profile, task=picked)
+
+
 _GREETING_TASK_MARKERS = (
     "привет",
     "доброе утро",
@@ -2239,8 +2354,13 @@ def _extract_action_task(text: str) -> str:
     return cleaned
 
 
-def _sanitize_today_task(text: str) -> str:
-    return _extract_action_task(text)
+def _sanitize_today_task(text: str, weekly_goal: str = "") -> str:
+    cleaned = _extract_action_task(text)
+    if not cleaned:
+        return ""
+    if weekly_goal and _task_equals_weekly_goal(cleaned, weekly_goal):
+        return ""
+    return cleaned
 
 
 def _week_scores_array(profile: dict) -> list[int]:
@@ -2325,7 +2445,8 @@ def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> di
         summ = db_store.get_daily_summary(tid, today)
         if isinstance(summ, dict):
             task_raw = str(summ.get("task") or "").strip()
-            task_clean = _sanitize_today_task(task_raw)
+            weekly = str(p.get("weekly_goal") or "").strip()
+            task_clean = _sanitize_today_task(task_raw, weekly_goal=weekly)
             if task_clean:
                 p["today_task"] = task_clean
             if summ.get("completed"):
@@ -2435,6 +2556,9 @@ async def _bootstrap_bot() -> None:
                         ]])
                         await bot.send_message(
                             chat_id=cid, text=text, reply_markup=keyboard
+                        )
+                        await _ensure_today_task_from_morning(
+                            cid, profile, text, model_chain
                         )
                     except Exception as e:
                         log.warning("Morning message failed for %s: %s", cid, e)
