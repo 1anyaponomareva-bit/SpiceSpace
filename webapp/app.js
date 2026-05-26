@@ -18,6 +18,8 @@
 
   let profile = null;
   let tasks = [];
+  let calendarData = null;
+  let activeTab = 'home';
 
   function withDemoQuery(path) {
     if (!DEMO_TG || tg?.initData) return path;
@@ -193,14 +195,94 @@
 
   function showMain() {
     document.getElementById('empty-state').hidden = true;
-    document.getElementById('main').hidden = false;
+    const home = document.getElementById('screen-home');
+    if (home) {
+      home.hidden = false;
+      home.classList.add('screen--active');
+    }
+    const tabBar = document.getElementById('tab-bar');
+    if (tabBar) tabBar.hidden = false;
   }
 
   function showEmptyState() {
     document.getElementById('empty-state').hidden = false;
-    document.getElementById('main').hidden = true;
+    const home = document.getElementById('screen-home');
+    if (home) {
+      home.hidden = true;
+      home.classList.remove('screen--active');
+    }
+    const tabBar = document.getElementById('tab-bar');
+    if (tabBar) tabBar.hidden = true;
     hideSyncBanner();
-    document.querySelector('.settings-block')?.classList.add('loaded');
+    document.getElementById('settings-block')?.classList.add('loaded');
+  }
+
+  function switchTab(tab) {
+    activeTab = tab;
+    const home = document.getElementById('screen-home');
+    const cal = document.getElementById('screen-calendar');
+    document.querySelectorAll('.tab-bar__btn').forEach((btn) => {
+      const on = btn.getAttribute('data-tab') === tab;
+      btn.classList.toggle('tab-bar__btn--active', on);
+      btn.setAttribute('aria-current', on ? 'page' : 'false');
+    });
+    if (home) {
+      home.classList.toggle('screen--active', tab === 'home');
+      home.hidden = tab !== 'home';
+    }
+    if (cal) {
+      cal.classList.toggle('screen--active', tab === 'calendar');
+      cal.hidden = tab !== 'calendar';
+    }
+    if (tab === 'calendar') renderCalendar();
+    haptic('light');
+  }
+
+  function isTaskCompletedStrict(prof) {
+    const tc = prof?.task_completed;
+    return tc === true || tc === 'true';
+  }
+
+  function calendarCellClass(day) {
+    if (day.is_future) return 'calendar-cell--future';
+    if (day.is_today) {
+      if (day.task_completed === 'true') return 'calendar-cell--done calendar-cell--today';
+      if (day.task_completed === 'partial') return 'calendar-cell--partial calendar-cell--today';
+      if (day.task_completed === 'false') return 'calendar-cell--miss calendar-cell--today';
+      return 'calendar-cell--today';
+    }
+    if (day.task_completed === 'true') return 'calendar-cell--done';
+    if (day.task_completed === 'partial') return 'calendar-cell--partial';
+    if (day.task_completed === 'false') return 'calendar-cell--miss';
+    return 'calendar-cell--future';
+  }
+
+  function renderCalendar() {
+    const host = document.getElementById('calendar-grid');
+    const badge = document.getElementById('calendar-week-badge');
+    if (!host || !calendarData) return;
+
+    const cw = Number(calendarData.current_week || profile?.current_week || 1);
+    if (badge) badge.textContent = `Неделя ${cw} из 12`;
+
+    const days = Array.isArray(calendarData.days) ? calendarData.days : [];
+    const rows = [];
+    for (let w = 0; w < 12; w++) {
+      const slice = days.slice(w * 7, w * 7 + 7);
+      const cells = slice.map((d) => `<div class="calendar-cell ${calendarCellClass(d)}" title="${escapeHtml(d.date || '')}"></div>`).join('');
+      rows.push(
+        `<div class="calendar-row${w + 1 === cw ? ' calendar-row--current' : ''}">` +
+        `<span class="calendar-row-label">Нед ${w + 1}</span>${cells}</div>`
+      );
+    }
+    host.innerHTML = rows.join('');
+  }
+
+  async function fetchCalendar() {
+    const resp = await apiFetch('/api/calendar');
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data;
   }
 
   function isNoInitData() {
@@ -293,7 +375,7 @@
       out.unshift({
         id: '__today_focus__',
         title: focus,
-        done: Boolean(prof.today_completed),
+        done: isTaskCompletedStrict(prof),
         virtual: true,
       });
     }
@@ -440,10 +522,14 @@
     return Array.isArray(data.tasks) ? data.tasks : [];
   }
 
-  async function markDay() {
+  async function markDay(taskCompleted = 'true') {
     const paths = ['/api/profile/mark-day', '/api/mark-day'];
     for (const path of paths) {
-      const resp = await apiFetch(path, { method: 'POST' });
+      const resp = await apiFetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_completed: taskCompleted }),
+      });
       if (resp.ok) {
         const data = await resp.json();
         if (data.profile) return data.profile;
@@ -455,9 +541,13 @@
 
   async function completeTask(id) {
     if (id === '__today_focus__') {
-      const updated = await markDay();
+      const updated = await markDay('true');
       if (updated) profile = updated;
-      else if (profile) profile.today_completed = true;
+      else if (profile) {
+        profile.task_completed = 'true';
+        profile.today_completed = true;
+      }
+      calendarData = await fetchCalendar();
       return;
     }
     const resp = await apiFetch(`/api/tasks/${encodeURIComponent(id)}/done`, { method: 'POST' });
@@ -573,6 +663,13 @@
     document.getElementById('sync-banner-open')?.addEventListener('click', openBotChat);
     document.getElementById('empty-open-bot')?.addEventListener('click', openBotChat);
 
+    document.querySelectorAll('.tab-bar__btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const tab = btn.getAttribute('data-tab');
+        if (tab) switchTab(tab);
+      });
+    });
+
     document.getElementById('task-list')?.addEventListener('click', async (e) => {
       const btn = e.target.closest('.task-check');
       if (!btn || btn.disabled) return;
@@ -635,10 +732,8 @@
     setCanEditName(true);
     setCanEditTimes(true);
 
-    const marked = await markDay();
-    if (marked) profile = marked;
-
     tasks = await fetchTasks();
+    calendarData = await fetchCalendar();
     renderAll(result.user || tgUser);
     syncTimezone(profile);
     document.querySelector('.settings-block')?.classList.add('loaded');

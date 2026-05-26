@@ -30,7 +30,8 @@
     <button type="button" class="empty-state__btn" id="empty-open-bot">Перейти в чат с ботом</button>
   </div>
 
-  <main class="screen" id="main" hidden>
+  <div class="screen screen--active" id="screen-home" hidden>
+  <main class="screen-inner" id="main">
     <header class="header">
       <div class="header-left">
         <p class="greeting" id="greeting">Добрый день,</p>
@@ -102,11 +103,38 @@
     </section>
   </main>
 
-  <div class="settings-block">
+  <div class="settings-block" id="settings-block">
     <button type="button" class="settings-btn" id="btn-reset">🧠 Сбросить память бота</button>
     <button type="button" class="settings-btn" id="btn-subscription">💳 Подписка</button>
     <button type="button" class="settings-btn danger" id="btn-stop">🔕 Остановить бота</button>
   </div>
+  </div>
+
+  <div class="screen" id="screen-calendar" hidden>
+    <div class="screen-inner calendar-screen">
+      <header class="calendar-header">
+        <h1 class="calendar-title">12 недель</h1>
+        <span class="badge" id="calendar-week-badge">Неделя 1 из 12</span>
+      </header>
+      <div class="calendar-grid-wrap">
+        <div class="calendar-dow" aria-hidden="true">
+          <span></span><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span>
+        </div>
+        <div class="calendar-grid" id="calendar-grid"></div>
+      </div>
+      <div class="calendar-legend">
+        <span class="legend-item"><i class="legend-dot legend-dot--done"></i> сделала</span>
+        <span class="legend-item"><i class="legend-dot legend-dot--partial"></i> частично</span>
+        <span class="legend-item"><i class="legend-dot legend-dot--miss"></i> нет</span>
+        <span class="legend-item"><i class="legend-dot legend-dot--future"></i> впереди</span>
+      </div>
+    </div>
+  </div>
+
+  <nav class="tab-bar" id="tab-bar" hidden aria-label="Навигация">
+    <button type="button" class="tab-bar__btn tab-bar__btn--active" data-tab="home" aria-current="page">🏠 Главная</button>
+    <button type="button" class="tab-bar__btn" data-tab="calendar">📅 Прогресс</button>
+  </nav>
 
   <div class="edit-name-sheet" id="edit-name-sheet" hidden>
     <div class="edit-name-sheet__backdrop" id="edit-name-backdrop"></div>

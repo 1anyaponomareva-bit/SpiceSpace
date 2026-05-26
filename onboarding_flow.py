@@ -1085,6 +1085,11 @@ def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
         "weekly_goal": str(st.get("weekly_goal", "")).strip()[:2000],
         "time_per_day": str(st.get("time_per_day") or "30 минут").strip()[:200],
     }
+    try:
+        tz = ZoneInfo(str(profile.get("timezone") or _default_timezone()))
+    except Exception:
+        tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
+    profile["cycle_start_date"] = datetime.now(tz).date().isoformat()
     db.upsert_profile(cid, profile)
     db.save_subscriber(cid, True)
     save_onboarding_summary(cid, profile, model_names)

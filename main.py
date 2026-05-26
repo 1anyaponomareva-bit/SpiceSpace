@@ -761,7 +761,7 @@ db_store.init_db()
 subscribers: set[int] = db_store.load_subscribers()
 user_profiles: dict[str, dict] = db_store.load_all_profiles()
 histories: dict[int, list[dict]] = {}
-pending_morning: dict[int, str] = {}
+pending_morning: dict[int, str] = {}  # chat_id → morning message text (awaiting task pick)
 pending_evening: dict[int, dict] = {}
 onboarding: dict[int, dict[str, object]] = {}
 # Последнее напоминание по задаче (для «ГОТОВО» в чате).
@@ -1502,15 +1502,43 @@ def _update_today_summary_field(
 ) -> None:
     today = _profile_local_date(profile)
     existing = db_store.get_daily_summary(chat_id, today) or {}
-    db_store.patch_daily_summary(
-        chat_id,
-        today,
-        summary=str(fields.get("summary") or existing.get("summary") or ""),
-        mood=str(fields.get("mood") or existing.get("mood") or ""),
-        key_detail=str(fields.get("key_detail") or existing.get("key_detail") or ""),
-        task=str(fields.get("task") or existing.get("task") or ""),
-        completed=fields.get("completed", existing.get("completed")),
-    )
+    patch: dict[str, object] = {
+        "summary": str(fields.get("summary") or existing.get("summary") or ""),
+        "mood": str(fields.get("mood") or existing.get("mood") or ""),
+        "key_detail": str(fields.get("key_detail") or existing.get("key_detail") or ""),
+        "task": str(fields.get("task") or existing.get("task") or ""),
+    }
+    if "completed" in fields:
+        patch["completed"] = fields["completed"]
+    if "task_completed" in fields:
+        patch["task_completed"] = fields["task_completed"]
+    db_store.patch_daily_summary(chat_id, today, **patch)
+
+
+def _detect_evening_task_completed(text: str) -> str | None:
+    low = (text or "").strip().lower()
+    if not low:
+        return None
+    if any(
+        w in low
+        for w in (
+            "частич",
+            "немного",
+            "половин",
+            "чуть-чуть",
+            "чуть ",
+            "наполовину",
+            "не всё",
+            "не все",
+        )
+    ):
+        return "partial"
+    done, missed = _detect_evening_outcome(text)
+    if done and not missed:
+        return "true"
+    if missed and not done:
+        return "false"
+    return None
 
 
 async def _handle_evening_reply(
@@ -1519,17 +1547,25 @@ async def _handle_evening_reply(
     profile: dict,
     model_names: list[str],
 ) -> str:
-    pending_evening.pop(chat_id, None)
-    done, missed = _detect_evening_outcome(user_text)
-    if done:
-        _update_today_summary_field(chat_id, profile, completed=True)
-        return evening_reply_done()
-    if missed:
-        _update_today_summary_field(chat_id, profile, completed=False)
-        return evening_reply_missed()
+    outcome = _detect_evening_task_completed(user_text)
+    if outcome:
+        pending_evening.pop(chat_id, None)
+        patch: dict[str, object] = {"task_completed": outcome}
+        if outcome == "true":
+            patch["completed"] = True
+        elif outcome == "false":
+            patch["completed"] = False
+        _update_today_summary_field(chat_id, profile, **patch)
+        if outcome == "true":
+            return evening_reply_done()
+        if outcome == "false":
+            return evening_reply_missed()
+        return (
+            "Поняла — частично тоже считается 💙 Завтра добьём остаток или утром наметим план?"
+        )
     return (
         "Расскажи честно — получилось сегодня или нет? "
-        "Мне важно понять, как ты себя чувствуешь.\n\n"
+        "Можно: да / нет / частично.\n\n"
         "Поставим задачу на завтра или утром займёмся?"
     )
 
@@ -2244,34 +2280,48 @@ async def _generate_today_task(profile: dict, model_names: list[str]) -> str:
     return await asyncio.to_thread(call)
 
 
-async def _ensure_today_task_from_morning(
+def _pick_weekly_tactic_from_reply(raw: str, options: str) -> str:
+    text = (raw or "").strip()
+    low = text.lower()
+    parts = [p.strip() for p in re.split(r"\s*/\s*", options or "") if p.strip()]
+    if not parts:
+        return text[:2000]
+    if re.search(r"\b1\b|перв|вариант\s*1", low) and len(parts) >= 1:
+        return parts[0][:2000]
+    if re.search(r"\b2\b|втор|вариант\s*2", low) and len(parts) >= 2:
+        return parts[1][:2000]
+    if re.search(r"\b3\b|трет|вариант\s*3", low) and len(parts) >= 3:
+        return parts[2][:2000]
+    for part in parts:
+        if part.lower() in low or low in part.lower():
+            return part[:2000]
+    return text[:2000]
+
+
+def _pick_morning_task_from_reply(raw: str, morning_text: str) -> str:
+    options = _extract_morning_task_options(morning_text)
+    if options:
+        picked = _pick_weekly_tactic_from_reply(raw, " / ".join(options))
+        if picked:
+            return picked
+    return raw.strip()[:2000]
+
+
+def _save_today_task_choice(
     chat_id: int,
     profile: dict,
-    morning_text: str,
-    model_names: list[str],
+    task: str,
 ) -> None:
     weekly = str(profile.get("weekly_goal") or "").strip()
-    today = _profile_local_date(profile)
-    existing = db_store.get_daily_summary(chat_id, today) or {}
-    current = str(existing.get("task") or "").strip()
-    if current and not _task_equals_weekly_goal(current, weekly):
+    cleaned = _sanitize_today_task(task, weekly_goal=weekly)
+    if not cleaned:
         return
-
-    task = ""
-    for option in _extract_morning_task_options(morning_text):
-        candidate = _sanitize_today_task(option, weekly_goal=weekly)
-        if candidate:
-            task = candidate
-            break
-
-    if not task:
-        generated = await _generate_today_task(profile, model_names)
-        task = _sanitize_today_task(generated, weekly_goal=weekly)
-
-    if not task:
-        return
-
-    _update_today_summary_field(chat_id, profile, task=task)
+    _update_today_summary_field(
+        chat_id,
+        profile,
+        task=cleaned,
+        task_completed=None,
+    )
 
 
 def _maybe_save_task_from_user_reply(
@@ -2281,21 +2331,28 @@ def _maybe_save_task_from_user_reply(
 ) -> None:
     weekly = str(profile.get("weekly_goal") or "").strip()
     raw = (user_text or "").strip()
-    if len(raw) < 4 or len(raw) > 120:
+    if len(raw) < 3 or len(raw) > 200:
         return
     if _looks_like_greeting_or_chat(raw):
+        return
+
+    morning_text = pending_morning.pop(chat_id, "")
+    if morning_text:
+        picked = _pick_morning_task_from_reply(raw, morning_text)
+    else:
+        picked = raw
+
+    picked = _sanitize_today_task(picked, weekly_goal=weekly)
+    if not picked:
         return
 
     today = _profile_local_date(profile)
     existing = db_store.get_daily_summary(chat_id, today) or {}
     current = str(existing.get("task") or "").strip()
-    picked = _sanitize_today_task(raw, weekly_goal=weekly)
-    if not picked:
+    if current == picked and existing.get("task_completed") is None:
         return
-    if current == picked:
-        return
-    if not current or _task_equals_weekly_goal(current, weekly):
-        _update_today_summary_field(chat_id, profile, task=picked)
+    if not current or _task_equals_weekly_goal(current, weekly) or morning_text:
+        _save_today_task_choice(chat_id, profile, picked)
 
 
 _GREETING_TASK_MARKERS = (
@@ -2449,8 +2506,11 @@ def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> di
             task_clean = _sanitize_today_task(task_raw, weekly_goal=weekly)
             if task_clean:
                 p["today_task"] = task_clean
-            if summ.get("completed"):
-                p["today_completed"] = True
+            tc = summ.get("task_completed")
+            if tc is None and summ.get("completed") is not None:
+                tc = "true" if summ.get("completed") else "false"
+            p["task_completed"] = db_store.normalize_task_completed(tc)
+            p["today_completed"] = p["task_completed"] == "true"
 
     p["week_scores"] = _week_scores_array(p)
     p["display_streak"] = _display_streak(p, tid or None)
@@ -2557,9 +2617,7 @@ async def _bootstrap_bot() -> None:
                         await bot.send_message(
                             chat_id=cid, text=text, reply_markup=keyboard
                         )
-                        await _ensure_today_task_from_morning(
-                            cid, profile, text, model_chain
-                        )
+                        pending_morning[cid] = text
                     except Exception as e:
                         log.warning("Morning message failed for %s: %s", cid, e)
 
@@ -2682,7 +2740,12 @@ async def root() -> dict:
     return {
         "service": "SpiceSpace Bot API",
         "ok": True,
-        "endpoints": ["/health", "/api/profile?telegram_id=<digits>", "/api/tasks"],
+        "endpoints": [
+            "/health",
+            "/api/profile?telegram_id=<digits>",
+            "/api/calendar",
+            "/api/tasks",
+        ],
         "miniapp": _mini_app_url(),
         "webapp_static": (WEBAPP_DIR / "index.html").is_file(),
     }
@@ -2869,8 +2932,24 @@ async def patch_profile_timezone_endpoint(
     return {"ok": True}
 
 
-@app.post("/api/mark-day")
-async def mark_day_endpoint(
+def _profile_cycle_start(profile: dict, user_id: str | int) -> date:
+    raw = str(profile.get("cycle_start_date") or "").strip()[:10]
+    if raw:
+        try:
+            return date.fromisoformat(raw)
+        except ValueError:
+            pass
+    rows = db_store.list_daily_summaries(user_id)
+    if rows:
+        try:
+            return date.fromisoformat(rows[0]["date"])
+        except ValueError:
+            pass
+    return _profile_local_date(profile)
+
+
+@app.get("/api/calendar")
+async def calendar_endpoint(
     request: Request,
     telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
 ) -> dict:
@@ -2879,9 +2958,58 @@ async def mark_day_endpoint(
     if not isinstance(profile, dict):
         raise HTTPException(status_code=404, detail="profile not found")
 
+    start = _profile_cycle_start(profile, tid)
     today = _profile_local_date(profile)
-    _update_today_summary_field(int(tid), profile, completed=True)
-    _bump_streak_on_mark(profile, today)
+    by_date = {
+        str(r.get("date", ""))[:10]: r.get("task_completed")
+        for r in db_store.list_daily_summaries(tid)
+        if r.get("date")
+    }
+    days: list[dict] = []
+    for i in range(84):
+        d = start + timedelta(days=i)
+        iso = d.isoformat()
+        days.append(
+            {
+                "date": iso,
+                "task_completed": by_date.get(iso),
+                "is_today": iso == today.isoformat(),
+                "is_future": d > today,
+                "week_index": i // 7,
+                "day_index": i % 7,
+            }
+        )
+    cw = max(1, min(12, int(profile.get("current_week") or 1)))
+    return {
+        "cycle_start_date": start.isoformat(),
+        "current_week": cw,
+        "days": days,
+    }
+
+
+@app.post("/api/mark-day")
+async def mark_day_endpoint(
+    request: Request,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+    body: dict | None = Body(default=None),
+) -> dict:
+    tid = _auth_telegram_id(request, telegram_id)
+    profile = _resolve_user_profile(tid)
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    today = _profile_local_date(profile)
+    tc = "true"
+    if isinstance(body, dict) and body.get("task_completed") is not None:
+        tc = db_store.normalize_task_completed(body.get("task_completed")) or "true"
+    _update_today_summary_field(
+        int(tid),
+        profile,
+        task_completed=tc,
+        completed=(tc == "true"),
+    )
+    if tc == "true":
+        _bump_streak_on_mark(profile, today)
 
     ws = min(100, int(profile.get("weekly_score") or 0) + 15)
     profile["weekly_score"] = ws

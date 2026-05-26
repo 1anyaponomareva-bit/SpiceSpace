@@ -20,6 +20,7 @@ DAILY_SUMMARIES_PATH = DATA_DIR / "daily_summaries.json"
 _base_url = ""
 _service_key = ""
 _use_supabase = False
+_UNSET = object()
 
 
 def init_db() -> bool:
@@ -238,6 +239,21 @@ def get_yesterday_summary(user_id: int | str, tz_name: str) -> dict | None:
     return get_daily_summary(user_id, yesterday)
 
 
+def normalize_task_completed(value: object | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    s = str(value).strip().lower()
+    if s in ("true", "1", "yes", "да", "получилось"):
+        return "true"
+    if s in ("false", "0", "no", "нет", "не получилось"):
+        return "false"
+    if s in ("partial", "частично", "частич", "немного", "половина"):
+        return "partial"
+    return None
+
+
 def upsert_daily_summary(
     user_id: int | str,
     on_date: date,
@@ -247,6 +263,7 @@ def upsert_daily_summary(
     key_detail: str,
     task: str = "",
     completed: bool | None = None,
+    task_completed: str | None | object = _UNSET,
 ) -> None:
     key = str(user_id)
     d = on_date.isoformat()
@@ -260,6 +277,9 @@ def upsert_daily_summary(
     }
     if completed is not None:
         row["completed"] = bool(completed)
+    if task_completed is not _UNSET:
+        tc = normalize_task_completed(task_completed) if task_completed is not None else None
+        row["task_completed"] = tc
 
     if _use_supabase:
         _request(
@@ -279,6 +299,11 @@ def upsert_daily_summary(
     entry = {"summary": summary, "mood": mood, "key_detail": key_detail, "task": task or ""}
     if completed is not None:
         entry["completed"] = bool(completed)
+    if task_completed is not _UNSET:
+        if task_completed is None:
+            entry.pop("task_completed", None)
+        else:
+            entry["task_completed"] = normalize_task_completed(task_completed)
     user_days[d] = entry
     _save_json(DAILY_SUMMARIES_PATH, store)
 
@@ -290,15 +315,63 @@ def patch_daily_summary(
 ) -> None:
     """Merge fields into today's summary (creates minimal row if missing)."""
     existing = get_daily_summary(user_id, on_date) or {}
-    upsert_daily_summary(
-        user_id,
-        on_date,
-        summary=str(fields.get("summary") or existing.get("summary") or ""),
-        mood=str(fields.get("mood") or existing.get("mood") or ""),
-        key_detail=str(fields.get("key_detail") or existing.get("key_detail") or ""),
-        task=str(fields.get("task") or existing.get("task") or ""),
-        completed=fields["completed"] if "completed" in fields else existing.get("completed"),
-    )
+    kwargs: dict[str, Any] = {
+        "summary": str(fields.get("summary") or existing.get("summary") or ""),
+        "mood": str(fields.get("mood") or existing.get("mood") or ""),
+        "key_detail": str(fields.get("key_detail") or existing.get("key_detail") or ""),
+        "task": str(fields.get("task") or existing.get("task") or ""),
+    }
+    if "completed" in fields:
+        kwargs["completed"] = fields["completed"]
+    else:
+        kwargs["completed"] = existing.get("completed")
+    if "task_completed" in fields:
+        kwargs["task_completed"] = fields["task_completed"]
+    else:
+        kwargs["task_completed"] = _UNSET
+    upsert_daily_summary(user_id, on_date, **kwargs)
+
+
+def list_daily_summaries(user_id: int | str) -> list[dict]:
+    key = str(user_id)
+    out: list[dict] = []
+    if _use_supabase:
+        rows = (
+            _request(
+                "GET",
+                f"daily_summaries?user_id=eq.{key}&select=summary_date,task_completed,completed&order=summary_date.asc",
+            )
+            or []
+        )
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            d = str(row.get("summary_date", ""))[:10]
+            if not d:
+                continue
+            tc = row.get("task_completed")
+            if tc is None and row.get("completed") is not None:
+                tc = "true" if row.get("completed") else "false"
+            out.append({"date": d, "task_completed": normalize_task_completed(tc)})
+        if out:
+            return out
+    store = _load_json(DAILY_SUMMARIES_PATH, {})
+    user_days = store.get(key, {}) if isinstance(store, dict) else {}
+    if not isinstance(user_days, dict):
+        return []
+    for d, row in sorted(user_days.items()):
+        if not isinstance(row, dict):
+            continue
+        tc = row.get("task_completed")
+        if tc is None and row.get("completed") is not None:
+            tc = "true" if row.get("completed") else "false"
+        out.append(
+            {
+                "date": str(d)[:10],
+                "task_completed": normalize_task_completed(tc),
+            }
+        )
+    return out
 
 
 def _profile_to_row(p: dict) -> dict:
@@ -326,6 +399,7 @@ def _profile_to_row(p: dict) -> dict:
         "weekly_goal": p.get("weekly_goal"),
         "weekly_score": p.get("weekly_score", 0),
         "time_per_day": p.get("time_per_day"),
+        "cycle_start_date": p.get("cycle_start_date"),
     }
 
 
@@ -351,6 +425,7 @@ def _row_to_profile(row: dict) -> dict:
     p.setdefault("vision", p.get("vision") or "")
     p.setdefault("weekly_goal", p.get("weekly_goal") or "")
     p.setdefault("time_per_day", p.get("time_per_day") or "")
+    p.setdefault("cycle_start_date", p.get("cycle_start_date") or "")
     return p
 
 
@@ -364,4 +439,8 @@ def _row_to_summary(row: dict) -> dict:
     }
     if row.get("completed") is not None:
         out["completed"] = bool(row["completed"])
+    if "task_completed" in row:
+        out["task_completed"] = normalize_task_completed(row.get("task_completed"))
+    elif row.get("completed") is not None:
+        out["task_completed"] = "true" if row.get("completed") else "false"
     return out
