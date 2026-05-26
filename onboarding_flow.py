@@ -766,9 +766,10 @@ def _fallback_weekly_tactics_reply(
         g = (main_goal or "твоя цель")[:60]
         return {
             "message": (
-                f"На первую неделю могу предложить: маленький шаг к «{g}» / "
-                f"30 минут на самое простое / одно действие с видимым результатом. "
-                f"Что берёшь или своё?"
+                f"Первая неделя. Исходя из твоей цели «{g}» — "
+                f"что хочешь сделать на этой неделе? Можешь выбрать одно из: "
+                f"собрать первых тестировщиков / настроить оплату / запустить первый контент. "
+                f"Или предложи своё."
             ),
             "ready": False,
             "weekly_goal": "",
@@ -825,6 +826,10 @@ async def _claude_weekly_tactics_dialog(
                 log.warning("weekly_tactics_dialog bad JSON model=%s raw=%s", mid, text[:400])
             except Exception as e:
                 log.warning("weekly_tactics_dialog %s: %s", mid, e, exc_info=True)
+        log.error(
+            "weekly_tactics_dialog: all models failed, using fallback. main_goal=%s",
+            (main_goal or "")[:100],
+        )
         return _fallback_weekly_tactics_reply(
             weekly_turns,
             main_goal=main_goal,
