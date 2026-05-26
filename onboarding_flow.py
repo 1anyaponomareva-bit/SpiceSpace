@@ -1487,7 +1487,6 @@ async def handle_onboarding_turn(
         turns.append({"role": "assistant", "content": reply[:2000]})
 
         if result.get("ready") and result.get("weekly_goal"):
-            await msg.reply_text(reply)
             await _complete_weekly_tactics_pick(result["weekly_goal"])
         else:
             await msg.reply_text(reply)
