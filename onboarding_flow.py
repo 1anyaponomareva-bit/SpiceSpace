@@ -1403,12 +1403,12 @@ async def handle_onboarding_turn(
         st["vision_turns"] = []
         await msg.reply_text(greeting_after_name(name))
         await asyncio.sleep(1)
+        await msg.reply_text(vision_question_message())
+        await asyncio.sleep(1)
         await msg.reply_text(
             "Кстати — всё что ты пишешь здесь остаётся между нами. "
             "Твои цели и наши разговоры не видит никто другой. 🔒"
         )
-        await asyncio.sleep(1)
-        await msg.reply_text(vision_question_message())
         return
 
     if step == OB_VISION_DIALOG:
