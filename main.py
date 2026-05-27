@@ -1456,6 +1456,27 @@ def _format_today_conversation_context(chat_id: int, max_turns: int = 10) -> str
     return "\n".join(lines)
 
 
+def _exact_name_prompt_instruction(profile: dict, chat_id: int | None = None) -> str:
+    name = str(profile.get("name", "")).strip()
+    if not name:
+        return "Имя в профиле не указано — не выдумывай и не сокращай имя."
+    line = f"Имя пользователя: {name}. Используй только это имя, не сокращай."
+    if chat_id is not None:
+        ctx = _format_today_conversation_context(chat_id).lower()
+        if any(
+            p in ctx
+            for p in (
+                "не называй",
+                "не зови",
+                "не называй меня",
+                "полным именем",
+                "не сокращ",
+            )
+        ):
+            line += " Пользователь просил не сокращать — строго соблюдай."
+    return line
+
+
 def _format_time_per_day_for_prompt(profile: dict) -> str:
     raw = str(profile.get("time_per_day") or "").strip()
     if not raw:
@@ -1472,7 +1493,9 @@ async def _morning_message_text(
 ) -> str:
     tz_name = str(profile.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name) or {}
-    name = str(profile.get("name", "")).strip() or "подруга"
+    name = str(profile.get("name", "")).strip()
+    display_name = name or "подруга"
+    name_instruction = _exact_name_prompt_instruction(profile, chat_id)
     main_goal = str(
         profile.get("main_goal") or profile.get("final_goal") or ""
     ).strip() or "не указана"
@@ -1483,13 +1506,21 @@ async def _morning_message_text(
     ).strip() or "нет"
     time_per_day = _format_time_per_day_for_prompt(profile)
 
-    user_content = MORNING_MESSAGE_PROMPT.format(
-        name=name,
-        vision=vision,
-        main_goal=main_goal,
-        weekly_goal=weekly_goal,
-        last_summary=last_summary,
-        time_per_day=time_per_day,
+    user_content = (
+        f"{name_instruction}\n\n"
+        + MORNING_MESSAGE_PROMPT.format(
+            name=display_name,
+            vision=vision,
+            main_goal=main_goal,
+            weekly_goal=weekly_goal,
+            last_summary=last_summary,
+            time_per_day=time_per_day,
+        )
+    )
+
+    morning_system = (
+        "Напиши только текст утреннего сообщения для Telegram. Без markdown.\n"
+        f"{name_instruction}"
     )
 
     def call() -> str:
@@ -1501,7 +1532,7 @@ async def _morning_message_text(
                         [{"role": "user", "content": user_content}],
                         system=prepend_user_time(
                             profile,
-                            "Напиши только текст утреннего сообщения для Telegram. Без markdown.",
+                            morning_system,
                         ),
                         max_tokens=360,
                         cache_core=False,
@@ -1512,7 +1543,7 @@ async def _morning_message_text(
             except Exception as e:
                 log.warning("morning message %s: %s", mid, e)
         return morning_opening(
-            name,
+            display_name,
             weekly_goal=weekly_goal,
             main_goal=main_goal,
             vision=vision,
@@ -1541,27 +1572,6 @@ def _today_has_task(chat_id: int, profile: dict) -> bool:
     return bool(str(summ.get("task") or "").strip())
 
 
-def _evening_name_rule(profile: dict, chat_id: int) -> str:
-    name = str(profile.get("name") or "").strip()
-    base = (
-        f"Имя в профиле: {name or 'не указано'}. "
-        "Обращайся только полным именем из профиля, без уменьшительных."
-    )
-    ctx = _format_today_conversation_context(chat_id).lower()
-    if any(
-        p in ctx
-        for p in (
-            "не называй",
-            "не зови",
-            "не называй меня",
-            "полным именем",
-            "не сокращ",
-        )
-    ):
-        return base + " Пользователь просил не сокращать имя — строго соблюдай."
-    return base
-
-
 async def _evening_message_text(
     chat_id: int,
     profile: dict,
@@ -1577,9 +1587,10 @@ async def _evening_message_text(
     if not summary_text and not today_context:
         return evening_opening(has_task=has_task)
 
-    name = str(profile.get("name") or "").strip() or "подруга"
+    name = str(profile.get("name", "")).strip()
+    display_name = name or "подруга"
+    name_instruction = _exact_name_prompt_instruction(profile, chat_id)
     goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
-    name_rule = _evening_name_rule(profile, chat_id)
 
     summary_lines: list[str] = []
     if summary_text:
@@ -1595,13 +1606,20 @@ async def _evening_message_text(
     summary_block = "\n".join(summary_lines) if summary_lines else "пока нет сводки"
 
     prompt_tpl = EVENING_MESSAGE_PROMPT if has_task else EVENING_NO_TASK_PROMPT
-    user_content = prompt_tpl.format(
-        name=name,
-        goal=goal or "не указана",
-        summary_block=summary_block,
-        today_context=today_context or "пока мало переписки",
-        today_task=task or "не задана",
-        name_rule=name_rule,
+    user_content = (
+        f"{name_instruction}\n\n"
+        + prompt_tpl.format(
+            name=display_name,
+            goal=goal or "не указана",
+            summary_block=summary_block,
+            today_context=today_context or "пока мало переписки",
+            today_task=task or "не задана",
+            name_rule=name_instruction,
+        )
+    )
+    evening_system = prepend_user_time(
+        profile,
+        f"{_EVENING_PERSONAL_SYSTEM}\n\n{name_instruction}",
     )
 
     def call() -> str:
@@ -1611,7 +1629,7 @@ async def _evening_message_text(
                     claude_generate(
                         mid,
                         [{"role": "user", "content": user_content}],
-                        system=prepend_user_time(profile, _EVENING_PERSONAL_SYSTEM),
+                        system=evening_system,
                         max_tokens=200,
                         cache_core=False,
                     ).strip()
