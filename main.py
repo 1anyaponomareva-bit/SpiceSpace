@@ -64,7 +64,6 @@ from telegram import (
     Update,
     WebAppInfo,
 )
-from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
