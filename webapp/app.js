@@ -301,7 +301,7 @@
     document.querySelector('.settings-block')?.classList.add('loaded');
   }
 
-  const TODAY_TASK_FALLBACK = 'Обсуди задачу с ботом утром';
+  const TODAY_TASK_FALLBACK = 'Задача будет поставлена утром 🌅';
 
   function normalizeGoalText(text) {
     return String(text || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -316,10 +316,13 @@
     return false;
   }
 
-  function displayTodayTask(prof) {
-    const raw = (prof.today_task || '').trim();
-    if (!raw || raw.length > 120) return '';
-    const low = raw.toLowerCase();
+  function isValidTask(task) {
+    if (!task) return false;
+    if (task.length > 150) return false;
+    const invalidStarts = ['Мне кажется', 'Я думаю', 'Привет', 'Слушай', 'Кстати'];
+    if (invalidStarts.some((s) => task.startsWith(s))) return false;
+    if (task.includes('?') && task.length < 30) return false;
+    const low = task.toLowerCase();
     if (
       /^привет[,\s!👋]/.test(low)
       || low.includes('доброе утро')
@@ -327,8 +330,14 @@
       || low.includes('продуктивн')
       || (low.match(/\?/g) || []).length >= 2
     ) {
-      return '';
+      return false;
     }
+    return true;
+  }
+
+  function displayTodayTask(prof) {
+    const raw = (prof.today_task || '').trim();
+    if (!isValidTask(raw)) return '';
     if (taskEqualsWeekly(raw, prof.weekly_goal)) return '';
     return raw;
   }

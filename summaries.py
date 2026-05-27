@@ -48,8 +48,14 @@ def _sanitize_summary_task(task: str, weekly_goal: str = "") -> str:
             "давай начн",
             "продуктивн",
             "сколько времени",
+            "мне кажется",
+            "я думаю",
+            "слушай",
+            "кстати",
         )
     ):
+        return ""
+    if "?" in t and len(t) < 30:
         return ""
     if low.count("?") >= 2:
         return ""
@@ -132,13 +138,16 @@ def save_summary_for_today(
             )
             parsed = _parse_summary_json(raw, weekly_goal=weekly_goal)
             if parsed:
+                task = parsed.get("task", "")
+                if not _sanitize_summary_task(task, weekly_goal=weekly_goal):
+                    task = ""
                 upsert_daily_summary(
                     user_id,
                     today,
                     summary=parsed["summary"],
                     mood=parsed["mood"],
                     key_detail=parsed["key_detail"],
-                    task=parsed.get("task", ""),
+                    task=task,
                     completed=parsed.get("completed"),
                 )
                 log.info("daily_summary saved user=%s date=%s", user_id, today)

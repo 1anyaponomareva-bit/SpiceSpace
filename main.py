@@ -1550,13 +1550,38 @@ def _update_today_summary_field(
         "summary": str(fields.get("summary") or existing.get("summary") or ""),
         "mood": str(fields.get("mood") or existing.get("mood") or ""),
         "key_detail": str(fields.get("key_detail") or existing.get("key_detail") or ""),
-        "task": str(fields.get("task") or existing.get("task") or ""),
     }
+    if "task" in fields:
+        patch["task"] = str(fields.get("task") or "")
+    else:
+        patch["task"] = str(existing.get("task") or "")
     if "completed" in fields:
         patch["completed"] = fields["completed"]
     if "task_completed" in fields:
         patch["task_completed"] = fields["task_completed"]
     db_store.patch_daily_summary(chat_id, today, **patch)
+
+
+def save_daily_task(
+    chat_id: int,
+    profile: dict,
+    task: str,
+    *,
+    source: str = "conversation",
+) -> None:
+    """Persist today's task. Only morning_flow may overwrite an existing task."""
+    weekly = str(profile.get("weekly_goal") or "").strip()
+    cleaned = _sanitize_today_task(task, weekly_goal=weekly)
+    if not cleaned:
+        return
+    today = _profile_local_date(profile)
+    existing = db_store.get_daily_summary(chat_id, today) or {}
+    if source != "morning_flow" and str(existing.get("task") or "").strip():
+        return
+    patch: dict[str, object] = {"task": cleaned}
+    if source == "morning_flow":
+        patch["task_completed"] = None
+    _update_today_summary_field(chat_id, profile, **patch)
 
 
 def _detect_evening_task_completed(text: str) -> str | None:
@@ -2369,16 +2394,7 @@ def _save_today_task_choice(
     profile: dict,
     task: str,
 ) -> None:
-    weekly = str(profile.get("weekly_goal") or "").strip()
-    cleaned = _sanitize_today_task(task, weekly_goal=weekly)
-    if not cleaned:
-        return
-    _update_today_summary_field(
-        chat_id,
-        profile,
-        task=cleaned,
-        task_completed=None,
-    )
+    save_daily_task(chat_id, profile, task, source="morning_flow")
 
 
 def _maybe_save_task_from_user_reply(
@@ -2399,6 +2415,9 @@ def _maybe_save_task_from_user_reply(
     else:
         picked = raw
 
+    if not morning_text:
+        return
+
     picked = _sanitize_today_task(picked, weekly_goal=weekly)
     if not picked:
         return
@@ -2408,8 +2427,7 @@ def _maybe_save_task_from_user_reply(
     current = str(existing.get("task") or "").strip()
     if current == picked and existing.get("task_completed") is None:
         return
-    if not current or _task_equals_weekly_goal(current, weekly) or morning_text:
-        _save_today_task_choice(chat_id, profile, picked)
+    _save_today_task_choice(chat_id, profile, picked)
 
 
 _GREETING_TASK_MARKERS = (
@@ -2433,12 +2451,17 @@ def _looks_like_greeting_or_chat(text: str) -> bool:
     low = (text or "").strip().lower()
     if not low:
         return True
-    if len(low) > 120:
+    if len(low) > 150:
         return True
     if low.count("?") >= 2:
         return True
+    if "?" in low and len(low) < 30:
+        return True
     if re.match(r"^привет[,\s!👋]", low):
         return True
+    for prefix in ("мне кажется", "я думаю", "слушай", "кстати"):
+        if low.startswith(prefix):
+            return True
     return any(m in low for m in _GREETING_TASK_MARKERS)
 
 
