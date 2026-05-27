@@ -41,6 +41,7 @@ from bot_typing import typing_while
 from claude_client import build_model_chain, configure as configure_claude, generate as claude_generate
 from claude_client import select_model_id
 from prompts import (
+    EVENING_MESSAGE_PROMPT,
     MORNING_MESSAGE_PROMPT,
     TODAY_TASK_PROMPT,
     build_chat_system,
@@ -1419,6 +1420,22 @@ def _history_context_snippet(chat_id: int, max_turns: int = 14, max_chars: int =
     return "\n".join(lines)
 
 
+def _format_today_conversation_context(chat_id: int, max_turns: int = 10) -> str:
+    hist = histories.get(chat_id) or []
+    if not hist:
+        return ""
+    lines: list[str] = []
+    for turn in hist[-max_turns:]:
+        role = turn.get("role")
+        parts = turn.get("parts") or []
+        content = str(parts[0] if parts else "").strip()
+        if not content:
+            continue
+        label = "Пользователь" if role == "user" else "Спейс"
+        lines.append(f"{label}: {content[:200]}")
+    return "\n".join(lines)
+
+
 def _format_time_per_day_for_prompt(profile: dict) -> str:
     raw = str(profile.get("time_per_day") or "").strip()
     if not raw:
@@ -1486,9 +1503,7 @@ async def _morning_message_text(
 
 
 _EVENING_PERSONAL_SYSTEM = (
-    "Ты Спейс. Пользователь уже рассказал тебе как прошёл день. "
-    "Напиши короткое вечернее сообщение — подведи итог и спроси поставим задачу на завтра "
-    "или утром займёмся. Используй то что знаешь из summary. 2-3 предложения максимум."
+    "Напиши только текст вечернего сообщения для Telegram. Без markdown."
 )
 
 
@@ -1499,28 +1514,34 @@ async def _evening_message_text(
 ) -> str:
     today = _profile_local_date(profile)
     today_summary = db_store.get_daily_summary(chat_id, today) or {}
+    today_context = _format_today_conversation_context(chat_id)
     summary_text = str(today_summary.get("summary") or "").strip()
-    if not summary_text:
+
+    if not summary_text and not today_context:
         return evening_opening()
 
     name = str(profile.get("name") or "").strip() or "подруга"
     goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
-    parts = [f"summary: {summary_text}"]
+
+    summary_lines: list[str] = []
+    if summary_text:
+        summary_lines.append(f"summary: {summary_text}")
     mood = str(today_summary.get("mood") or "").strip()
     key_detail = str(today_summary.get("key_detail") or "").strip()
     task = str(today_summary.get("task") or "").strip()
     if mood:
-        parts.append(f"mood: {mood}")
+        summary_lines.append(f"mood: {mood}")
     if key_detail:
-        parts.append(f"key_detail: {key_detail}")
+        summary_lines.append(f"key_detail: {key_detail}")
     if task:
-        parts.append(f"task: {task}")
+        summary_lines.append(f"task: {task}")
+    summary_block = "\n".join(summary_lines) if summary_lines else "пока нет сводки"
 
-    user_content = (
-        f"Профиль:\n"
-        f"Имя: {name}\n"
-        f"Цель: {goal or 'не указана'}\n\n"
-        f"Сегодня:\n" + "\n".join(parts)
+    user_content = EVENING_MESSAGE_PROMPT.format(
+        name=name,
+        goal=goal or "не указана",
+        summary_block=summary_block,
+        today_context=today_context or "пока мало переписки",
     )
 
     def call() -> str:
