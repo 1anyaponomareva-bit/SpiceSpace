@@ -42,6 +42,7 @@ from claude_client import build_model_chain, configure as configure_claude, gene
 from claude_client import select_model_id
 from prompts import (
     EVENING_MESSAGE_PROMPT,
+    EVENING_NO_TASK_PROMPT,
     MORNING_MESSAGE_PROMPT,
     TODAY_TASK_PROMPT,
     build_chat_system,
@@ -1522,7 +1523,8 @@ async def _morning_message_text(
 
 
 _EVENING_PERSONAL_SYSTEM = (
-    "Напиши только текст вечернего сообщения для Telegram. Без markdown.\n\n"
+    "Напиши только текст вечернего сообщения для Telegram. Без markdown.\n"
+    "Обращайся по имени из профиля полностью — не сокращай (не «Поля», если имя Полина).\n\n"
     "ЗАПРЕЩЕНО:\n"
     '- Говорить "сделала!", "выполнила!", "молодец!" когда пользователь только собирается что-то сделать\n'
     '- Путать намерение ("давай сделаем") с фактом ("сделала")\n'
@@ -1531,6 +1533,33 @@ _EVENING_PERSONAL_SYSTEM = (
     'Если пользователь говорит "давай наметим задачу" — он ХОЧЕТ поставить задачу, а не выполнил её.\n'
     'Просто спроси: "Что конкретно сделаешь завтра?"'
 )
+
+
+def _today_has_task(chat_id: int, profile: dict) -> bool:
+    today = _profile_local_date(profile)
+    summ = db_store.get_daily_summary(chat_id, today) or {}
+    return bool(str(summ.get("task") or "").strip())
+
+
+def _evening_name_rule(profile: dict, chat_id: int) -> str:
+    name = str(profile.get("name") or "").strip()
+    base = (
+        f"Имя в профиле: {name or 'не указано'}. "
+        "Обращайся только полным именем из профиля, без уменьшительных."
+    )
+    ctx = _format_today_conversation_context(chat_id).lower()
+    if any(
+        p in ctx
+        for p in (
+            "не называй",
+            "не зови",
+            "не называй меня",
+            "полным именем",
+            "не сокращ",
+        )
+    ):
+        return base + " Пользователь просил не сокращать имя — строго соблюдай."
+    return base
 
 
 async def _evening_message_text(
@@ -1542,19 +1571,21 @@ async def _evening_message_text(
     today_summary = db_store.get_daily_summary(chat_id, today) or {}
     today_context = _format_today_conversation_context(chat_id)
     summary_text = str(today_summary.get("summary") or "").strip()
+    task = str(today_summary.get("task") or "").strip()
+    has_task = bool(task)
 
     if not summary_text and not today_context:
-        return evening_opening()
+        return evening_opening(has_task=has_task)
 
     name = str(profile.get("name") or "").strip() or "подруга"
     goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
+    name_rule = _evening_name_rule(profile, chat_id)
 
     summary_lines: list[str] = []
     if summary_text:
         summary_lines.append(f"summary: {summary_text}")
     mood = str(today_summary.get("mood") or "").strip()
     key_detail = str(today_summary.get("key_detail") or "").strip()
-    task = str(today_summary.get("task") or "").strip()
     if mood:
         summary_lines.append(f"mood: {mood}")
     if key_detail:
@@ -1563,11 +1594,14 @@ async def _evening_message_text(
         summary_lines.append(f"task: {task}")
     summary_block = "\n".join(summary_lines) if summary_lines else "пока нет сводки"
 
-    user_content = EVENING_MESSAGE_PROMPT.format(
+    prompt_tpl = EVENING_MESSAGE_PROMPT if has_task else EVENING_NO_TASK_PROMPT
+    user_content = prompt_tpl.format(
         name=name,
         goal=goal or "не указана",
         summary_block=summary_block,
         today_context=today_context or "пока мало переписки",
+        today_task=task or "не задана",
+        name_rule=name_rule,
     )
 
     def call() -> str:
@@ -1586,7 +1620,7 @@ async def _evening_message_text(
                     return text
             except Exception as e:
                 log.warning("evening personal message %s: %s", mid, e)
-        return evening_opening()
+        return evening_opening(has_task=has_task)
 
     return await asyncio.to_thread(call)
 
@@ -1764,6 +1798,7 @@ async def _handle_evening_reply(
     model_names: list[str],
 ) -> str:
     state = pending_evening.setdefault(chat_id, {})
+    has_task = _today_has_task(chat_id, profile)
 
     if state.get("awaiting_tomorrow_task"):
         task = (user_text or "").strip()
@@ -1776,6 +1811,13 @@ async def _handle_evening_reply(
     if _wants_evening_task_planning(user_text):
         state["awaiting_tomorrow_task"] = True
         return "Что конкретно сделаешь завтра?"
+
+    if not has_task:
+        pending_evening.pop(chat_id, None)
+        return (
+            "Спасибо, что написала 💙 Завтра утром наметим задачу — "
+            "или напиши сейчас, если хочешь наметить на завтра."
+        )
 
     outcome = _detect_evening_task_completed(user_text)
     if outcome:
@@ -2158,10 +2200,17 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
     if cid in pending_evening:
-        prof_evening = prof_d or _resolve_user_profile(str(cid)) or {}
-        reply = await _handle_evening_reply(cid, raw, prof_evening, model_names)
-        _append_history_turn(cid, raw, reply)
-        await _bot_reply(update.message, reply)
+        pe_state = pending_evening.setdefault(cid, {})
+        if pe_state.get("replied"):
+            return
+        pe_state["replied"] = True
+        try:
+            prof_evening = prof_d or _resolve_user_profile(str(cid)) or {}
+            reply = await _handle_evening_reply(cid, raw, prof_evening, model_names)
+            _append_history_turn(cid, raw, reply)
+            await _bot_reply(update.message, reply)
+        finally:
+            pe_state["replied"] = False
         return
 
     if cid in pending_natural_reminder and prof_d:
@@ -2833,7 +2882,7 @@ async def _bootstrap_bot() -> None:
 
                 if _time_in_window(evening_time, now_hm) and profile.get("last_evening_sent_date") != today:
                     try:
-                        pending_evening[cid] = {"date": today}
+                        pending_evening[cid] = {"date": today, "replied": False}
                         async with typing_while(bot, cid):
                             evening_text = await _evening_message_text(
                                 cid, profile, model_chain
