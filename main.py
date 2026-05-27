@@ -124,9 +124,53 @@ CHANGE_WEEKLY_TRIGGERS = [
     "давай поменяем план на неделю",
 ]
 
+ADD_12W_GOAL_MARKERS = [
+    "добавить",
+    "ещё одн",
+    "еще одн",
+    "вторая цель",
+    "третья цель",
+    "вторую цель",
+    "третью цель",
+    "параллельно",
+    "ещё цель",
+    "еще цель",
+    "две цели",
+    "несколько цел",
+    "вместе с этой",
+    "плюс ещё",
+    "плюс еще",
+]
+
+REPLACE_12W_GOAL_MARKERS = [
+    "поменять",
+    "изменить",
+    "заменить",
+    "другая цель",
+    "хочу другую",
+    "смени цель",
+    "сменить цель",
+    "поменяй цель",
+    "начать заново",
+    "новый цикл",
+    "change goal",
+    "reset goal",
+    "не та цель",
+    "пересмотреть цель",
+]
+
+
+def _wants_to_add_second_12w_goal(text: str) -> bool:
+    text_lower = (text or "").lower()
+    return any(m in text_lower for m in ADD_12W_GOAL_MARKERS)
+
 
 def _wants_to_change_12w_goal(text: str) -> bool:
     text_lower = (text or "").lower()
+    if _wants_to_add_second_12w_goal(text_lower):
+        return False
+    if any(m in text_lower for m in REPLACE_12W_GOAL_MARKERS):
+        return True
     return any(t in text_lower for t in CHANGE_GOAL_TRIGGERS)
 
 
