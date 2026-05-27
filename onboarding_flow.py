@@ -1401,9 +1401,13 @@ async def handle_onboarding_turn(
         st["name"] = name
         st["step"] = OB_VISION_DIALOG
         st["vision_turns"] = []
-        await msg.reply_text(greeting_after_name(name))
-        await asyncio.sleep(1)
-        await msg.reply_text(vision_question_message())
+        n = (name or "").strip() or "подруга"
+        await msg.reply_text(
+            f"{n}, приятно познакомиться 💙\n\n"
+            "Прежде чем ставить цели — давай помечтаем.\n\n"
+            "Представь: прошло 3 месяца, и всё получилось именно так как ты хотела. "
+            "Как выглядит твой день? Что изменилось в твоей жизни?"
+        )
         await asyncio.sleep(1)
         await msg.reply_text(
             "Кстати — всё что ты пишешь здесь остаётся между нами. "
