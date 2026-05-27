@@ -2836,6 +2836,8 @@ async def _bootstrap_bot() -> None:
 
     await telegram_app.initialize()
     await telegram_app.start()
+    await bot.delete_webhook(drop_pending_updates=False)
+    await asyncio.sleep(3)
     await telegram_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
     log.info(
         "Telegram polling started. Claude primary=%s chain=%s",
