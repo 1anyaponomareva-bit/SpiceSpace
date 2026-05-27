@@ -801,30 +801,29 @@ def _morning_template(profile: dict) -> str:
     )
 
 
-db_store.init_db()
-log.info("=== SUPABASE DEBUG ===")
-log.info("SUPABASE_URL: %s", (os.getenv("SUPABASE_URL") or "NOT SET")[:40])
-log.info(
-    "SUPABASE_KEY: %s",
-    "SET" if os.getenv("SUPABASE_SERVICE_ROLE_KEY") else "NOT SET",
-)
-log.info("DB _use_supabase: %s", db_store._use_supabase)
-test = db_store._request("GET", "user_profiles?limit=1")
-log.info("Supabase test query result: %s", test)
-
-if db_store._use_supabase:
+result = db_store.init_db()
+if result:
     existing = db_store._request("GET", "user_profiles?select=user_id&limit=1")
+    log.info("Supabase existing records: %s", existing)
     if not existing:
         log.info("Supabase empty — migrating from JSON...")
-        json_path = db_store.USER_PROFILES_PATH
+        json_path = Path(__file__).parent / "user_profiles.json"
+        log.info("JSON path: %s exists: %s", json_path, json_path.exists())
         if json_path.exists():
-            raw_profiles = json.loads(json_path.read_text(encoding="utf-8"))
-            if isinstance(raw_profiles, dict):
-                for uid, profile in raw_profiles.items():
+            profiles = json.loads(json_path.read_text(encoding="utf-8"))
+            if isinstance(profiles, dict):
+                log.info("Found %d profiles in JSON", len(profiles))
+                for uid, profile in profiles.items():
                     if isinstance(profile, dict):
                         db_store.upsert_profile(uid, profile)
-                        log.info("Migrated profile user_id=%s", uid)
+                        log.info(
+                            "Migrated profile user_id=%s name=%s",
+                            uid,
+                            profile.get("name"),
+                        )
         log.info("Migration complete")
+    else:
+        log.info("Supabase already has data — skipping migration")
 
 subscribers: set[int] = db_store.load_subscribers()
 user_profiles: dict[str, dict] = db_store.load_all_profiles()
