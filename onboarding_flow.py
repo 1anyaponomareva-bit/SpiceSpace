@@ -614,7 +614,7 @@ async def _propose_goal_confirm(
     model_names: list[str],
     after: str,
 ) -> None:
-    bot = await msg.get_bot()
+    bot = msg.get_bot()
     async with typing_while(bot, msg.chat_id):
         polished = await _polish_goal(raw, goal_type, model_names)
     if not polished.strip():
@@ -858,7 +858,7 @@ async def _start_weekly_tactics_dialog(
     st: dict,
     model_names: list[str],
 ) -> None:
-    bot = await msg.get_bot()
+    bot = msg.get_bot()
     st["weekly_turns"] = []
     async with typing_while(bot, msg.chat_id):
         result = await _claude_weekly_tactics_dialog(
