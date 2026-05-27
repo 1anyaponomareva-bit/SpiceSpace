@@ -37,6 +37,7 @@ import uvicorn
 
 import db as db_store
 import onboarding_flow as ob
+from bot_typing import typing_while
 from claude_client import build_model_chain, configure as configure_claude, generate as claude_generate
 from claude_client import select_model_id
 from prompts import (
@@ -1822,37 +1823,6 @@ async def _coach_reply_photo(
     return reply
 
 
-async def _typing_loop(bot, chat_id: int) -> None:
-    """Держит индикатор «печатает…» в шапке чата, пока работает Claude.
-    Telegram гасит chat_action через ~5 секунд, поэтому повторяем каждые 4 секунды."""
-    try:
-        while True:
-            try:
-                await bot.send_chat_action(chat_id, ChatAction.TYPING)
-            except Exception:
-                pass
-            await asyncio.sleep(4)
-    except asyncio.CancelledError:
-        return
-
-
-async def _send_thinking_placeholder(message):
-    """Отправляет временное сообщение «Думаю…», которое позже заменим на финальный ответ."""
-    try:
-        return await message.reply_text("Думаю…")
-    except Exception:
-        return None
-
-
-async def _replace_with_reply(placeholder, message, text: str) -> None:
-    """Меняет «Думаю…» на финальный ответ."""
-    if placeholder is not None:
-        with suppress(Exception):
-            await placeholder.delete()
-    with suppress(Exception):
-        await message.reply_text(text)
-
-
 def _parse_daily_time(raw: str) -> str | None:
     m = re.fullmatch(r"(\d{1,2}):(\d{2})", raw.strip())
     if not m:
@@ -2147,37 +2117,28 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     log.info("incoming text chat_id=%s len=%s", cid, len(raw))
 
-    # Пользователю важно видеть, что бот «думает», а не пропал на 3–5 секунд.
-    placeholder = await _send_thinking_placeholder(update.message)
-    typing_task = asyncio.create_task(_typing_loop(context.bot, cid))
     try:
-        try:
+        async with typing_while(context.bot, cid):
             reply = await _coach_reply(cid, raw, model_names)
-        except anthropic.RateLimitError:
-            log.exception("Claude quota exhausted")
-            await _replace_with_reply(
-                placeholder,
-                update.message,
-                "У Claude API сейчас лимит запросов (ошибка 429): слишком частые сообщения "
-                "или дневная квота исчерпана. Подожди 1–2 минуты и напиши снова.\n\n"
-                "Если так постоянно: проверь ключ и лимиты в консоли Anthropic "
-                "(https://console.anthropic.com) — при необходимости смени модель в .env (CLAUDE_MODEL).",
-            )
-            return
-        except Exception as e:
-            log.exception("Claude error: %s", e)
-            await _replace_with_reply(
-                placeholder,
-                update.message,
-                "Сейчас не получилось связаться с моделью. Попробуй ещё раз через минуту.",
-            )
-            return
-    finally:
-        typing_task.cancel()
-        with suppress(Exception):
-            await typing_task
+    except anthropic.RateLimitError:
+        log.exception("Claude quota exhausted")
+        await _bot_reply(
+            update.message,
+            "У Claude API сейчас лимит запросов (ошибка 429): слишком частые сообщения "
+            "или дневная квота исчерпана. Подожди 1–2 минуты и напиши снова.\n\n"
+            "Если так постоянно: проверь ключ и лимиты в консоли Anthropic "
+            "(https://console.anthropic.com) — при необходимости смени модель в .env (CLAUDE_MODEL).",
+        )
+        return
+    except Exception as e:
+        log.exception("Claude error: %s", e)
+        await _bot_reply(
+            update.message,
+            "Сейчас не получилось связаться с моделью. Попробуй ещё раз через минуту.",
+        )
+        return
 
-    await _replace_with_reply(placeholder, update.message, reply)
+    await _bot_reply(update.message, reply)
     if prof_d:
         await _try_save_task_from_message(cid, reply, raw, prof_d)
 
@@ -2210,36 +2171,28 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     log.info("incoming photo chat_id=%s caption_len=%s", cid, len(caption))
 
-    placeholder = await _send_thinking_placeholder(msg)
-    typing_task = asyncio.create_task(_typing_loop(context.bot, cid))
     try:
         tg_file = await context.bot.get_file(msg.photo[-1].file_id)
         photo_bytes = await tg_file.download_as_bytearray()
         photo_b64 = base64.b64encode(photo_bytes).decode()
-        try:
+        async with typing_while(context.bot, cid):
             reply = await _coach_reply_photo(cid, photo_b64, caption, model_names)
-        except anthropic.RateLimitError:
-            log.exception("Claude quota exhausted (photo)")
-            await _replace_with_reply(
-                placeholder,
-                msg,
-                "У Claude API сейчас лимит запросов (ошибка 429). Подожди 1–2 минуты и отправь фото снова.",
-            )
-            return
-        except Exception:
-            log.exception("Photo reply failed chat_id=%s", cid)
-            await _replace_with_reply(
-                placeholder,
-                msg,
-                "Не получилось разобрать фото. Попробуй ещё раз или опиши текстом.",
-            )
-            return
-    finally:
-        typing_task.cancel()
-        with suppress(Exception):
-            await typing_task
+    except anthropic.RateLimitError:
+        log.exception("Claude quota exhausted (photo)")
+        await _bot_reply(
+            msg,
+            "У Claude API сейчас лимит запросов (ошибка 429). Подожди 1–2 минуты и отправь фото снова.",
+        )
+        return
+    except Exception:
+        log.exception("Photo reply failed chat_id=%s", cid)
+        await _bot_reply(
+            msg,
+            "Не получилось разобрать фото. Попробуй ещё раз или опиши текстом.",
+        )
+        return
 
-    await _replace_with_reply(placeholder, msg, reply)
+    await _bot_reply(msg, reply)
     prof_reply = user_profiles.get(str(cid))
     if isinstance(prof_reply, dict):
         await _try_save_task_from_message(cid, reply, caption, prof_reply)
@@ -2736,7 +2689,10 @@ async def _bootstrap_bot() -> None:
                                 "last_daily_sent_date": today,
                             },
                         )
-                        text = await _morning_message_text(cid, profile, model_chain)
+                        async with typing_while(bot, cid):
+                            text = await _morning_message_text(
+                                cid, profile, model_chain
+                            )
                         histories.setdefault(cid, []).append(
                             {"role": "model", "parts": [text]}
                         )
@@ -2760,7 +2716,10 @@ async def _bootstrap_bot() -> None:
                 if _time_in_window(evening_time, now_hm) and profile.get("last_evening_sent_date") != today:
                     try:
                         pending_evening[cid] = {"date": today}
-                        evening_text = await _evening_message_text(cid, profile, model_chain)
+                        async with typing_while(bot, cid):
+                            evening_text = await _evening_message_text(
+                                cid, profile, model_chain
+                            )
                         webapp_url = os.getenv(
                             "MINI_APP_URL",
                             "https://spicespace-production.up.railway.app/webapp/",

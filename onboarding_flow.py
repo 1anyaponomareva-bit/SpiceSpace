@@ -15,6 +15,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import ContextTypes
 
 import db
+from bot_typing import typing_while
 from claude_client import generate as claude_generate
 from prompts import (
     CHANGE_WEEKLY_GOAL_SYSTEM,
@@ -613,7 +614,9 @@ async def _propose_goal_confirm(
     model_names: list[str],
     after: str,
 ) -> None:
-    polished = await _polish_goal(raw, goal_type, model_names)
+    bot = await msg.get_bot()
+    async with typing_while(bot, msg.chat_id):
+        polished = await _polish_goal(raw, goal_type, model_names)
     if not polished.strip():
         polished = (raw or "").strip()[:2000]
     st["goal_confirm"] = {
@@ -855,13 +858,15 @@ async def _start_weekly_tactics_dialog(
     st: dict,
     model_names: list[str],
 ) -> None:
+    bot = await msg.get_bot()
     st["weekly_turns"] = []
-    result = await _claude_weekly_tactics_dialog(
-        [],
-        model_names,
-        main_goal=str(st.get("main_goal") or ""),
-        user_message="",
-    )
+    async with typing_while(bot, msg.chat_id):
+        result = await _claude_weekly_tactics_dialog(
+            [],
+            model_names,
+            main_goal=str(st.get("main_goal") or ""),
+            user_message="",
+        )
     reply = (result.get("message") or "Что хочешь сделать на этой неделе?").strip()
     st["weekly_turns"].append({"role": "assistant", "content": reply[:2000]})
     await msg.reply_text(reply)
@@ -1225,7 +1230,8 @@ async def _complete_onboarding(
         reply_markup=keyboard,
     )
     await asyncio.sleep(1)
-    first_msg = await asyncio.to_thread(get_first_msg)
+    async with typing_while(context.bot, cid):
+        first_msg = await asyncio.to_thread(get_first_msg)
     await msg.reply_text(first_msg)
 
 
@@ -1329,21 +1335,22 @@ async def handle_onboarding_turn(
         turns.append({"role": "user", "content": raw.strip()[:2000]})
 
         prev_reply = _last_assistant_reply(turns)
-        result = await _claude_change_weekly_dialog(
-            turns,
-            model_names,
-            main_goal=str(st.get("main_goal") or ""),
-        )
-        reply = (result.get("message") or "Расскажи подробнее?").strip()
-
-        if prev_reply and _normalize_text(reply) == _normalize_text(prev_reply):
+        async with typing_while(context.bot, cid):
             result = await _claude_change_weekly_dialog(
                 turns,
                 model_names,
                 main_goal=str(st.get("main_goal") or ""),
-                extra_user_hint="Задай другой вопрос или подтверди недельную цель (ready: true).",
             )
-            reply = (result.get("message") or "").strip() or reply
+            reply = (result.get("message") or "Расскажи подробнее?").strip()
+
+            if prev_reply and _normalize_text(reply) == _normalize_text(prev_reply):
+                result = await _claude_change_weekly_dialog(
+                    turns,
+                    model_names,
+                    main_goal=str(st.get("main_goal") or ""),
+                    extra_user_hint="Задай другой вопрос или подтверди недельную цель (ready: true).",
+                )
+                reply = (result.get("message") or "").strip() or reply
 
         turns.append({"role": "assistant", "content": reply[:2000]})
 
@@ -1389,7 +1396,8 @@ async def handle_onboarding_turn(
         return
 
     if step == OB_NAME:
-        name = (await _extract_name(raw, model_names)).strip()[:120] or "подруга"
+        async with typing_while(context.bot, cid):
+            name = (await _extract_name(raw, model_names)).strip()[:120] or "подруга"
         st["name"] = name
         st["step"] = OB_VISION_DIALOG
         st["vision_turns"] = []
@@ -1408,16 +1416,17 @@ async def handle_onboarding_turn(
         turns.append({"role": "user", "content": raw.strip()[:2000]})
 
         prev_reply = _last_assistant_reply(turns)
-        result = await _claude_vision_dialog(turns, model_names)
-        reply = (result.get("message") or "Расскажи ещё чуть-чуть?").strip()
+        async with typing_while(context.bot, cid):
+            result = await _claude_vision_dialog(turns, model_names)
+            reply = (result.get("message") or "Расскажи ещё чуть-чуть?").strip()
 
-        if prev_reply and _normalize_text(reply) == _normalize_text(prev_reply):
-            result = await _claude_vision_dialog(
-                turns,
-                model_names,
-                extra_user_hint="Не повторяй прошлый ответ — отрази по-новому или переходи к цели на 12 недель.",
-            )
-            reply = (result.get("message") or "").strip() or reply
+            if prev_reply and _normalize_text(reply) == _normalize_text(prev_reply):
+                result = await _claude_vision_dialog(
+                    turns,
+                    model_names,
+                    extra_user_hint="Не повторяй прошлый ответ — отрази по-новому или переходи к цели на 12 недель.",
+                )
+                reply = (result.get("message") or "").strip() or reply
 
         turns.append({"role": "assistant", "content": reply[:2000]})
 
@@ -1435,24 +1444,25 @@ async def handle_onboarding_turn(
         turns.append({"role": "user", "content": raw.strip()[:2000]})
 
         prev_reply = _last_assistant_reply(turns)
-        result = await _claude_goal_dialog(
-            turns,
-            model_names,
-            vision=str(st.get("vision") or ""),
-        )
-        reply = (result.get("message") or "Расскажи подробнее?").strip()
-
-        if prev_reply and _normalize_text(reply) == _normalize_text(prev_reply):
+        async with typing_while(context.bot, cid):
             result = await _claude_goal_dialog(
                 turns,
                 model_names,
                 vision=str(st.get("vision") or ""),
-                extra_user_hint=(
-                    "Предложи конкретную формулировку цели («Получается твоя цель: … Так?») "
-                    "или задай другой уточняющий вопрос. ready=true только после согласия пользователя."
-                ),
             )
-            reply = (result.get("message") or "").strip() or reply
+            reply = (result.get("message") or "Расскажи подробнее?").strip()
+
+            if prev_reply and _normalize_text(reply) == _normalize_text(prev_reply):
+                result = await _claude_goal_dialog(
+                    turns,
+                    model_names,
+                    vision=str(st.get("vision") or ""),
+                    extra_user_hint=(
+                        "Предложи конкретную формулировку цели («Получается твоя цель: … Так?») "
+                        "или задай другой уточняющий вопрос. ready=true только после согласия пользователя."
+                    ),
+                )
+                reply = (result.get("message") or "").strip() or reply
 
         turns.append({"role": "assistant", "content": reply[:2000]})
 
@@ -1526,26 +1536,27 @@ async def handle_onboarding_turn(
         turns.append({"role": "user", "content": raw.strip()[:2000]})
 
         prev_reply = _last_assistant_reply(turns)
-        result = await _claude_weekly_tactics_dialog(
-            turns,
-            model_names,
-            main_goal=str(st.get("main_goal") or ""),
-            user_message=raw,
-        )
-        reply = (result.get("message") or "Расскажи подробнее?").strip()
-
-        if prev_reply and _normalize_text(reply) == _normalize_text(prev_reply):
+        async with typing_while(context.bot, cid):
             result = await _claude_weekly_tactics_dialog(
                 turns,
                 model_names,
                 main_goal=str(st.get("main_goal") or ""),
                 user_message=raw,
-                extra_user_hint=(
-                    "Не повторяй прошлый ответ. Учти что написал пользователь. "
-                    "Если отверг твои варианты — работай только с её формулировкой."
-                ),
             )
-            reply = (result.get("message") or "").strip() or reply
+            reply = (result.get("message") or "Расскажи подробнее?").strip()
+
+            if prev_reply and _normalize_text(reply) == _normalize_text(prev_reply):
+                result = await _claude_weekly_tactics_dialog(
+                    turns,
+                    model_names,
+                    main_goal=str(st.get("main_goal") or ""),
+                    user_message=raw,
+                    extra_user_hint=(
+                        "Не повторяй прошлый ответ. Учти что написал пользователь. "
+                        "Если отверг твои варианты — работай только с её формулировкой."
+                    ),
+                )
+                reply = (result.get("message") or "").strip() or reply
 
         turns.append({"role": "assistant", "content": reply[:2000]})
 
