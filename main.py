@@ -79,8 +79,27 @@ WEBAPP_DIR = DATA_DIR / "webapp"
 load_dotenv(DATA_DIR / ".env")
 
 
+def strip_profanity(text: str) -> str:
+    replacements = {
+        "бля ": "",
+        "бля,": "",
+        " бля": "",
+        "блин": "",
+        "чёрт": "",
+        "черт": "",
+        "фиг": "",
+    }
+    for word, replacement in replacements.items():
+        text = text.replace(word, replacement)
+    return text.strip()
+
+
+def sanitize_bot_reply(text: str) -> str:
+    return strip_profanity(strip_markdown(text))
+
+
 async def _bot_reply(message, text: str) -> None:
-    await message.reply_text(text)
+    await message.reply_text(sanitize_bot_reply(text))
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -1198,7 +1217,7 @@ async def _run_task_reminders(bot) -> None:
         prof = user_profiles.get(str(tid))
         text = _format_task_reminder_text(prof if isinstance(prof, dict) else None, str(task.get("title") or "Задача"))
         try:
-            await bot.send_message(chat_id=tid, text=text)
+            await bot.send_message(chat_id=tid, text=sanitize_bot_reply(text))
             _mark_task_last_sent(task_id)
             last_reminder_task_id[tid] = task_id
         except Exception as e:
@@ -1475,7 +1494,7 @@ async def _morning_message_text(
     def call() -> str:
         for mid in model_names:
             try:
-                text = strip_markdown(
+                text = sanitize_bot_reply(
                     claude_generate(
                         mid,
                         [{"role": "user", "content": user_content}],
@@ -1503,7 +1522,14 @@ async def _morning_message_text(
 
 
 _EVENING_PERSONAL_SYSTEM = (
-    "Напиши только текст вечернего сообщения для Telegram. Без markdown."
+    "Напиши только текст вечернего сообщения для Telegram. Без markdown.\n\n"
+    "ЗАПРЕЩЕНО:\n"
+    '- Говорить "сделала!", "выполнила!", "молодец!" когда пользователь только собирается что-то сделать\n'
+    '- Путать намерение ("давай сделаем") с фактом ("сделала")\n'
+    "- Материться или использовать слова: бля, блин, чёрт, фиг и подобные\n"
+    "- Задавать один и тот же вопрос дважды подряд\n\n"
+    'Если пользователь говорит "давай наметим задачу" — он ХОЧЕТ поставить задачу, а не выполнил её.\n'
+    'Просто спроси: "Что конкретно сделаешь завтра?"'
 )
 
 
@@ -1547,7 +1573,7 @@ async def _evening_message_text(
     def call() -> str:
         for mid in model_names:
             try:
-                text = strip_markdown(
+                text = sanitize_bot_reply(
                     claude_generate(
                         mid,
                         [{"role": "user", "content": user_content}],
@@ -1570,17 +1596,36 @@ def _profile_local_date(profile: dict) -> date:
     return datetime.now(tz).date()
 
 
+def _wants_evening_task_planning(raw: str) -> bool:
+    low = (raw or "").strip().lower()
+    if not low:
+        return False
+    if "давай" in low and any(w in low for w in ("задач", "намет", "постав", "завтра")):
+        return True
+    markers = (
+        "давай наметим",
+        "наметим задачу",
+        "поставим задачу",
+        "задачу на завтра",
+        "утром займ",
+        "займёмся",
+        "займемся",
+    )
+    return any(m in low for m in markers)
+
+
 def _detect_evening_outcome(raw: str) -> tuple[bool, bool]:
     low = (raw or "").strip().lower()
+    if not low or _wants_evening_task_planning(raw):
+        return False, False
+    if re.fullmatch(r"да[\s!\.?]*", low):
+        return True, False
     done_words = (
-        "да",
         "сделала",
         "получилось",
         "успела",
-        "готово",
         "выполнила",
         "сделано",
-        "получилось!",
     )
     miss_words = (
         "нет",
@@ -1592,6 +1637,8 @@ def _detect_evening_outcome(raw: str) -> tuple[bool, bool]:
         "не смогла",
     )
     done = any(w in low for w in done_words)
+    if re.search(r"\bготово\b", low) and "не готово" not in low and "не готова" not in low:
+        done = True
     missed = any(w in low for w in miss_words)
     if done and missed:
         return False, False
@@ -1716,6 +1763,20 @@ async def _handle_evening_reply(
     profile: dict,
     model_names: list[str],
 ) -> str:
+    state = pending_evening.setdefault(chat_id, {})
+
+    if state.get("awaiting_tomorrow_task"):
+        task = (user_text or "").strip()
+        if len(task) >= 5:
+            pending_evening.pop(chat_id, None)
+            save_daily_task(chat_id, profile, task, source="evening_flow")
+            return f"Записала ✨ На завтра: {task[:200]}"
+        return "Что конкретно сделаешь завтра?"
+
+    if _wants_evening_task_planning(user_text):
+        state["awaiting_tomorrow_task"] = True
+        return "Что конкретно сделаешь завтра?"
+
     outcome = _detect_evening_task_completed(user_text)
     if outcome:
         pending_evening.pop(chat_id, None)
@@ -1734,8 +1795,7 @@ async def _handle_evening_reply(
         )
     return (
         "Расскажи честно — получилось сегодня или нет? "
-        "Можно: да / нет / частично.\n\n"
-        "Поставим задачу на завтра или утром займёмся?"
+        "Можно: да / нет / частично."
     )
 
 
@@ -1763,7 +1823,7 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
         messages = _hist_to_claude_messages(hist_prefix, user_text)
         for mid in model_names:
             try:
-                reply_text = strip_markdown(
+                reply_text = sanitize_bot_reply(
                     claude_generate(mid, messages, system=system)
                 )
                 log.info("Claude ответ через модель %s", mid)
@@ -1840,7 +1900,7 @@ async def _coach_reply_photo(
         messages = _hist_to_claude_messages(hist_prefix, None)
         messages.append({"role": "user", "content": user_content})
         try:
-            reply_text = strip_markdown(
+            reply_text = sanitize_bot_reply(
                 claude_generate(
                     _VISION_MODEL,
                     messages,
@@ -2097,10 +2157,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             _append_history_turn(cid, raw, opening)
             return
 
-    if cid in pending_evening and prof_d:
-        reply = await _handle_evening_reply(cid, raw, prof_d, model_names)
+    if cid in pending_evening:
+        prof_evening = prof_d or _resolve_user_profile(str(cid)) or {}
+        reply = await _handle_evening_reply(cid, raw, prof_evening, model_names)
         _append_history_turn(cid, raw, reply)
-        await _try_save_task_from_message(cid, reply, raw, prof_d)
         await _bot_reply(update.message, reply)
         return
 
@@ -2763,7 +2823,9 @@ async def _bootstrap_bot() -> None:
                             )
                         ]])
                         await bot.send_message(
-                            chat_id=cid, text=text, reply_markup=keyboard
+                            chat_id=cid,
+                            text=sanitize_bot_reply(text),
+                            reply_markup=keyboard,
                         )
                         pending_morning[cid] = text
                     except Exception as e:
@@ -2788,7 +2850,7 @@ async def _bootstrap_bot() -> None:
                         ]])
                         await bot.send_message(
                             chat_id=cid,
-                            text=evening_text,
+                            text=sanitize_bot_reply(evening_text),
                             reply_markup=keyboard,
                         )
                         profile["last_evening_sent_date"] = today
