@@ -529,6 +529,16 @@
     return Array.isArray(data.tasks) ? data.tasks : [];
   }
 
+  async function markStreakOnOpen() {
+    try {
+      await apiFetch('/api/mark-day', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ streak_only: true }),
+      });
+    } catch (_) {}
+  }
+
   async function markDay(taskCompleted = 'true') {
     const paths = ['/api/profile/mark-day', '/api/mark-day'];
     for (const path of paths) {
@@ -743,6 +753,7 @@
     calendarData = await fetchCalendar();
     renderAll(result.user || tgUser);
     syncTimezone();
+    markStreakOnOpen();
     document.querySelector('.settings-block')?.classList.add('loaded');
   }
 

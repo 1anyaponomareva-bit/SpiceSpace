@@ -257,14 +257,21 @@ def _wants_adjust_reply(raw: str) -> bool:
     )
 
 
-def message_vision(name: str) -> str:
+def greeting_after_name(name: str) -> str:
     n = (name or "").strip() or "подруга"
+    return f"{n}, приятно познакомиться 💙"
+
+
+def vision_question_message() -> str:
     return (
-        f"{n}, приятно познакомиться 💙\n\n"
         "Прежде чем ставить цели — давай помечтаем.\n\n"
         "Представь: прошло 3 месяца, и всё получилось именно так как ты хотела. "
         "Как выглядит твой день? Что изменилось в твоей жизни?"
     )
+
+
+def message_vision(name: str) -> str:
+    return f"{greeting_after_name(name)}\n\n{vision_question_message()}"
 
 
 def greeting_returning(name: str) -> str:
@@ -1181,6 +1188,7 @@ async def _complete_onboarding(
 Не повторяй цели — она их только что видела.
 Задай один конкретный вопрос про первую неделю — что уже сделала, с кого начнёшь, что мешает.
 Тон: тёплый, живой, без коуч-языка. 1-2 предложения максимум.
+ЗАПРЕЩЕНО: приветствия ("Привет", "Доброе утро"), обращение по имени, "рада познакомиться".
 ЗАПРЕЩЕНО: "Удачи!", "Увидимся", прощания, markdown."""
 
     def get_first_msg() -> str:
@@ -1196,8 +1204,28 @@ async def _complete_onboarding(
                 pass
         return "Кому первому отправишь бота на тест? 💙"
 
-    first_msg = await asyncio.to_thread(get_first_msg)
     await asyncio.sleep(1)
+    webapp_base = os.getenv(
+        "WEBAPP_URL", "https://spicespace-production.up.railway.app/webapp"
+    ).rstrip("/")
+    webapp_url = f"{webapp_base}/?telegram_id={cid}"
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✦ Открыть SpiceSpace",
+                    web_app=WebAppInfo(url=webapp_url),
+                )
+            ]
+        ]
+    )
+    await context.bot.send_message(
+        chat_id=cid,
+        text="Смотри как выглядит твой прогресс 👇",
+        reply_markup=keyboard,
+    )
+    await asyncio.sleep(1)
+    first_msg = await asyncio.to_thread(get_first_msg)
     await msg.reply_text(first_msg)
 
 
@@ -1365,12 +1393,14 @@ async def handle_onboarding_turn(
         st["name"] = name
         st["step"] = OB_VISION_DIALOG
         st["vision_turns"] = []
+        await msg.reply_text(greeting_after_name(name))
+        await asyncio.sleep(1)
         await msg.reply_text(
             "Кстати — всё что ты пишешь здесь остаётся между нами. "
             "Твои цели и наши разговоры не видит никто другой. 🔒"
         )
         await asyncio.sleep(1)
-        await msg.reply_text(message_vision(name))
+        await msg.reply_text(vision_question_message())
         return
 
     if step == OB_VISION_DIALOG:
