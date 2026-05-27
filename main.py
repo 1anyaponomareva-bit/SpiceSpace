@@ -802,6 +802,15 @@ def _morning_template(profile: dict) -> str:
 
 
 db_store.init_db()
+log.info("=== SUPABASE DEBUG ===")
+log.info("SUPABASE_URL: %s", (os.getenv("SUPABASE_URL") or "NOT SET")[:40])
+log.info(
+    "SUPABASE_KEY: %s",
+    "SET" if os.getenv("SUPABASE_SERVICE_ROLE_KEY") else "NOT SET",
+)
+log.info("DB _use_supabase: %s", db_store._use_supabase)
+test = db_store._request("GET", "user_profiles?limit=1")
+log.info("Supabase test query result: %s", test)
 subscribers: set[int] = db_store.load_subscribers()
 user_profiles: dict[str, dict] = db_store.load_all_profiles()
 histories: dict[int, list[dict]] = {}
