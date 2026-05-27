@@ -811,6 +811,21 @@ log.info(
 log.info("DB _use_supabase: %s", db_store._use_supabase)
 test = db_store._request("GET", "user_profiles?limit=1")
 log.info("Supabase test query result: %s", test)
+
+if db_store._use_supabase:
+    existing = db_store._request("GET", "user_profiles?select=user_id&limit=1")
+    if not existing:
+        log.info("Supabase empty — migrating from JSON...")
+        json_path = db_store.USER_PROFILES_PATH
+        if json_path.exists():
+            raw_profiles = json.loads(json_path.read_text(encoding="utf-8"))
+            if isinstance(raw_profiles, dict):
+                for uid, profile in raw_profiles.items():
+                    if isinstance(profile, dict):
+                        db_store.upsert_profile(uid, profile)
+                        log.info("Migrated profile user_id=%s", uid)
+        log.info("Migration complete")
+
 subscribers: set[int] = db_store.load_subscribers()
 user_profiles: dict[str, dict] = db_store.load_all_profiles()
 histories: dict[int, list[dict]] = {}
