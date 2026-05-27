@@ -2748,6 +2748,44 @@ async def _bootstrap_bot() -> None:
         except Exception as e:
             log.exception("task_reminder_job crashed: %s", e)
 
+    async def onboarding_reminder_job() -> None:
+        """One reminder if onboarding stalled 2+ hours after user shared their name."""
+        now = datetime.now(tz)
+        for cid, st in list(onboarding.items()):
+            if not isinstance(st, dict):
+                continue
+            if st.get("reminder_sent"):
+                continue
+            step = st.get("step")
+            if step in (ob.OB_DONE, None):
+                continue
+            if not st.get("name"):
+                continue
+            last_activity = st.get("last_activity_at")
+            if not last_activity:
+                continue
+            if isinstance(last_activity, str):
+                try:
+                    last_activity = datetime.fromisoformat(last_activity)
+                except ValueError:
+                    continue
+            if last_activity.tzinfo is None:
+                minutes_idle = (now.replace(tzinfo=None) - last_activity).total_seconds() / 60
+            else:
+                minutes_idle = (now - last_activity).total_seconds() / 60
+            if minutes_idle < 120:
+                continue
+            try:
+                name = str(st.get("name") or "").strip()
+                greeting = f"{name}, ты там?" if name else "Ты там?"
+                await bot.send_message(
+                    chat_id=cid,
+                    text=f"{greeting} Осталось буквально пара вопросов 💙",
+                )
+                st["reminder_sent"] = True
+            except Exception as e:
+                log.warning("onboarding_reminder failed cid=%s: %s", cid, e)
+
     scheduler.add_job(
         daily_check_job,
         IntervalTrigger(minutes=1, timezone=tz),
@@ -2760,8 +2798,17 @@ async def _bootstrap_bot() -> None:
         id="task_reminders",
         replace_existing=True,
     )
+    scheduler.add_job(
+        onboarding_reminder_job,
+        IntervalTrigger(minutes=15, timezone=tz),
+        id="onboarding_reminder_job",
+        replace_existing=True,
+    )
     scheduler.start()
-    log.info("Scheduler started: daily_check + task_reminders each minute (%s)", tz)
+    log.info(
+        "Scheduler started: daily_check + task_reminders (1m), onboarding_reminder (15m) (%s)",
+        tz,
+    )
 
     await telegram_app.initialize()
     await telegram_app.start()

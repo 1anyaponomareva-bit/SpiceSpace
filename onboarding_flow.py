@@ -1119,8 +1119,16 @@ def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
     return fresh if isinstance(fresh, dict) else profile
 
 
+def touch_onboarding_activity(st: dict) -> None:
+    st["last_activity_at"] = datetime.now()
+
+
 def start_new_onboarding(onboarding: dict[int, dict], cid: int) -> None:
-    onboarding[cid] = {"step": OB_NAME}
+    onboarding[cid] = {
+        "step": OB_NAME,
+        "last_activity_at": datetime.now(),
+        "reminder_sent": False,
+    }
 
 
 def start_returning_choice(onboarding: dict[int, dict], cid: int) -> None:
@@ -1293,6 +1301,7 @@ async def handle_onboarding_turn(
         return
 
     st = onboarding.setdefault(cid, {"step": OB_NAME})
+    touch_onboarding_activity(st)
     step = int(st.get("step") or OB_NAME)
     _note_kids_from_answer(st, raw)
     model_names = context.bot_data.get("claude_model_names") or []
