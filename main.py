@@ -1571,7 +1571,10 @@ async def _handle_evening_reply(
 
 
 async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> str:
-    prof = user_profiles.get(str(chat_id)) or {}
+    tid = str(chat_id)
+    prof = db_store.get_profile(chat_id) or user_profiles.get(tid) or {}
+    if isinstance(prof, dict):
+        user_profiles[tid] = prof
     tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name)
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
@@ -1634,7 +1637,10 @@ async def _coach_reply_photo(
     caption: str,
     model_names: list[str],
 ) -> str:
-    prof = user_profiles.get(str(chat_id)) or {}
+    tid = str(chat_id)
+    prof = db_store.get_profile(chat_id) or user_profiles.get(tid) or {}
+    if isinstance(prof, dict):
+        user_profiles[tid] = prof
     tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name)
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
@@ -2271,7 +2277,10 @@ async def _generate_today_task(profile: dict, model_names: list[str]) -> str:
                 text = claude_generate(
                     mid,
                     [{"role": "user", "content": prompt}],
-                    system="Верни только задачу на сегодня.",
+                    system=prepend_user_time(
+                        profile,
+                        "Верни только задачу на сегодня.",
+                    ),
                     max_tokens=120,
                     cache_core=False,
                 ).strip()
@@ -2927,14 +2936,10 @@ async def patch_profile_timezone_endpoint(
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid timezone") from exc
 
-    current = str(profile.get("timezone") or "").strip()
-    if not _is_placeholder_timezone(current):
-        return {"ok": True}
-
     profile["timezone"] = new_tz
     db_store.upsert_profile(int(tid), profile)
     user_profiles[tid] = profile
-    return {"ok": True}
+    return {"ok": True, "profile": _enrich_profile_for_api(profile, tid)}
 
 
 def _profile_cycle_start(profile: dict, user_id: str | int) -> date:

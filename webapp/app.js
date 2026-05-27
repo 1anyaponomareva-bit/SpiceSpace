@@ -493,11 +493,9 @@
     document.getElementById('today-date').textContent = formatTodayTag();
   }
 
-  function syncTimezone(prof) {
+  function syncTimezone() {
     try {
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const cur = (prof?.timezone || '').trim();
-      if (cur && cur !== 'pending' && cur !== 'Asia/Ho_Chi_Minh') return;
       if (!tz) return;
       apiFetch('/api/profile/timezone', {
         method: 'PATCH',
@@ -735,7 +733,7 @@
     tasks = await fetchTasks();
     calendarData = await fetchCalendar();
     renderAll(result.user || tgUser);
-    syncTimezone(profile);
+    syncTimezone();
     document.querySelector('.settings-block')?.classList.add('loaded');
   }
 
