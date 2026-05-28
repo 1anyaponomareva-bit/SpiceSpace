@@ -331,7 +331,9 @@ MORNING_MESSAGE_PROMPT = """Ты — Спейс, тёплая подруга с 
 - main_goal (цель на 12 недель): {main_goal}
 - weekly_goal (цель недели): {weekly_goal}
 - last_summary (вчера): {last_summary}
-- time_per_day: {time_per_day}"""
+- time_per_day: {time_per_day}
+
+{facts_block}"""
 
 
 EVENING_MESSAGE_PROMPT = """Ты — Спейс. Вечернее сообщение в Telegram.
@@ -363,7 +365,9 @@ EVENING_MESSAGE_PROMPT = """Ты — Спейс. Вечернее сообщен
 Если пользователь говорит "давай наметим задачу" — это означает что он ХОЧЕТ поставить задачу, а не что уже выполнил её.
 Просто спроси: "Что конкретно сделаешь завтра?"
 
-{name_rule}"""
+{name_rule}
+
+{facts_block}"""
 
 
 EVENING_NO_TASK_PROMPT = """Ты — Спейс. Вечернее сообщение в Telegram.
@@ -381,7 +385,9 @@ EVENING_NO_TASK_PROMPT = """Ты — Спейс. Вечернее сообщен
 Задачи на сегодня не было. Напиши тёплое вечернее сообщение — как прошёл день, что можно сделать завтра.
 Без вопроса про выполнение задачи. 2-3 предложения. Без markdown.
 
-{name_rule}"""
+{name_rule}
+
+{facts_block}"""
 
 
 TODAY_TASK_PROMPT = """Сформулируй одну задачу на сегодня — конкретное действие за {time_per_day}.

@@ -1456,6 +1456,31 @@ def _format_today_conversation_context(chat_id: int, max_turns: int = 10) -> str
     return "\n".join(lines)
 
 
+def _facts_block_for_prompt(chat_id: int) -> str:
+    facts = db_store.load_user_facts(chat_id, limit=10)
+    facts_text = "\n".join(f"— {f}" for f in facts) if facts else ""
+    if facts_text:
+        return f"Важные факты о пользователе:\n{facts_text}"
+    return ""
+
+
+async def _restore_history_from_db(cid: int, purpose: str) -> None:
+    if cid in histories and histories[cid]:
+        return
+    try:
+        loaded = await asyncio.to_thread(db_store.load_history, cid, 20)
+        if loaded:
+            histories[cid] = loaded
+            log.info(
+                "Restored history for %s cid=%s turns=%s",
+                purpose,
+                cid,
+                len(loaded),
+            )
+    except Exception as e:
+        log.warning("load_history for %s failed cid=%s: %s", purpose, cid, e)
+
+
 def _exact_name_prompt_instruction(profile: dict, chat_id: int | None = None) -> str:
     name = str(profile.get("name", "")).strip()
     if not name:
@@ -1505,6 +1530,7 @@ async def _morning_message_text(
         yesterday.get("summary") or yesterday.get("key_detail") or ""
     ).strip() or "нет"
     time_per_day = _format_time_per_day_for_prompt(profile)
+    facts_block = _facts_block_for_prompt(chat_id)
 
     user_content = (
         f"{name_instruction}\n\n"
@@ -1515,6 +1541,7 @@ async def _morning_message_text(
             weekly_goal=weekly_goal,
             last_summary=last_summary,
             time_per_day=time_per_day,
+            facts_block=facts_block,
         )
     )
 
@@ -1522,6 +1549,8 @@ async def _morning_message_text(
         "Напиши только текст утреннего сообщения для Telegram. Без markdown.\n"
         f"{name_instruction}"
     )
+    if facts_block:
+        morning_system += f"\n\n{facts_block}"
 
     def call() -> str:
         for mid in model_names:
@@ -1600,6 +1629,7 @@ async def _evening_message_text(
     display_name = name or "подруга"
     name_instruction = _exact_name_prompt_instruction(profile, chat_id)
     goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
+    facts_block = _facts_block_for_prompt(chat_id)
 
     summary_lines: list[str] = []
     if summary_text:
@@ -1624,6 +1654,7 @@ async def _evening_message_text(
             today_context=today_context or "пока мало переписки",
             today_task=task or "не задана",
             name_rule=name_instruction,
+            facts_block=facts_block,
         )
     )
     context_block = (
@@ -1637,7 +1668,8 @@ async def _evening_message_text(
     )
     evening_system = prepend_user_time(
         profile,
-        f"{_EVENING_PERSONAL_SYSTEM}\n\n{name_instruction}",
+        f"{_EVENING_PERSONAL_SYSTEM}\n\n{name_instruction}"
+        + (f"\n\n{facts_block}" if facts_block else ""),
     )
 
     def call() -> str:
@@ -2968,6 +3000,7 @@ async def _bootstrap_bot() -> None:
                                 "last_daily_sent_date": today,
                             },
                         )
+                        await _restore_history_from_db(cid, "morning message")
                         async with typing_while(bot, cid):
                             text = await _morning_message_text(
                                 cid, profile, model_chain
@@ -2997,6 +3030,7 @@ async def _bootstrap_bot() -> None:
                 if _time_in_window(evening_time, now_hm) and profile.get("last_evening_sent_date") != today:
                     try:
                         pending_evening[cid] = {"date": today, "replied": False}
+                        await _restore_history_from_db(cid, "evening message")
                         async with typing_while(bot, cid):
                             evening_text = await _evening_message_text(
                                 cid, profile, model_chain
