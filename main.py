@@ -2078,6 +2078,31 @@ def _append_history_turn(chat_id: int, user_text: str, model_text: str) -> None:
         histories[chat_id] = hist[-max_turns:]
 
 
+async def _save_conversation_turn(
+    cid: int, profile: dict, user_text: str, bot_reply: str
+) -> None:
+    """Save running turn log to daily_summaries for evening context."""
+    try:
+        today = _profile_local_date(profile)
+        existing = db_store.get_daily_summary(cid, today)
+        existing_log = str((existing or {}).get("summary") or "")
+        new_entry = f"Пользователь: {user_text[:200]}\nСпейс: {bot_reply[:200]}"
+        if existing_log:
+            updated_log = f"{existing_log}\n---\n{new_entry}"
+        else:
+            updated_log = new_entry
+        updated_log = updated_log[-2000:]
+        db_store.patch_daily_summary(
+            cid,
+            today,
+            summary=updated_log,
+            mood=str((existing or {}).get("mood") or ""),
+            key_detail=str((existing or {}).get("key_detail") or ""),
+        )
+    except Exception as e:
+        log.warning("_save_conversation_turn failed cid=%s: %s", cid, e)
+
+
 def _build_final_goal_for_measurable(amount: str, deadline: str) -> str:
     a = amount.strip()
     d = deadline.strip()
@@ -2321,6 +2346,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
+    prof_for_turn = prof_d or _resolve_user_profile(str(cid)) or {}
+    if isinstance(prof_for_turn, dict) and prof_for_turn:
+        await _save_conversation_turn(cid, prof_for_turn, raw, reply)
     await _bot_reply(update.message, reply)
     if prof_d:
         await _try_save_task_from_message(cid, reply, raw, prof_d)
