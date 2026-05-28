@@ -1877,6 +1877,17 @@ async def _handle_evening_reply(
     )
 
 
+async def _generate_weekly_summary_async(
+    cid: int, profile: dict, model_names: list[str]
+) -> None:
+    try:
+        from summaries import generate_weekly_summary
+
+        await asyncio.to_thread(generate_weekly_summary, cid, profile, model_names)
+    except Exception as e:
+        log.warning("weekly_summary_async failed cid=%s: %s", cid, e)
+
+
 async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> str:
     tid = str(chat_id)
     prof = db_store.get_profile(chat_id) or user_profiles.get(tid) or {}
@@ -1887,7 +1898,20 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
     facts = await asyncio.to_thread(db_store.load_user_facts, chat_id, 10)
     facts_text = "\n".join(f"— {f}" for f in facts) if facts else ""
-    extra = f"Важные факты о пользователе:\n{facts_text}" if facts_text else ""
+    last_week = await asyncio.to_thread(db_store.load_last_weekly_summary, chat_id)
+    weekly_context = ""
+    if last_week:
+        weekly_context = (
+            f"Итог прошлой недели: {last_week.get('summary', '')}\n"
+            f"Достижения: {last_week.get('achievements', '')}\n"
+            f"Сложности: {last_week.get('challenges', '')}"
+        )
+    extra_parts: list[str] = []
+    if facts_text:
+        extra_parts.append(f"Важные факты о пользователе:\n{facts_text}")
+    if weekly_context:
+        extra_parts.append(f"Прошлая неделя:\n{weekly_context}")
+    extra = "\n\n".join(extra_parts)
 
     system = build_chat_system(prof, yesterday, today_summary, extra=extra)
 
@@ -2997,6 +3021,37 @@ async def _bootstrap_bot() -> None:
                         db_store.upsert_profile(cid, profile)
                     except Exception as e:
                         log.warning("Evening message failed for %s: %s", cid, e)
+
+                if now_local.weekday() == 6 and _time_in_window(
+                    evening_time, now_hm, window_minutes=10
+                ):
+                    week_number = int(profile.get("current_week") or 1)
+                    existing_weekly = db_store.load_weekly_summaries(cid, limit=1)
+                    already_this_week = (
+                        existing_weekly
+                        and int(existing_weekly[0].get("week_number") or 0) == week_number
+                    )
+                    if not already_this_week:
+                        await _generate_weekly_summary_async(cid, profile, model_chain)
+                    weekly_summ = db_store.load_last_weekly_summary(cid)
+                    if weekly_summ and profile.get("last_weekly_recap_date") != today:
+                        recap = (
+                            f"Неделя {weekly_summ.get('week_number')} позади 💙\n\n"
+                            f"{weekly_summ.get('summary', '')}\n\n"
+                            f"На следующую неделю: {weekly_summ.get('next_week_goal', '')}"
+                        )
+                        try:
+                            await bot.send_message(
+                                chat_id=cid,
+                                text=sanitize_bot_reply(recap),
+                            )
+                            profile["last_weekly_recap_date"] = today
+                            user_profiles[key] = profile
+                            db_store.update_profile(
+                                cid, {"last_weekly_recap_date": today}
+                            )
+                        except Exception as e:
+                            log.warning("Weekly recap failed for %s: %s", cid, e)
         except Exception as e:
             log.exception("daily_check_job crashed: %s", e)
 

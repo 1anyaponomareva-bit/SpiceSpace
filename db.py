@@ -543,3 +543,49 @@ def delete_user_facts(user_id: int | str) -> None:
     key = str(user_id)
     if _use_supabase:
         _request("DELETE", f"user_facts?user_id=eq.{key}")
+
+
+def save_weekly_summary(
+    user_id: int | str,
+    week_number: int,
+    week_start: str,
+    summary: str,
+    achievements: str = "",
+    challenges: str = "",
+    next_week_goal: str = "",
+    score: int = 0,
+) -> None:
+    key = str(user_id)
+    if not _use_supabase:
+        return
+    _request(
+        "POST",
+        "weekly_summaries?on_conflict=user_id,week_number",
+        json={
+            "user_id": int(key),
+            "week_number": week_number,
+            "week_start": week_start,
+            "summary": summary[:4000],
+            "achievements": achievements[:2000],
+            "challenges": challenges[:2000],
+            "next_week_goal": next_week_goal[:1000],
+            "score": max(0, min(100, score)),
+        },
+        headers={**_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+    )
+
+
+def load_weekly_summaries(user_id: int | str, limit: int = 4) -> list[dict]:
+    key = str(user_id)
+    if not _use_supabase:
+        return []
+    rows = _request(
+        "GET",
+        f"weekly_summaries?user_id=eq.{key}&order=week_number.desc&limit={limit}",
+    ) or []
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def load_last_weekly_summary(user_id: int | str) -> dict | None:
+    rows = load_weekly_summaries(user_id, limit=1)
+    return rows[0] if rows else None

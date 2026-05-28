@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import anthropic
@@ -181,6 +181,96 @@ FACTS_EXTRACT_PROMPT = """Из этого разговора извлеки ва
 
 Разговор:
 {conversation}"""
+
+
+WEEKLY_SUMMARY_PROMPT = """Подведи итог недели пользователя. Ответь JSON:
+{{
+    "summary": "3-5 предложений о том как прошла неделя",
+    "achievements": "что получилось и чем можно гордиться",
+    "challenges": "что было сложно или не получилось",
+    "next_week_goal": "один конкретный фокус на следующую неделю",
+    "score": число от 0 до 100 (насколько продуктивной была неделя)
+}}
+
+Профиль:
+- Имя: {name}
+- Цель на 12 недель: {main_goal}
+- Цель этой недели: {weekly_goal}
+- Неделя: {week_number} из 12
+
+Daily summaries за эту неделю:
+{daily_summaries_text}"""
+
+
+def generate_weekly_summary(
+    user_id: int,
+    profile: dict,
+    model_names: list[str],
+) -> None:
+    from db import get_daily_summary, save_weekly_summary
+
+    tz_name = str(profile.get("timezone") or "Asia/Ho_Chi_Minh")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Ho_Chi_Minh")
+
+    today = datetime.now(tz).date()
+    week_number = int(profile.get("current_week") or 1)
+
+    daily_lines: list[str] = []
+    for i in range(6, -1, -1):
+        d = today - timedelta(days=i)
+        summ = get_daily_summary(user_id, d)
+        if summ and summ.get("summary"):
+            daily_lines.append(f"{d.isoformat()}: {summ['summary']}")
+            if summ.get("task"):
+                completed = summ.get("task_completed")
+                status = "✅" if completed == "true" else "❌" if completed == "false" else "—"
+                daily_lines.append(f"  Задача: {summ['task']} {status}")
+
+    if not daily_lines:
+        log.info("weekly_summary: no daily data for user=%s", user_id)
+        return
+
+    daily_summaries_text = "\n".join(daily_lines)
+    prompt = WEEKLY_SUMMARY_PROMPT.format(
+        name=profile.get("name", ""),
+        main_goal=profile.get("main_goal", "не указана"),
+        weekly_goal=profile.get("weekly_goal", "не указана"),
+        week_number=week_number,
+        daily_summaries_text=daily_summaries_text,
+    )
+
+    for mid in model_names:
+        try:
+            raw = generate(
+                mid,
+                [{"role": "user", "content": prompt}],
+                system="Отвечай только валидным JSON.",
+                max_tokens=600,
+                cache_core=False,
+            )
+            m = re.search(r"\{[\s\S]*\}", raw)
+            if not m:
+                continue
+            data = json.loads(m.group(0))
+            if not isinstance(data, dict) or not data.get("summary"):
+                continue
+            save_weekly_summary(
+                user_id,
+                week_number=week_number,
+                week_start=(today - timedelta(days=6)).isoformat(),
+                summary=str(data.get("summary", "")),
+                achievements=str(data.get("achievements", "")),
+                challenges=str(data.get("challenges", "")),
+                next_week_goal=str(data.get("next_week_goal", "")),
+                score=int(data.get("score") or 0),
+            )
+            log.info("weekly_summary saved user=%s week=%s", user_id, week_number)
+            return
+        except Exception as e:
+            log.warning("weekly_summary model %s: %s", mid, e)
 
 
 def extract_and_save_facts(
