@@ -3305,16 +3305,26 @@ async def admin_stats(request: Request) -> dict:
     day3_ago = (now - timedelta(days=3)).strftime("%Y-%m-%d")
 
     profiles = db_store.load_all_profiles()
+    replied_today: set[str] = set()
+    if getattr(db_store, "_use_supabase", False):
+        rows = db_store._request(
+            "GET",
+            f"conversation_history?role=eq.user&created_at=gte.{today}T00:00:00&select=user_id",
+        ) or []
+        replied_today = {
+            str(r.get("user_id")) for r in rows if isinstance(r, dict) and r.get("user_id")
+        }
     users: list[dict] = []
     for uid, prof in profiles.items():
         if not isinstance(prof, dict):
             continue
+        uid_str = str(uid)
         last_morning = str(prof.get("last_morning_sent_date") or "")
         last_evening = str(prof.get("last_evening_sent_date") or "")
         last_active = max(last_morning, last_evening) if (last_morning or last_evening) else ""
         users.append(
             {
-                "user_id": str(uid),
+                "user_id": uid_str,
                 "name": prof.get("name") or "—",
                 "main_goal": str(prof.get("main_goal") or "")[:60],
                 "streak": int(prof.get("streak") or 0),
@@ -3324,6 +3334,7 @@ async def admin_stats(request: Request) -> dict:
                 "has_goal": bool(prof.get("main_goal")),
                 "onboarding_done": bool(prof.get("name") and prof.get("main_goal")),
                 "active_today": last_active == today,
+                "replied_today": uid_str in replied_today,
                 "active_week": last_active >= week_ago if last_active else False,
                 "churned": last_active < day3_ago if last_active else True,
             }
@@ -3333,6 +3344,7 @@ async def admin_stats(request: Request) -> dict:
     total = len(users)
     onboarded = sum(1 for u in users if u.get("onboarding_done"))
     active_today = sum(1 for u in users if u.get("active_today"))
+    replied_today_count = sum(1 for u in users if u.get("replied_today"))
     active_week = sum(1 for u in users if u.get("active_week"))
     churned = sum(1 for u in users if u.get("churned") and u.get("onboarding_done"))
     streak_3plus = sum(1 for u in users if int(u.get("streak") or 0) >= 3)
@@ -3342,6 +3354,7 @@ async def admin_stats(request: Request) -> dict:
             "total": total,
             "onboarded": onboarded,
             "active_today": active_today,
+            "replied_today": replied_today_count,
             "active_week": active_week,
             "churned": churned,
             "streak_3plus": streak_3plus,

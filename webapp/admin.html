@@ -87,6 +87,7 @@
             <th>Streak 🔥</th>
             <th>Week</th>
             <th>Last active</th>
+            <th>Ответил 💬</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -122,6 +123,7 @@
           ["Total users", stats.total || 0],
           ["Onboarded", stats.onboarded || 0],
           ["Active today", stats.active_today || 0],
+          ["Ответили сегодня 💬", stats.replied_today || 0],
           ["Active this week", stats.active_week || 0],
           ["Churned (3+ days)", stats.churned || 0],
           ["Streak 3+ days", stats.streak_3plus || 0],
@@ -139,6 +141,7 @@
             <td>${Number(u.streak || 0)}</td>
             <td>${Number(u.current_week || 1)}</td>
             <td>${String(u.last_active || "—")}</td>
+            <td>${u.replied_today ? "✅" : "—"}</td>
             <td>${statusCell(u)}</td>
           </tr>
         `).join("");
