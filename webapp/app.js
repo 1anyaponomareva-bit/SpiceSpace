@@ -260,7 +260,12 @@
   function renderCalendar() {
     const host = document.getElementById('calendar-grid');
     const badge = document.getElementById('calendar-week-badge');
+    const dowHost = document.querySelector('.calendar-dow');
     if (!host || !calendarData) return;
+    if (dowHost) {
+      const labels = ['1', '2', '3', '4', '5', '6', '7'];
+      dowHost.innerHTML = `<span></span>${labels.map((d) => `<span>${d}</span>`).join('')}`;
+    }
 
     const cw = Number(calendarData.current_week || profile?.current_week || 1);
     if (badge) badge.textContent = `Неделя ${cw} из 12`;
