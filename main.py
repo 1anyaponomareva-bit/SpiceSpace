@@ -27,7 +27,7 @@ import re
 import threading
 import uuid
 from contextlib import asynccontextmanager, suppress
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl
 from zoneinfo import ZoneInfo
@@ -78,6 +78,7 @@ from telegram.ext import (
 DATA_DIR = Path(__file__).resolve().parent
 WEBAPP_DIR = DATA_DIR / "webapp"
 load_dotenv(DATA_DIR / ".env")
+ADMIN_TELEGRAM_ID = 8412438788
 
 
 def strip_profanity(text: str) -> str:
@@ -3290,6 +3291,63 @@ async def health() -> dict[str, str | bool]:
     from onboarding_flow import BOT_BUILD
 
     return {"ok": True, "build": BOT_BUILD}
+
+
+@app.get("/api/admin/stats")
+async def admin_stats(request: Request) -> dict:
+    tid = request.query_params.get("admin_id", "")
+    if str(tid) != str(ADMIN_TELEGRAM_ID):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    week_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    day3_ago = (now - timedelta(days=3)).strftime("%Y-%m-%d")
+
+    profiles = db_store.load_all_profiles()
+    users: list[dict] = []
+    for uid, prof in profiles.items():
+        if not isinstance(prof, dict):
+            continue
+        last_morning = str(prof.get("last_morning_sent_date") or "")
+        last_evening = str(prof.get("last_evening_sent_date") or "")
+        last_active = max(last_morning, last_evening) if (last_morning or last_evening) else ""
+        users.append(
+            {
+                "user_id": str(uid),
+                "name": prof.get("name") or "—",
+                "main_goal": str(prof.get("main_goal") or "")[:60],
+                "streak": int(prof.get("streak") or 0),
+                "current_week": int(prof.get("current_week") or 1),
+                "last_active": last_active,
+                "timezone": prof.get("timezone") or "—",
+                "has_goal": bool(prof.get("main_goal")),
+                "onboarding_done": bool(prof.get("name") and prof.get("main_goal")),
+                "active_today": last_active == today,
+                "active_week": last_active >= week_ago if last_active else False,
+                "churned": last_active < day3_ago if last_active else True,
+            }
+        )
+
+    users.sort(key=lambda x: x.get("last_active") or "", reverse=True)
+    total = len(users)
+    onboarded = sum(1 for u in users if u.get("onboarding_done"))
+    active_today = sum(1 for u in users if u.get("active_today"))
+    active_week = sum(1 for u in users if u.get("active_week"))
+    churned = sum(1 for u in users if u.get("churned") and u.get("onboarding_done"))
+    streak_3plus = sum(1 for u in users if int(u.get("streak") or 0) >= 3)
+
+    return {
+        "stats": {
+            "total": total,
+            "onboarded": onboarded,
+            "active_today": active_today,
+            "active_week": active_week,
+            "churned": churned,
+            "streak_3plus": streak_3plus,
+        },
+        "users": users,
+    }
 
 
 @app.get("/api/profile")
