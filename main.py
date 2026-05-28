@@ -1478,6 +1478,8 @@ def _personality_text_from_row(personality: dict | None) -> str:
         parts.append(f"Лучшее время: {personality['best_time_of_day']}")
     if personality.get("response_to_pressure"):
         parts.append(f"Реакция на давление: {personality['response_to_pressure']}")
+    if personality.get("personal_values"):
+        parts.append(f"Ценности: {personality['personal_values']}")
     if personality.get("strengths"):
         parts.append(f"Сильные стороны: {personality['strengths']}")
     if personality.get("blockers"):
