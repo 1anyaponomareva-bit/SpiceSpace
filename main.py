@@ -1579,7 +1579,16 @@ async def _evening_message_text(
 ) -> str:
     today = _profile_local_date(profile)
     today_summary = db_store.get_daily_summary(chat_id, today) or {}
-    today_context = _format_today_conversation_context(chat_id)
+    today_context = str(today_summary.get("summary") or "").strip()
+    if not today_context:
+        lines: list[str] = []
+        for msg in (histories.get(chat_id, []) or [])[-10:]:
+            role = "Пользователь" if msg.get("role") == "user" else "Спейс"
+            content = msg.get("content") or (msg.get("parts") or [""])[0]
+            text = str(content or "").strip()
+            if text:
+                lines.append(f"{role}: {text[:200]}")
+        today_context = "\n".join(lines)
     summary_text = str(today_summary.get("summary") or "").strip()
     task = str(today_summary.get("task") or "").strip()
     has_task = bool(task)
@@ -1616,6 +1625,15 @@ async def _evening_message_text(
             today_task=task or "не задана",
             name_rule=name_instruction,
         )
+    )
+    context_block = (
+        f"\nСегодняшний диалог:\n{today_context}\n"
+        if today_context
+        else ""
+    )
+    user_content += (
+        f"{context_block}Используй контекст дня — упомяни конкретную деталь. "
+        "ЗАПРЕЩЕНО начинать с нуля."
     )
     evening_system = prepend_user_time(
         profile,
