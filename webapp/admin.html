@@ -88,6 +88,7 @@
             <th>Week</th>
             <th>Last active</th>
             <th>Ответил 💬</th>
+            <th>Сообщений сегодня</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -142,6 +143,7 @@
             <td>${Number(u.current_week || 1)}</td>
             <td>${String(u.last_active || "—")}</td>
             <td>${u.replied_today ? "✅" : "—"}</td>
+            <td>${u.messages_today || "—"}</td>
             <td>${statusCell(u)}</td>
           </tr>
         `).join("");

@@ -3305,15 +3305,20 @@ async def admin_stats(request: Request) -> dict:
     day3_ago = (now - timedelta(days=3)).strftime("%Y-%m-%d")
 
     profiles = db_store.load_all_profiles()
+    message_counts: dict[str, int] = {}
     replied_today: set[str] = set()
     if getattr(db_store, "_use_supabase", False):
         rows = db_store._request(
             "GET",
             f"conversation_history?role=eq.user&created_at=gte.{today}T00:00:00&select=user_id",
         ) or []
-        replied_today = {
-            str(r.get("user_id")) for r in rows if isinstance(r, dict) and r.get("user_id")
-        }
+        for r in rows:
+            if isinstance(r, dict):
+                uid = str(r.get("user_id"))
+                if not uid:
+                    continue
+                replied_today.add(uid)
+                message_counts[uid] = message_counts.get(uid, 0) + 1
     users: list[dict] = []
     for uid, prof in profiles.items():
         if not isinstance(prof, dict):
@@ -3335,6 +3340,7 @@ async def admin_stats(request: Request) -> dict:
                 "onboarding_done": bool(prof.get("name") and prof.get("main_goal")),
                 "active_today": last_active == today,
                 "replied_today": uid_str in replied_today,
+                "messages_today": message_counts.get(uid_str, 0),
                 "active_week": last_active >= week_ago if last_active else False,
                 "churned": last_active < day3_ago if last_active else True,
             }
