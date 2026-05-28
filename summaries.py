@@ -170,6 +170,56 @@ def save_summary_for_today(
     log.warning("daily_summary failed user=%s", user_id)
 
 
+FACTS_EXTRACT_PROMPT = """Из этого разговора извлеки важные факты о пользователе которые стоит запомнить надолго.
+Только конкретные личные факты: привычки, страхи, достижения, важные события, отношения, предпочтения.
+НЕ включай: временные состояния, общие фразы, то что уже есть в профиле (имя, цель).
+
+Формат ответа — JSON массив строк, максимум 3 факта:
+["факт 1", "факт 2", "факт 3"]
+
+Если нет важных фактов — верни пустой массив: []
+
+Разговор:
+{conversation}"""
+
+
+def extract_and_save_facts(
+    user_id: int,
+    profile: dict,
+    hist: list[dict],
+    model_names: list[str],
+) -> None:
+    from db import save_user_fact
+
+    conv = _conversation_text(hist, max_turns=20)
+    if not conv.strip() or len(conv) < 100:
+        return
+    prompt = FACTS_EXTRACT_PROMPT.format(conversation=conv)
+    for mid in model_names:
+        try:
+            raw = generate(
+                mid,
+                [{"role": "user", "content": prompt}],
+                system="Отвечай только валидным JSON массивом.",
+                max_tokens=200,
+                cache_core=False,
+            )
+            raw = raw.strip()
+            m = re.search(r"\[[\s\S]*\]", raw)
+            if not m:
+                return
+            facts = json.loads(m.group(0))
+            if not isinstance(facts, list):
+                return
+            for fact in facts[:3]:
+                if isinstance(fact, str) and len(fact.strip()) > 10:
+                    save_user_fact(user_id, fact.strip())
+            log.info("facts extracted user=%s count=%s", user_id, len(facts))
+            return
+        except Exception as e:
+            log.warning("extract_facts model %s: %s", mid, e)
+
+
 def save_onboarding_summary(
     user_id: int,
     profile: dict,
@@ -240,3 +290,7 @@ async def maybe_save_daily_summary(
     await asyncio.to_thread(
         save_summary_for_today, user_id, profile, hist, model_names
     )
+    if user_turns % 5 == 0:
+        await asyncio.to_thread(
+            extract_and_save_facts, user_id, profile, hist, model_names
+        )

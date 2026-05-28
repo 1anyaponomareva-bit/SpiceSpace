@@ -495,3 +495,51 @@ def delete_history(user_id: int | str) -> None:
     key = str(user_id)
     if _use_supabase:
         _request("DELETE", f"conversation_history?user_id=eq.{key}")
+
+
+def save_user_fact(user_id: int | str, fact: str, category: str = "general") -> None:
+    """Save a new fact about the user."""
+    key = str(user_id)
+    if not _use_supabase or not fact or not fact.strip():
+        return
+    existing = _request("GET", f"user_facts?user_id=eq.{key}&select=fact") or []
+    existing_facts = [
+        str(r.get("fact", "")).lower() for r in existing if isinstance(r, dict)
+    ]
+    new_fact_lower = fact.strip().lower()
+    for ef in existing_facts:
+        if new_fact_lower in ef or ef in new_fact_lower:
+            return
+    _request(
+        "POST",
+        "user_facts",
+        json={
+            "user_id": int(key),
+            "fact": fact.strip()[:500],
+            "category": category[:50],
+        },
+        headers={**_headers(), "Prefer": "return=minimal"},
+    )
+
+
+def load_user_facts(user_id: int | str, limit: int = 20) -> list[str]:
+    """Load facts about the user."""
+    key = str(user_id)
+    if not _use_supabase:
+        return []
+    rows = _request(
+        "GET",
+        f"user_facts?user_id=eq.{key}&order=created_at.desc&limit={limit}",
+    ) or []
+    return [
+        str(r.get("fact", ""))
+        for r in rows
+        if isinstance(r, dict) and r.get("fact")
+    ]
+
+
+def delete_user_facts(user_id: int | str) -> None:
+    """Delete all facts for user."""
+    key = str(user_id)
+    if _use_supabase:
+        _request("DELETE", f"user_facts?user_id=eq.{key}")

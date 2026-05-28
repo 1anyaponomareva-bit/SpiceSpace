@@ -1885,7 +1885,9 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
     tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name)
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
-    extra = ""
+    facts = await asyncio.to_thread(db_store.load_user_facts, chat_id, 10)
+    facts_text = "\n".join(f"— {f}" for f in facts) if facts else ""
+    extra = f"Важные факты о пользователе:\n{facts_text}" if facts_text else ""
 
     system = build_chat_system(prof, yesterday, today_summary, extra=extra)
 
@@ -3188,6 +3190,7 @@ def _purge_user_runtime(chat_id: int) -> None:
     """Очистка RAM-состояния пользователя после сброса профиля."""
     tid = str(chat_id)
     histories.pop(chat_id, None)
+    db_store.delete_user_facts(chat_id)
     db_store.delete_history(chat_id)
     onboarding.pop(chat_id, None)
     pending_morning.pop(chat_id, None)
