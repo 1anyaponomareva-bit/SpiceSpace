@@ -6,13 +6,13 @@ import asyncio
 import json
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 import anthropic
 
 from claude_client import generate
-from db import get_daily_summary, upsert_daily_summary
+from db import get_daily_summary, patch_daily_summary, upsert_daily_summary
 from prompts import DAILY_SUMMARY_PROMPT, ONBOARDING_SUMMARY_PROMPT
 
 log = logging.getLogger("coach_bot")
@@ -114,8 +114,19 @@ def save_summary_for_today(
         tz = ZoneInfo("Asia/Ho_Chi_Minh")
     today = datetime.now(tz).date()
 
-    if get_daily_summary(user_id, today):
-        return
+    existing = get_daily_summary(user_id, today)
+    if existing:
+        created_at = str(
+            existing.get("created_at") or existing.get("updated_at") or ""
+        ).strip()
+        if created_at:
+            try:
+                last_update = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                now_utc = datetime.now(timezone.utc)
+                if (now_utc - last_update).total_seconds() < 3600:
+                    return
+            except Exception:
+                pass
 
     conv = _conversation_text(hist)
     if not conv.strip():
@@ -141,13 +152,13 @@ def save_summary_for_today(
                 task = parsed.get("task", "")
                 if not _sanitize_summary_task(task, weekly_goal=weekly_goal):
                     task = ""
-                upsert_daily_summary(
+                patch_daily_summary(
                     user_id,
                     today,
                     summary=parsed["summary"],
                     mood=parsed["mood"],
                     key_detail=parsed["key_detail"],
-                    task=task,
+                    task=task if task else None,
                     completed=parsed.get("completed"),
                 )
                 log.info("daily_summary saved user=%s date=%s", user_id, today)
@@ -222,9 +233,9 @@ async def maybe_save_daily_summary(
     hist: list[dict],
     model_names: list[str],
 ) -> None:
-    """After 3+ user messages today, generate summary once."""
+    """After 2+ user messages today, generate/update summary."""
     user_turns = sum(1 for t in hist if t.get("role") == "user")
-    if user_turns < 3:
+    if user_turns < 2:
         return
     await asyncio.to_thread(
         save_summary_for_today, user_id, profile, hist, model_names

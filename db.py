@@ -437,6 +437,10 @@ def _row_to_summary(row: dict) -> dict:
         "task": row.get("task") or "",
         "summary_date": str(row.get("summary_date", ""))[:10],
     }
+    if row.get("created_at") is not None:
+        out["created_at"] = str(row.get("created_at"))
+    if row.get("updated_at") is not None:
+        out["updated_at"] = str(row.get("updated_at"))
     if row.get("completed") is not None:
         out["completed"] = bool(row["completed"])
     if "task_completed" in row:
