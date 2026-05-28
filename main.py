@@ -2094,6 +2094,20 @@ def _append_history_turn(chat_id: int, user_text: str, model_text: str) -> None:
     max_turns = 40
     if len(hist) > max_turns:
         histories[chat_id] = hist[-max_turns:]
+    try:
+        asyncio.get_running_loop().create_task(
+            _save_history_turns_async(chat_id, user_text, model_text)
+        )
+    except RuntimeError:
+        log.warning("No running event loop for history save chat_id=%s", chat_id)
+
+
+async def _save_history_turns_async(chat_id: int, user_text: str, model_text: str) -> None:
+    try:
+        await asyncio.to_thread(db_store.save_history_turn, chat_id, "user", user_text)
+        await asyncio.to_thread(db_store.save_history_turn, chat_id, "model", model_text)
+    except Exception as e:
+        log.warning("save_history_turns failed cid=%s: %s", chat_id, e)
 
 
 async def _save_conversation_turn(
@@ -2340,6 +2354,16 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await _bot_reply(update.message, msg)
                 _append_history_turn(cid, raw, msg)
                 return
+
+    # Restore history from Supabase if not in memory.
+    if cid not in histories or not histories[cid]:
+        try:
+            loaded = await asyncio.to_thread(db_store.load_history, cid, 20)
+            if loaded:
+                histories[cid] = loaded
+                log.info("Restored %d history turns for cid=%s", len(loaded), cid)
+        except Exception as e:
+            log.warning("load_history failed cid=%s: %s", cid, e)
 
     log.info("incoming text chat_id=%s len=%s", cid, len(raw))
 
@@ -3164,6 +3188,7 @@ def _purge_user_runtime(chat_id: int) -> None:
     """Очистка RAM-состояния пользователя после сброса профиля."""
     tid = str(chat_id)
     histories.pop(chat_id, None)
+    db_store.delete_history(chat_id)
     onboarding.pop(chat_id, None)
     pending_morning.pop(chat_id, None)
     pending_evening.pop(chat_id, None)

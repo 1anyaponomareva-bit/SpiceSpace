@@ -444,3 +444,50 @@ def _row_to_summary(row: dict) -> dict:
     elif row.get("completed") is not None:
         out["task_completed"] = "true" if row.get("completed") else "false"
     return out
+
+
+def save_history_turn(user_id: int | str, role: str, content: str) -> None:
+    """Save one conversation turn to Supabase."""
+    key = str(user_id)
+    if not _use_supabase:
+        return
+    if not content or not content.strip():
+        return
+    _request(
+        "POST",
+        "conversation_history",
+        json={
+            "user_id": int(key),
+            "role": role,
+            "content": str(content)[:2000],
+        },
+        headers={**_headers(), "Prefer": "return=minimal"},
+    )
+
+
+def load_history(user_id: int | str, limit: int = 20) -> list[dict]:
+    """Load last N conversation turns from Supabase."""
+    key = str(user_id)
+    if not _use_supabase:
+        return []
+    rows = _request(
+        "GET",
+        f"conversation_history?user_id=eq.{key}&order=created_at.desc&limit={limit}",
+    ) or []
+    turns: list[dict] = []
+    for row in reversed(rows):
+        if isinstance(row, dict) and row.get("role") and row.get("content"):
+            turns.append(
+                {
+                    "role": row["role"],
+                    "parts": [row["content"]],
+                }
+            )
+    return turns
+
+
+def delete_history(user_id: int | str) -> None:
+    """Delete all conversation history for user."""
+    key = str(user_id)
+    if _use_supabase:
+        _request("DELETE", f"conversation_history?user_id=eq.{key}")
