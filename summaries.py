@@ -273,6 +273,82 @@ def generate_weekly_summary(
             log.warning("weekly_summary model %s: %s", mid, e)
 
 
+PERSONALITY_EXTRACT_PROMPT = """Проанализируй переписку и обнови профиль личности пользователя.
+Ответь JSON — заполняй только те поля о которых есть реальные данные в переписке, остальные оставь пустой строкой:
+{{
+    "communication_style": "как предпочитает общаться (коротко/подробно, формально/неформально)",
+    "motivation_triggers": "что мотивирует и заряжает",
+    "procrastination_patterns": "когда и почему откладывает дела",
+    "best_time_of_day": "когда наиболее продуктивна",
+    "response_to_pressure": "как реагирует на давление и дедлайны",
+    "personal_values": "что важно в жизни",
+    "blockers": "что мешает двигаться вперёд",
+    "strengths": "сильные стороны которые проявляются",
+    "raw_insights": "другие важные наблюдения о личности"
+}}
+
+ВАЖНО: пиши только то что реально видно из переписки. Не додумывай.
+
+Переписка:
+{conversation}"""
+
+
+def update_personality_profile(
+    user_id: int,
+    profile: dict,
+    hist: list[dict],
+    model_names: list[str],
+) -> None:
+    from db import load_personality, save_personality
+
+    conv = _conversation_text(hist, max_turns=30)
+    if not conv.strip() or len(conv) < 200:
+        return
+    prompt = PERSONALITY_EXTRACT_PROMPT.format(conversation=conv)
+    for mid in model_names:
+        try:
+            raw = generate(
+                mid,
+                [{"role": "user", "content": prompt}],
+                system="Отвечай только валидным JSON.",
+                max_tokens=500,
+                cache_core=False,
+            )
+            m = re.search(r"\{[\s\S]*\}", raw)
+            if not m:
+                continue
+            data = json.loads(m.group(0))
+            if not isinstance(data, dict):
+                continue
+            fields = {k: v for k, v in data.items() if v and str(v).strip()}
+            if fields:
+                existing = load_personality(user_id) or {}
+                merged = {}
+                for key in (
+                    "communication_style",
+                    "motivation_triggers",
+                    "procrastination_patterns",
+                    "best_time_of_day",
+                    "response_to_pressure",
+                    "personal_values",
+                    "blockers",
+                    "strengths",
+                    "raw_insights",
+                ):
+                    new_val = str(fields.get(key, "")).strip()
+                    old_val = str(existing.get(key) or "").strip()
+                    merged[key] = new_val if new_val else old_val
+                save_personality(user_id, merged)
+                log.info(
+                    "personality updated user=%s fields=%s",
+                    user_id,
+                    list(fields.keys()),
+                )
+            return
+        except Exception as e:
+            log.warning("personality_extract model %s: %s", mid, e)
+
+
 def extract_and_save_facts(
     user_id: int,
     profile: dict,
@@ -383,4 +459,8 @@ async def maybe_save_daily_summary(
     if user_turns % 5 == 0:
         await asyncio.to_thread(
             extract_and_save_facts, user_id, profile, hist, model_names
+        )
+    if user_turns % 10 == 0:
+        await asyncio.to_thread(
+            update_personality_profile, user_id, profile, hist, model_names
         )

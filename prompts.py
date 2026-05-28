@@ -333,7 +333,9 @@ MORNING_MESSAGE_PROMPT = """Ты — Спейс, тёплая подруга с 
 - last_summary (вчера): {last_summary}
 - time_per_day: {time_per_day}
 
-{facts_block}"""
+{facts_block}
+
+{personality_block}"""
 
 
 EVENING_MESSAGE_PROMPT = """Ты — Спейс. Вечернее сообщение в Telegram.
@@ -367,7 +369,9 @@ EVENING_MESSAGE_PROMPT = """Ты — Спейс. Вечернее сообщен
 
 {name_rule}
 
-{facts_block}"""
+{facts_block}
+
+{personality_block}"""
 
 
 EVENING_NO_TASK_PROMPT = """Ты — Спейс. Вечернее сообщение в Telegram.
@@ -387,7 +391,9 @@ EVENING_NO_TASK_PROMPT = """Ты — Спейс. Вечернее сообщен
 
 {name_rule}
 
-{facts_block}"""
+{facts_block}
+
+{personality_block}"""
 
 
 TODAY_TASK_PROMPT = """Сформулируй одну задачу на сегодня — конкретное действие за {time_per_day}.

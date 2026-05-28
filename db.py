@@ -589,3 +589,38 @@ def load_weekly_summaries(user_id: int | str, limit: int = 4) -> list[dict]:
 def load_last_weekly_summary(user_id: int | str) -> dict | None:
     rows = load_weekly_summaries(user_id, limit=1)
     return rows[0] if rows else None
+
+
+def save_personality(user_id: int | str, fields: dict) -> None:
+    """Upsert personality profile for user."""
+    key = str(user_id)
+    if not _use_supabase:
+        return
+    row = {
+        "user_id": int(key),
+        **{k: str(v)[:2000] for k, v in fields.items() if v},
+    }
+    row["updated_at"] = datetime.utcnow().isoformat()
+    _request(
+        "POST",
+        "user_personality?on_conflict=user_id",
+        json=row,
+        headers={**_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+    )
+
+
+def load_personality(user_id: int | str) -> dict | None:
+    """Load personality profile for user."""
+    key = str(user_id)
+    if not _use_supabase:
+        return None
+    rows = _request("GET", f"user_personality?user_id=eq.{key}&limit=1") or []
+    if rows and isinstance(rows[0], dict):
+        return rows[0]
+    return None
+
+
+def delete_personality(user_id: int | str) -> None:
+    key = str(user_id)
+    if _use_supabase:
+        _request("DELETE", f"user_personality?user_id=eq.{key}")

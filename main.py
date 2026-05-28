@@ -1464,6 +1464,36 @@ def _facts_block_for_prompt(chat_id: int) -> str:
     return ""
 
 
+def _personality_text_from_row(personality: dict | None) -> str:
+    if not personality:
+        return ""
+    parts: list[str] = []
+    if personality.get("communication_style"):
+        parts.append(f"Стиль общения: {personality['communication_style']}")
+    if personality.get("motivation_triggers"):
+        parts.append(f"Что мотивирует: {personality['motivation_triggers']}")
+    if personality.get("procrastination_patterns"):
+        parts.append(f"Паттерны прокрастинации: {personality['procrastination_patterns']}")
+    if personality.get("best_time_of_day"):
+        parts.append(f"Лучшее время: {personality['best_time_of_day']}")
+    if personality.get("response_to_pressure"):
+        parts.append(f"Реакция на давление: {personality['response_to_pressure']}")
+    if personality.get("strengths"):
+        parts.append(f"Сильные стороны: {personality['strengths']}")
+    if personality.get("blockers"):
+        parts.append(f"Блокеры: {personality['blockers']}")
+    if personality.get("raw_insights"):
+        parts.append(f"Наблюдения: {personality['raw_insights']}")
+    return "\n".join(parts)
+
+
+def _personality_block_for_prompt(chat_id: int) -> str:
+    text = _personality_text_from_row(db_store.load_personality(chat_id))
+    if text:
+        return f"Профиль личности:\n{text}"
+    return ""
+
+
 async def _restore_history_from_db(cid: int, purpose: str) -> None:
     if cid in histories and histories[cid]:
         return
@@ -1531,6 +1561,7 @@ async def _morning_message_text(
     ).strip() or "нет"
     time_per_day = _format_time_per_day_for_prompt(profile)
     facts_block = _facts_block_for_prompt(chat_id)
+    personality_block = _personality_block_for_prompt(chat_id)
 
     user_content = (
         f"{name_instruction}\n\n"
@@ -1542,6 +1573,7 @@ async def _morning_message_text(
             last_summary=last_summary,
             time_per_day=time_per_day,
             facts_block=facts_block,
+            personality_block=personality_block,
         )
     )
 
@@ -1549,8 +1581,9 @@ async def _morning_message_text(
         "Напиши только текст утреннего сообщения для Telegram. Без markdown.\n"
         f"{name_instruction}"
     )
-    if facts_block:
-        morning_system += f"\n\n{facts_block}"
+    for block in (facts_block, personality_block):
+        if block:
+            morning_system += f"\n\n{block}"
 
     def call() -> str:
         for mid in model_names:
@@ -1630,6 +1663,7 @@ async def _evening_message_text(
     name_instruction = _exact_name_prompt_instruction(profile, chat_id)
     goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
     facts_block = _facts_block_for_prompt(chat_id)
+    personality_block = _personality_block_for_prompt(chat_id)
 
     summary_lines: list[str] = []
     if summary_text:
@@ -1655,6 +1689,7 @@ async def _evening_message_text(
             today_task=task or "не задана",
             name_rule=name_instruction,
             facts_block=facts_block,
+            personality_block=personality_block,
         )
     )
     context_block = (
@@ -1666,10 +1701,13 @@ async def _evening_message_text(
         f"{context_block}Используй контекст дня — упомяни конкретную деталь. "
         "ЗАПРЕЩЕНО начинать с нуля."
     )
+    evening_extra = "\n\n".join(
+        b for b in (facts_block, personality_block) if b
+    )
     evening_system = prepend_user_time(
         profile,
         f"{_EVENING_PERSONAL_SYSTEM}\n\n{name_instruction}"
-        + (f"\n\n{facts_block}" if facts_block else ""),
+        + (f"\n\n{evening_extra}" if evening_extra else ""),
     )
 
     def call() -> str:
@@ -1930,6 +1968,8 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
     facts = await asyncio.to_thread(db_store.load_user_facts, chat_id, 10)
     facts_text = "\n".join(f"— {f}" for f in facts) if facts else ""
+    personality = await asyncio.to_thread(db_store.load_personality, chat_id)
+    personality_text = _personality_text_from_row(personality)
     last_week = await asyncio.to_thread(db_store.load_last_weekly_summary, chat_id)
     weekly_context = ""
     if last_week:
@@ -1940,7 +1980,9 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
         )
     extra_parts: list[str] = []
     if facts_text:
-        extra_parts.append(f"Важные факты о пользователе:\n{facts_text}")
+        extra_parts.append(f"Важные факты:\n{facts_text}")
+    if personality_text:
+        extra_parts.append(f"Профиль личности:\n{personality_text}")
     if weekly_context:
         extra_parts.append(f"Прошлая неделя:\n{weekly_context}")
     extra = "\n\n".join(extra_parts)
@@ -3280,6 +3322,7 @@ def _purge_user_runtime(chat_id: int) -> None:
     tid = str(chat_id)
     histories.pop(chat_id, None)
     db_store.delete_user_facts(chat_id)
+    db_store.delete_personality(chat_id)
     db_store.delete_history(chat_id)
     onboarding.pop(chat_id, None)
     pending_morning.pop(chat_id, None)
