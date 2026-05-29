@@ -1601,13 +1601,14 @@ async def _morning_message_text(
         )
     )
 
-    morning_system = (
+    morning_body = (
         "Напиши только текст утреннего сообщения для Telegram. Без markdown.\n"
         f"{name_instruction}"
     )
     for block in (facts_block, personality_block):
         if block:
-            morning_system += f"\n\n{block}"
+            morning_body += f"\n\n{block}"
+    morning_system = prepend_user_time(profile, morning_body)
 
     def call() -> str:
         for mid in model_names:
@@ -1616,10 +1617,7 @@ async def _morning_message_text(
                     claude_generate(
                         mid,
                         [{"role": "user", "content": user_content}],
-                        system=prepend_user_time(
-                            profile,
-                            morning_system,
-                        ),
+                        system=morning_system,
                         max_tokens=360,
                         cache_core=False,
                     )
@@ -1709,30 +1707,27 @@ async def _evening_message_text(
             name=display_name,
             goal=goal or "не указана",
             summary_block=summary_block,
-            today_context=today_context or "пока мало переписки",
+            today_context="(см. блок «Сегодняшний диалог» в системном промпте)",
             today_task=task or "не задана",
             name_rule=name_instruction,
             facts_block=facts_block,
             personality_block=personality_block,
         )
     )
-    context_block = (
-        f"\nСегодняшний диалог:\n{today_context}\n"
-        if today_context
-        else ""
-    )
-    user_content += (
-        f"{context_block}Используй контекст дня — упомяни конкретную деталь. "
-        "ЗАПРЕЩЕНО начинать с нуля."
-    )
     evening_extra = "\n\n".join(
         b for b in (facts_block, personality_block) if b
     )
-    evening_system = prepend_user_time(
-        profile,
+    evening_body = (
         f"{_EVENING_PERSONAL_SYSTEM}\n\n{name_instruction}"
-        + (f"\n\n{evening_extra}" if evening_extra else ""),
+        + (f"\n\n{evening_extra}" if evening_extra else "")
     )
+    if today_context:
+        evening_body += (
+            f"\n\nСегодняшний диалог (время в репликах — прошлое, не текущее):\n"
+            f"{today_context}\n"
+            "Используй контекст дня — упомяни конкретную деталь. ЗАПРЕЩЕНО начинать с нуля."
+        )
+    evening_system = prepend_user_time(profile, evening_body)
 
     def call() -> str:
         for mid in model_names:

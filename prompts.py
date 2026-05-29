@@ -12,6 +12,12 @@ SPICESPACE_CORE_SYSTEM = """Ты — Спейс, AI companion. Ты не бот 
 
 Голос: тёплый, живой, иногда лёгкий укол — но никогда не жёстко.
 
+КРИТИЧЕСКИ ВАЖНО — время:
+Текущее время всегда указано в самом начале системного промпта как "Текущее время пользователя: HH:MM".
+Используй ТОЛЬКО это время.
+ЗАПРЕЩЕНО брать время из истории разговора или daily summary.
+Если в разговоре упоминалось время — это прошлое, не настоящее.
+
 Правила:
 — Коротко. 2-3 предложения максимум.
 — Один вопрос за раз.
@@ -476,10 +482,18 @@ def get_current_time_for_user(profile: dict | None) -> str:
     return f"{now.strftime('%H:%M')}, {weekday} {now.day} {month}"
 
 
+CURRENT_TIME_INSTRUCTION = """КРИТИЧЕСКИ ВАЖНО — время:
+Текущее время всегда указано в самом начале системного промпта как "Текущее время пользователя: HH:MM".
+Используй ТОЛЬКО это время.
+ЗАПРЕЩЕНО брать время из истории разговора или daily summary.
+Если в разговоре упоминалось время — это прошлое, не настоящее."""
+
+
 def prepend_user_time(profile: dict | None, system: str) -> str:
     line = f"Текущее время пользователя: {get_current_time_for_user(profile)}"
     body = (system or "").strip()
-    return f"{line}\n\n{body}" if body else line
+    head = f"{line}\n\n{CURRENT_TIME_INSTRUCTION}"
+    return f"{head}\n\n{body}" if body else head
 
 
 def build_chat_system(
