@@ -159,7 +159,6 @@ def save_summary_for_today(
                     mood=parsed["mood"],
                     key_detail=parsed["key_detail"],
                     task=task if task else None,
-                    completed=parsed.get("completed"),
                 )
                 log.info("daily_summary saved user=%s date=%s", user_id, today)
                 return
@@ -424,7 +423,6 @@ def save_onboarding_summary(
                     mood=parsed["mood"],
                     key_detail=parsed["key_detail"],
                     task=parsed.get("task", ""),
-                    completed=parsed.get("completed"),
                 )
                 return
         except (anthropic.RateLimitError, anthropic.NotFoundError):

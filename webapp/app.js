@@ -238,9 +238,15 @@
     haptic('light');
   }
 
-  function isTaskCompletedStrict(prof) {
+  function todayTaskCompletionStatus(prof) {
     const tc = prof?.task_completed;
-    return tc === true || tc === 'true';
+    if (tc === 'true') return 'done';
+    if (tc === 'false') return 'missed';
+    return 'pending';
+  }
+
+  function isTaskCompletedStrict(prof) {
+    return todayTaskCompletionStatus(prof) === 'done';
   }
 
   function calendarCellClass(day) {
@@ -386,10 +392,13 @@
       return title && (title === focus.toLowerCase() || focus.toLowerCase().includes(title));
     });
     if (!dup) {
+      const focusStatus = todayTaskCompletionStatus(prof);
       out.unshift({
         id: '__today_focus__',
         title: focus,
-        done: isTaskCompletedStrict(prof),
+        done: focusStatus === 'done',
+        missed: focusStatus === 'missed',
+        status: focusStatus,
         virtual: true,
       });
     }
@@ -443,16 +452,27 @@
 
     host.innerHTML = todayItems.map((t) => {
       const done = Boolean(t.done);
+      const missed = Boolean(t.missed);
+      const isFocus = t.id === '__today_focus__';
       const id = escapeHtml(t.id);
       const timeLabel = t.time ? formatTimeForDisplay(t.time, '') : '';
       const timeHtml = timeLabel
         ? `<span class="task-time">${escapeHtml(timeLabel)}</span>`
         : '';
+      const checkDisabled = done || missed || isFocus;
+      const checkLabel = done
+        ? 'Выполнено'
+        : missed
+          ? 'Не выполнено'
+          : isFocus
+            ? 'Подтверди вечером в чате с ботом'
+            : 'Отметить выполненным';
+      const textStyle = missed ? ' style="text-decoration:line-through;opacity:0.7"' : '';
       return `
         <div class="task-row">
-          <button type="button" class="task-check${done ? ' done' : ''}" data-id="${id}" ${done ? 'disabled' : ''} aria-label="Отметить выполненным">${done ? '✓' : ''}</button>
+          <button type="button" class="task-check${done ? ' done' : ''}${missed ? ' missed' : ''}" data-id="${id}" ${checkDisabled ? 'disabled' : ''} aria-label="${escapeHtml(checkLabel)}">${done ? '✓' : missed ? '✗' : ''}</button>
           ${timeHtml}
-          <span class="task-text${done ? ' done' : ''}">${escapeHtml(t.title || '')}</span>
+          <span class="task-text${done ? ' done' : ''}${missed ? ' missed' : ''}"${textStyle}>${escapeHtml(t.title || '')}</span>
         </div>`;
     }).join('');
   }
@@ -563,13 +583,6 @@
 
   async function completeTask(id) {
     if (id === '__today_focus__') {
-      const updated = await markDay('true');
-      if (updated) profile = updated;
-      else if (profile) {
-        profile.task_completed = 'true';
-        profile.today_completed = true;
-      }
-      calendarData = await fetchCalendar();
       return;
     }
     const resp = await apiFetch(`/api/tasks/${encodeURIComponent(id)}/done`, { method: 'POST' });
