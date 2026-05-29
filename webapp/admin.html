@@ -89,6 +89,7 @@
             <th>Last active</th>
             <th>Ответил 💬</th>
             <th>Сообщений сегодня</th>
+            <th>Всего сообщений</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -144,6 +145,7 @@
             <td>${String(u.last_active || "—")}</td>
             <td>${u.replied_today ? "✅" : "—"}</td>
             <td>${u.messages_today || "—"}</td>
+            <td>${u.messages_total || "—"}</td>
             <td>${statusCell(u)}</td>
           </tr>
         `).join("");
