@@ -1850,6 +1850,24 @@ def _touch_streak_for_activity(chat_id: int, profile: dict) -> None:
         user_profiles[str(chat_id)] = profile
 
 
+def _is_future_task(text: str) -> bool:
+    """Returns True if user is talking about tomorrow, not today."""
+    low = (text or "").strip().lower()
+    future_markers = (
+        "завтра",
+        "завтра буду",
+        "завтра сделаю",
+        "завтра займусь",
+        "завтра планирую",
+        "на завтра",
+        "следующей неделе",
+        "потом",
+        "позже",
+        "на следующей",
+    )
+    return any(m in low for m in future_markers)
+
+
 async def _try_save_task_from_message(
     chat_id: int,
     bot_reply: str,
@@ -1857,6 +1875,8 @@ async def _try_save_task_from_message(
     profile: dict,
 ) -> None:
     """Сохранить задачу дня, если бот подтвердил её в пост-онбординговом диалоге."""
+    if _is_future_task(user_message):
+        return
     bot_lower = (bot_reply or "").lower()
     indicators = (
         "записала",
@@ -2789,6 +2809,8 @@ def _maybe_save_task_from_user_reply(
 ) -> None:
     weekly = str(profile.get("weekly_goal") or "").strip()
     raw = (user_text or "").strip()
+    if _is_future_task(raw):
+        return
     if len(raw) < 3 or len(raw) > 200:
         return
     if _looks_like_greeting_or_chat(raw):
