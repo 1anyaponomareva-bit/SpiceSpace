@@ -1652,7 +1652,8 @@ _EVENING_PERSONAL_SYSTEM = (
 def _today_has_task(chat_id: int, profile: dict) -> bool:
     today = _profile_local_date(profile)
     summ = db_store.get_daily_summary(chat_id, today) or {}
-    return bool(str(summ.get("task") or "").strip())
+    task = str(summ.get("task") or "").strip()
+    return bool(task) and len(task) > 5
 
 
 async def _evening_message_text(
@@ -1673,8 +1674,15 @@ async def _evening_message_text(
                 lines.append(f"{role}: {text[:200]}")
         today_context = "\n".join(lines)
     summary_text = str(today_summary.get("summary") or "").strip()
+    # Only use task from daily_summary, never from conversation
     task = str(today_summary.get("task") or "").strip()
-    has_task = bool(task)
+    has_task = bool(task) and len(task) > 5
+    log.info(
+        "evening message cid=%s has_task=%s task=%s",
+        chat_id,
+        has_task,
+        task[:50] if task else "",
+    )
 
     if not summary_text and not today_context:
         return evening_opening(has_task=has_task)
@@ -1695,7 +1703,7 @@ async def _evening_message_text(
         summary_lines.append(f"mood: {mood}")
     if key_detail:
         summary_lines.append(f"key_detail: {key_detail}")
-    if task:
+    if has_task:
         summary_lines.append(f"task: {task}")
     summary_block = "\n".join(summary_lines) if summary_lines else "пока нет сводки"
 
@@ -2403,7 +2411,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             _append_history_turn(cid, raw, reply)
             await _bot_reply(update.message, reply)
         finally:
-            pe_state["replied"] = False
+            pe_state.pop("replied", None)
         return
 
     if cid in pending_natural_reminder and prof_d:
@@ -3089,7 +3097,7 @@ async def _bootstrap_bot() -> None:
 
                 if _time_in_window(evening_time, now_hm) and profile.get("last_evening_sent_date") != today:
                     try:
-                        pending_evening[cid] = {"date": today, "replied": False}
+                        pending_evening[cid] = {"date": today}
                         await _restore_history_from_db(cid, "evening message")
                         async with typing_while(bot, cid):
                             evening_text = await _evening_message_text(
