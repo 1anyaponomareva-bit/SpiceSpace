@@ -82,17 +82,16 @@ ADMIN_TELEGRAM_ID = 8412438788
 
 
 def strip_profanity(text: str) -> str:
-    replacements = {
-        "бля ": "",
-        "бля,": "",
-        " бля": "",
-        "блин": "",
-        "чёрт": "",
-        "черт": "",
-        "фиг": "",
-    }
-    for word, replacement in replacements.items():
-        text = text.replace(word, replacement)
+    patterns = [
+        r"\bбля\b",
+        r"\bблин\b",
+        r"\bчёрт\b",
+        r"\bчерт\b",
+        r"\bфиг\b",
+    ]
+    for pattern in patterns:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+    text = re.sub(r"  +", " ", text)
     return text.strip()
 
 
