@@ -96,8 +96,29 @@ def strip_profanity(text: str) -> str:
     return text.strip()
 
 
+_CLOSING_PHRASE_PATTERNS = (
+    r"\s*всё\s+на\s+сегодня\??",
+    r"\s*ещё\s+что[- ]?то\??",
+    r"\s*чем\s+ещё\s+могу\s+помочь\??",
+    r"\s*есть\s+ещё\s+вопросы\??",
+    r"\s*если\s+что\s*—?\s*пиши!?",
+    r"\s*обращайся!?",
+    r"\s*всегда\s+рада\s+помочь!?",
+    r"\s*на\s+этом\s+всё\??",
+    r"\s*нужно\s+ещё\s+что-?нибудь\??",
+)
+
+
+def strip_closing_phrases(text: str) -> str:
+    for pat in _CLOSING_PHRASE_PATTERNS:
+        text = re.sub(pat, "", text, flags=re.IGNORECASE)
+    text = re.sub(r"([.!?…])\s*([.!?…])+", r"\1", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    return text.strip()
+
+
 def sanitize_bot_reply(text: str) -> str:
-    return strip_profanity(strip_markdown(text))
+    return strip_closing_phrases(strip_profanity(strip_markdown(text)))
 
 
 async def _bot_reply(message, text: str) -> None:
