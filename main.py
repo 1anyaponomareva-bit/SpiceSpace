@@ -1987,23 +1987,25 @@ async def _handle_evening_reply(
         patch: dict[str, object] = {"task_completed": outcome}
         if outcome == "true":
             patch["completed"] = True
+        elif outcome == "false":
+            patch["completed"] = False
+        _update_today_summary_field(chat_id, profile, **patch)
+        log.info("evening task_completed saved cid=%s outcome=%s", chat_id, outcome)
+
+        if outcome == "true":
             today = _profile_local_date(profile)
             _bump_streak_on_mark(profile, today)
-            ws = min(100, int(profile.get("weekly_score") or 0) + 15)
-            profile["weekly_score"] = ws
+            _week_scores_array(profile, str(chat_id))
             db_store.update_profile(
                 chat_id,
                 {
                     "streak": int(profile.get("streak") or 0),
                     "last_streak_date": str(profile.get("last_streak_date") or ""),
-                    "weekly_score": ws,
+                    "weekly_score": int(profile.get("weekly_score") or 0),
+                    "week_scores": profile.get("week_scores") or [0] * 12,
                 },
             )
             user_profiles[str(chat_id)] = profile
-        elif outcome == "false":
-            patch["completed"] = False
-        _update_today_summary_field(chat_id, profile, **patch)
-        log.info("evening task_completed saved cid=%s outcome=%s", chat_id, outcome)
 
     pending_evening.pop(chat_id, None)
     return await _coach_reply(
@@ -3039,15 +3041,18 @@ def _sanitize_today_task(text: str, weekly_goal: str = "") -> str:
     return cleaned
 
 
-def _week_scores_array(profile: dict) -> list[int]:
-    raw = profile.get("week_scores")
-    if isinstance(raw, list) and len(raw) >= 12:
-        return [max(0, min(100, int(x or 0))) for x in raw[:12]]
-    if isinstance(raw, list) and len(raw) >= 4:
-        padded = [max(0, min(100, int(x or 0))) for x in raw[:4]]
-        return padded + [0] * (12 - len(padded))
+def _week_scores_array(profile: dict, telegram_id: str | None = None) -> list[int]:
+    tid = str(telegram_id or profile.get("telegram_id") or profile.get("user_id") or "")
+    if tid:
+        summaries = db_store.list_daily_summaries(tid)
+        completed_count = sum(
+            1 for s in summaries if s.get("task_completed") == "true"
+        )
+        weekly_score = min(100, completed_count * 14)
+        profile["weekly_score"] = weekly_score
+
     cw = max(1, min(12, int(profile.get("current_week") or 1)))
-    ws = max(0, min(100, int(profile.get("weekly_score") or 0)))
+    ws = int(profile.get("weekly_score") or 0)
     out = [0] * 12
     out[cw - 1] = ws
     return out
@@ -3117,7 +3122,7 @@ def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> di
             p["task_completed"] = tc
             p["today_completed"] = tc == "true"
 
-    p["week_scores"] = _week_scores_array(p)
+    p["week_scores"] = _week_scores_array(p, tid or None)
     p["display_streak"] = _display_streak(p, tid or None)
     return p
 
@@ -3786,7 +3791,7 @@ async def mark_day_endpoint(
         raise HTTPException(status_code=404, detail="profile not found")
 
     if isinstance(body, dict) and body.get("streak_only"):
-        await _touch_streak_for_activity(int(tid), profile)
+        _touch_streak_for_activity(int(tid), profile)
         return {
             "ok": True,
             "streak": int(profile.get("streak") or 0),
@@ -3794,28 +3799,24 @@ async def mark_day_endpoint(
             "profile": _enrich_profile_for_api(profile, tid),
         }
 
-    today = _profile_local_date(profile)
-    tc = None
-    if isinstance(body, dict) and "task_completed" in body:
-        tc = db_store.normalize_task_completed(body.get("task_completed"))
+    tc = "true"
+    if isinstance(body, dict) and body.get("task_completed"):
+        tc = db_store.normalize_task_completed(body["task_completed"]) or "true"
 
-    if tc:
-        _update_today_summary_field(
-            int(tid),
-            profile,
-            task_completed=tc,
-            completed=(tc == "true"),
-        )
-        if tc == "true":
-            _bump_streak_on_mark(profile, today)
+    _update_today_summary_field(
+        int(tid),
+        profile,
+        task_completed=tc,
+        completed=(tc == "true"),
+    )
 
-        ws = min(100, int(profile.get("weekly_score") or 0) + 15)
-        profile["weekly_score"] = ws
-        cw = max(1, min(12, int(profile.get("current_week") or 1)))
-        scores = _week_scores_array(profile)
-        scores[cw - 1] = ws
-        profile["week_scores"] = scores
+    if tc == "true":
+        today = _profile_local_date(profile)
+        _bump_streak_on_mark(profile, today)
+        profile["week_scores"] = _week_scores_array(profile, tid)
+
         db_store.upsert_profile(int(tid), profile)
+        user_profiles[tid] = profile
 
     user_profiles[tid] = profile
     return {"profile": _enrich_profile_for_api(profile, tid)}
