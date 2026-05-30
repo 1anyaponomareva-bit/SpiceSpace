@@ -1833,22 +1833,21 @@ def _update_today_summary_field(
     db_store.patch_daily_summary(chat_id, today, **patch)
 
 
-def _touch_streak_for_activity(chat_id: int, profile: dict) -> None:
+async def _touch_streak_for_activity(chat_id: int, profile: dict) -> None:
     """Отметить активность пользователя сегодня (для streak), без last_daily_sent_date."""
     if not isinstance(profile, dict):
         return
     today = _profile_local_date(profile)
-    before = str(profile.get("last_streak_date") or "").strip()
     _bump_streak_on_mark(profile, today)
-    if str(profile.get("last_streak_date") or "").strip() != before:
-        db_store.update_profile(
-            chat_id,
-            {
-                "streak": int(profile.get("streak") or 0),
-                "last_streak_date": str(profile.get("last_streak_date") or ""),
-            },
-        )
-        user_profiles[str(chat_id)] = profile
+    await asyncio.to_thread(
+        db_store.update_profile,
+        chat_id,
+        {
+            "streak": int(profile.get("streak") or 0),
+            "last_streak_date": str(profile.get("last_streak_date") or ""),
+        },
+    )
+    user_profiles[str(chat_id)] = profile
 
 
 def _is_future_task(text: str) -> bool:
@@ -2393,7 +2392,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     prof_raw = user_profiles.get(str(cid))
     prof_d = prof_raw if isinstance(prof_raw, dict) else None
     if prof_d:
-        _touch_streak_for_activity(cid, prof_d)
+        await _touch_streak_for_activity(cid, prof_d)
 
     if _looks_like_reminder_capability_question(raw):
         prof_raw = user_profiles.get(str(cid))
@@ -2562,7 +2561,7 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     prof_photo = user_profiles.get(str(cid))
     if isinstance(prof_photo, dict):
-        _touch_streak_for_activity(cid, prof_photo)
+        await _touch_streak_for_activity(cid, prof_photo)
 
     model_names: list[str] = context.bot_data["claude_model_names"]
     caption = (msg.caption or "").strip() or "Что на фото?"
@@ -2925,21 +2924,9 @@ def _week_scores_array(profile: dict) -> list[int]:
 
 def _display_streak(profile: dict, telegram_id: str | None) -> int:
     s = int(profile.get("streak") or 0)
-    today = _profile_local_date(profile)
-    today_iso = today.isoformat()
+    today_iso = _profile_local_date(profile).isoformat()
     if profile.get("last_streak_date") == today_iso:
         return max(s, 1)
-    if profile.get("today_completed"):
-        return max(s, 1)
-    if (profile.get("today_task") or "").strip():
-        return max(s, 1)
-    if telegram_id:
-        summ = db_store.get_daily_summary(telegram_id, today)
-        if isinstance(summ, dict):
-            if summ.get("completed"):
-                return max(s, 1)
-            if (summ.get("task") or "").strip():
-                return max(s, 1)
     return s
 
 
@@ -3664,11 +3651,12 @@ async def mark_day_endpoint(
         raise HTTPException(status_code=404, detail="profile not found")
 
     if isinstance(body, dict) and body.get("streak_only"):
-        _touch_streak_for_activity(int(tid), profile)
+        await _touch_streak_for_activity(int(tid), profile)
         return {
             "ok": True,
             "streak": int(profile.get("streak") or 0),
             "display_streak": _display_streak(profile, tid),
+            "profile": _enrich_profile_for_api(profile, tid),
         }
 
     today = _profile_local_date(profile)

@@ -487,14 +487,15 @@
     const host = document.getElementById('streak-dots');
     if (!host) return;
 
-    // 7 dots left→right: previous days black, today green, rest grey (not a week calendar)
     const filled = Math.min(7, Math.max(0, streak));
     const parts = [];
     for (let i = 0; i < 7; i++) {
       let cls = 'streak-dot';
-      if (filled > 0) {
-        if (i < filled - 1) cls += ' done';
-        else if (i === filled - 1) cls += ' today';
+      if (i < filled) {
+        cls += ' done';
+        if (i === filled - 1) cls += ' today';
+      } else if (filled === 0 && i === 0) {
+        cls += ' today';
       }
       parts.push(`<div class="${cls}" style="animation-delay:${i * 0.05}s"></div>`);
     }
@@ -556,11 +557,20 @@
 
   async function markStreakOnOpen() {
     try {
-      await apiFetch('/api/mark-day', {
+      const resp = await apiFetch('/api/mark-day', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ streak_only: true }),
       });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.profile) {
+        profile = data.profile;
+      } else if (profile) {
+        if (data.streak != null) profile.streak = data.streak;
+        if (data.display_streak != null) profile.display_streak = data.display_streak;
+      }
+      renderStreak(profile);
     } catch (_) {}
   }
 
@@ -767,11 +777,11 @@
     setCanEditName(true);
     setCanEditTimes(true);
 
+    await markStreakOnOpen();
     tasks = await fetchTasks();
     calendarData = await fetchCalendar();
     renderAll(result.user || tgUser);
     syncTimezone();
-    markStreakOnOpen();
     document.querySelector('.settings-block')?.classList.add('loaded');
   }
 
