@@ -3746,6 +3746,82 @@ def _profile_cycle_start(profile: dict, user_id: str | int) -> date:
     return _profile_local_date(profile)
 
 
+@app.get("/api/milestone")
+async def get_milestone(
+    request: Request,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+) -> dict:
+    tid = _auth_telegram_id(request, telegram_id)
+    profile = _resolve_user_profile(tid)
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    summaries = db_store.list_daily_summaries(tid)
+    completed_days = sum(
+        1 for s in summaries if s.get("task_completed") == "true"
+    )
+
+    if completed_days not in MILESTONE_DAYS:
+        return {"milestone": None}
+
+    shown_key = f"milestone_shown_{completed_days}"
+    if profile.get(shown_key):
+        return {"milestone": None}
+
+    name = str(profile.get("name") or "").strip()
+    main_goal = str(profile.get("main_goal") or "").strip()
+    vision = str(profile.get("vision") or "").strip()
+
+    prompt = f"""Напиши короткое персональное поздравление для пользователя.
+
+Имя: {name}
+Цель на 12 недель: {main_goal}
+Мечта: {vision}
+Выполнено дней подряд: {completed_days}
+
+Правила:
+- 2-3 предложения максимум
+- Говори про ЕЁ конкретную цель — не общие слова
+- Тон: тёплая подруга которая искренне радуется
+- Упомяни цифру {completed_days} дней
+- Свяжи с её целью или мечтой
+- Каждый раз разный текст
+- Без markdown, без восклицательных знаков через слово
+- Один эмодзи максимум"""
+
+    def generate_message() -> str:
+        model_names = build_model_chain(select_model_id())
+        for mid in model_names:
+            try:
+                text = claude_generate(
+                    mid,
+                    [{"role": "user", "content": prompt}],
+                    system="Пиши тепло и лично. Только текст поздравления.",
+                    max_tokens=150,
+                    cache_core=False,
+                ).strip()
+                if text:
+                    return sanitize_bot_reply(text)
+            except Exception as e:
+                log.warning("milestone generate %s: %s", mid, e)
+        display_name = name or "подруга"
+        return f"{display_name}, {completed_days} дней — ты реально двигаешься к своей цели 💙"
+
+    message = await asyncio.to_thread(generate_message)
+
+    profile[shown_key] = True
+    db_store.update_profile(int(tid), {shown_key: True})
+    user_profiles[tid] = profile
+
+    return {
+        "milestone": {
+            "days": completed_days,
+            "message": message,
+            "name": name,
+        }
+    }
+
+
 @app.get("/api/calendar")
 async def calendar_endpoint(
     request: Request,
