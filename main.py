@@ -2017,6 +2017,19 @@ async def _generate_weekly_summary_async(
         log.warning("weekly_summary_async failed cid=%s: %s", cid, e)
 
 
+async def _refresh_profile_timezone(chat_id: int, prof: dict) -> dict:
+    if not isinstance(prof, dict):
+        return prof
+    if str(prof.get("timezone") or "").strip().lower() == "pending":
+        prof["timezone"] = resolve_user_timezone(prof)
+        await asyncio.to_thread(
+            db_store.update_profile,
+            chat_id,
+            {"timezone": prof["timezone"]},
+        )
+    return prof
+
+
 async def _coach_reply(
     chat_id: int,
     user_text: str,
@@ -2027,6 +2040,7 @@ async def _coach_reply(
     tid = str(chat_id)
     prof = db_store.get_profile(chat_id) or user_profiles.get(tid) or {}
     if isinstance(prof, dict):
+        prof = await _refresh_profile_timezone(chat_id, prof)
         user_profiles[tid] = prof
     tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name)
@@ -2124,6 +2138,7 @@ async def _coach_reply_photo(
     tid = str(chat_id)
     prof = db_store.get_profile(chat_id) or user_profiles.get(tid) or {}
     if isinstance(prof, dict):
+        prof = await _refresh_profile_timezone(chat_id, prof)
         user_profiles[tid] = prof
     tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name)
