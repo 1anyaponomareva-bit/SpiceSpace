@@ -3064,11 +3064,31 @@ def _week_scores_array(profile: dict, telegram_id: str | None = None) -> list[in
 
 
 def _display_streak(profile: dict, telegram_id: str | None) -> int:
-    s = int(profile.get("streak") or 0)
-    today_iso = _profile_local_date(profile).isoformat()
-    if profile.get("last_streak_date") == today_iso:
-        return max(s, 1)
-    return s
+    if not telegram_id:
+        return int(profile.get("streak") or 0)
+
+    # Count consecutive days from today backwards
+    today = _profile_local_date(profile)
+    summaries = db_store.list_daily_summaries(telegram_id)
+
+    # Build set of dates where user was active (any interaction)
+    active_dates = set()
+    for s in summaries:
+        d = str(s.get("date") or "")[:10]
+        if d:
+            active_dates.add(d)
+
+    # Count consecutive days from today backwards
+    streak = 0
+    check = today
+    for _ in range(84):
+        if check.isoformat() in active_dates:
+            streak += 1
+            check = check - timedelta(days=1)
+        else:
+            break
+
+    return max(streak, int(profile.get("streak") or 0))
 
 
 def _bump_streak_on_mark(profile: dict, today: date) -> int:
