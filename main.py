@@ -1764,6 +1764,69 @@ async def _evening_message_text(
     return await asyncio.to_thread(call)
 
 
+async def _check_and_send_milestone(
+    bot,
+    cid: int,
+    profile: dict,
+    model_chain: list,
+) -> None:
+    try:
+        tid = str(cid)
+        summaries = db_store.list_daily_summaries(tid)
+        active_days = len([s for s in summaries if s.get("date")])
+
+        if active_days not in MILESTONE_DAYS:
+            return
+
+        shown_key = f"milestone_shown_{active_days}"
+        if profile.get(shown_key):
+            return
+
+        name = str(profile.get("name") or "").strip()
+        main_goal = str(profile.get("main_goal") or "").strip()
+        vision = str(profile.get("vision") or "").strip()
+
+        prompt = f"""Напиши короткое тёплое сообщение пользователю который {active_days} дней использует бота.
+
+Имя: {name}
+Цель на 12 недель: {main_goal}
+Мечта: {vision}
+
+Правила:
+- 2-3 предложения
+- Говори про её конкретную цель
+- Тон: подруга которая рада что человек здесь
+- Упомяни {active_days} дней
+- НЕ важно выполняла ли она задачи — просто факт что она здесь {active_days} дней
+- Без markdown, один эмодзи максимум"""
+
+        def gen() -> str:
+            for mid in model_chain:
+                try:
+                    text = claude_generate(
+                        mid,
+                        [{"role": "user", "content": prompt}],
+                        system="Пиши тепло и лично.",
+                        max_tokens=150,
+                        cache_core=False,
+                    ).strip()
+                    if text:
+                        return sanitize_bot_reply(text)
+                except Exception as e:
+                    log.warning("milestone telegram generate %s: %s", mid, e)
+            display_name = name or "подруга"
+            return f"{display_name}, {active_days} дней вместе — это уже что-то 💙"
+
+        message = await asyncio.to_thread(gen)
+        await bot.send_message(chat_id=cid, text=message)
+        profile[shown_key] = True
+        db_store.update_profile(cid, {shown_key: True})
+        user_profiles[tid] = profile
+        log.info("milestone sent cid=%s days=%s", cid, active_days)
+    except Exception as e:
+        log.warning("milestone check failed cid=%s: %s", cid, e)
+
+
 def _profile_local_date(profile: dict) -> date:
     tz = _zone_or_default(_profile_timezone_name(profile))
     return datetime.now(tz).date()
@@ -3264,6 +3327,9 @@ async def _bootstrap_bot() -> None:
                             "text": text,
                             "awaiting_reminder": False,
                         }
+                        asyncio.create_task(
+                            _check_and_send_milestone(bot, cid, profile, model_chain)
+                        )
                     except Exception as e:
                         log.warning("Morning message failed for %s: %s", cid, e)
 
