@@ -80,8 +80,6 @@ def _parse_summary_json(text: str, weekly_goal: str = "") -> dict | None:
                     str(data.get("task", "")), weekly_goal=weekly_goal
                 ),
             }
-            if "completed" in data:
-                out["completed"] = bool(data.get("completed"))
             return out
     except json.JSONDecodeError:
         pass
@@ -437,7 +435,6 @@ def save_onboarding_summary(
         mood="начало",
         key_detail=str(profile.get("vision") or profile.get("main_goal", ""))[:500],
         task="",
-        completed=False,
     )
 
 

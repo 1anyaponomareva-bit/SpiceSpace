@@ -323,8 +323,6 @@ def patch_daily_summary(
     }
     if "completed" in fields:
         kwargs["completed"] = fields["completed"]
-    else:
-        kwargs["completed"] = existing.get("completed")
     if "task_completed" in fields:
         kwargs["task_completed"] = fields["task_completed"]
     else:
@@ -350,8 +348,6 @@ def list_daily_summaries(user_id: int | str) -> list[dict]:
             if not d:
                 continue
             tc = row.get("task_completed")
-            if tc is None and row.get("completed") is not None:
-                tc = "true" if row.get("completed") else "false"
             out.append({"date": d, "task_completed": normalize_task_completed(tc)})
         if out:
             return out
@@ -363,8 +359,6 @@ def list_daily_summaries(user_id: int | str) -> list[dict]:
         if not isinstance(row, dict):
             continue
         tc = row.get("task_completed")
-        if tc is None and row.get("completed") is not None:
-            tc = "true" if row.get("completed") else "false"
         out.append(
             {
                 "date": str(d)[:10],
@@ -445,8 +439,6 @@ def _row_to_summary(row: dict) -> dict:
         out["completed"] = bool(row["completed"])
     if "task_completed" in row:
         out["task_completed"] = normalize_task_completed(row.get("task_completed"))
-    elif row.get("completed") is not None:
-        out["task_completed"] = "true" if row.get("completed") else "false"
     return out
 
 

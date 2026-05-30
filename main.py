@@ -1956,7 +1956,8 @@ def _detect_evening_task_completed(text: str) -> str | None:
     done, missed = _detect_evening_outcome(text)
     if done and not missed:
         return "true"
-    if missed and not done:
+    explicit_no = bool(re.search(r"\bнет\b", low)) or "не получилось" in low
+    if explicit_no and not done:
         return "false"
     return None
 
@@ -3901,16 +3902,18 @@ async def mark_day_endpoint(
             "profile": _enrich_profile_for_api(profile, tid),
         }
 
-    tc = "true"
+    tc = None
     if isinstance(body, dict) and body.get("task_completed"):
-        tc = db_store.normalize_task_completed(body["task_completed"]) or "true"
+        tc = db_store.normalize_task_completed(body["task_completed"])
 
-    _update_today_summary_field(
-        int(tid),
-        profile,
-        task_completed=tc,
-        completed=(tc == "true"),
-    )
+    if tc == "false":
+        return {"profile": _enrich_profile_for_api(profile, tid)}
+
+    if tc:
+        patch: dict[str, object] = {"task_completed": tc}
+        if tc == "true":
+            patch["completed"] = True
+        _update_today_summary_field(int(tid), profile, **patch)
 
     if tc == "true":
         today = _profile_local_date(profile)

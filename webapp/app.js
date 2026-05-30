@@ -246,11 +246,11 @@
   }
 
   function getDayStatus(day) {
-    if (day.is_future) return 'future';
     if (day.task_completed === 'true') return 'done';
     if (day.task_completed === 'false') return 'missed';
     if (day.task_completed === 'partial') return 'partial';
     if (day.is_today) return 'today';
+    if (day.is_future) return 'future';
     return 'no-data';
   }
 
