@@ -82,6 +82,11 @@ WEBAPP_DIR = DATA_DIR / "webapp"
 load_dotenv(DATA_DIR / ".env")
 ADMIN_TELEGRAM_ID = 8412438788
 
+MILESTONE_DAYS = {
+    3, 7, 10, 14, 17, 20, 24, 27, 30, 34, 37, 40, 44, 47, 50,
+    54, 57, 60, 64, 67, 70, 74, 77, 80, 84,
+}
+
 
 def strip_profanity(text: str) -> str:
     patterns = [
@@ -3448,6 +3453,7 @@ async def root() -> dict:
             "/health",
             "/api/profile?telegram_id=<digits>",
             "/api/calendar",
+            "/api/milestone",
             "/api/tasks",
         ],
         "miniapp": _mini_app_url(),
