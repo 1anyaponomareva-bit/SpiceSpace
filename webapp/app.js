@@ -550,39 +550,57 @@
       if (data?.milestone) {
         showMilestoneCard(data.milestone);
       }
-    } catch (_) {
-      /* no milestone */
-    }
+    } catch (_) {}
   }
 
   function showMilestoneCard(milestone) {
-    const card = document.createElement('div');
-    card.className = 'milestone-overlay';
-    card.innerHTML = `
+    document.querySelector('.milestone-overlay')?.remove();
+
+    const completedDays = Number(milestone.days) || 0;
+    const totalDots = 12;
+    const dotsHTML = Array.from({ length: totalDots }, (_, i) => {
+      if (i < completedDays - 1) return '<div class="dot filled"></div>';
+      if (i === completedDays - 1) return '<div class="dot current"></div>';
+      return '<div class="dot"></div>';
+    }).join('');
+
+    const overlay = document.createElement('div');
+    overlay.className = 'milestone-overlay';
+    overlay.innerHTML = `
       <div class="milestone-card">
-        <div class="milestone-days">${escapeHtml(String(milestone.days || ''))} дней 🔥</div>
-        <div class="milestone-message">${escapeHtml(milestone.message || '')}</div>
-        <button type="button" class="milestone-btn">Погнали дальше 💙</button>
+        <div class="handle"></div>
+        <div class="star-wrap">
+          <div class="star">✦</div>
+        </div>
+        <div class="days-row">
+          <span class="days-number">${escapeHtml(String(completedDays))}</span>
+          <span class="days-label">дней</span>
+        </div>
+        <div class="subtitle">подряд</div>
+        <div class="message">
+          <p>${escapeHtml(milestone.message || '')}</p>
+        </div>
+        <div class="dots-row">${dotsHTML}</div>
+        <button type="button" class="btn-milestone">Погнали дальше →</button>
       </div>
     `;
-    card.querySelector('.milestone-btn')?.addEventListener('click', () => card.remove());
-    document.body.appendChild(card);
-    setTimeout(() => triggerConfetti(), 300);
+    overlay.querySelector('.btn-milestone')?.addEventListener('click', () => overlay.remove());
+    document.body.appendChild(overlay);
+    setTimeout(() => launchConfetti(), 400);
   }
 
-  function triggerConfetti() {
-    const colors = ['#D4F26B', '#ffffff', '#1A1A1A'];
-    for (let i = 0; i < 80; i++) {
-      const confetti = document.createElement('div');
-      confetti.className = 'confetti-piece';
-      confetti.style.cssText = `
-        left: ${Math.random() * 100}vw;
-        background: ${colors[Math.floor(Math.random() * colors.length)]};
-        animation-delay: ${Math.random() * 0.5}s;
-        animation-duration: ${0.8 + Math.random() * 0.6}s;
-      `;
-      document.body.appendChild(confetti);
-      setTimeout(() => confetti.remove(), 1500);
+  function launchConfetti() {
+    const colors = ['#D4F26B', '#ffffff', '#2a2a2a'];
+    for (let i = 0; i < 60; i++) {
+      setTimeout(() => {
+        const c = document.createElement('div');
+        c.className = 'confetti-piece';
+        c.style.left = Math.random() * 100 + 'vw';
+        c.style.background = colors[Math.floor(Math.random() * colors.length)];
+        c.style.animationDuration = (0.9 + Math.random() * 0.8) + 's';
+        document.body.appendChild(c);
+        setTimeout(() => c.remove(), 2000);
+      }, i * 20);
     }
   }
 

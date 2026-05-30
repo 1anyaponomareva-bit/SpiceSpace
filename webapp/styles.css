@@ -787,68 +787,186 @@ body.tg-app { background: var(--bg); }
 .milestone-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(0, 0, 0, 0.75);
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
   z-index: 1000;
-  animation: fadeIn 0.3s ease;
+  padding: 16px;
+  padding-bottom: calc(16px + var(--safe-bottom));
+  animation: milestoneFadeIn 0.35s ease both;
 }
 
 .milestone-card {
+  width: 100%;
+  max-width: 360px;
   background: #1A1A1A;
-  border: 1px solid #D4F26B;
-  border-radius: 20px;
-  padding: 32px 24px;
-  max-width: 320px;
+  border: 1px solid rgba(212, 242, 107, 0.35);
+  border-radius: 24px;
+  padding: 12px 24px 28px;
   text-align: center;
+  animation: milestoneSlideUp 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-.milestone-days {
-  font-size: 48px;
-  font-weight: 700;
+.milestone-card .handle {
+  width: 36px;
+  height: 4px;
+  margin: 4px auto 20px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.milestone-card .star-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+.milestone-card .star {
+  font-size: 30px;
+  line-height: 1;
   color: #D4F26B;
-  margin-bottom: 16px;
+  animation: milestoneStarPulse 1.6s ease-in-out infinite;
 }
 
-.milestone-message {
-  font-size: 16px;
+.milestone-card .days-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.milestone-card .days-number {
+  font-family: 'Unbounded', system-ui, sans-serif;
+  font-size: 64px;
+  font-weight: 900;
+  line-height: 1;
+  color: #D4F26B;
+  letter-spacing: -0.03em;
+}
+
+.milestone-card .days-label {
+  font-family: 'Geologica', system-ui, sans-serif;
+  font-size: 22px;
+  font-weight: 400;
+  color: #D4F26B;
+}
+
+.milestone-card .subtitle {
+  font-family: 'Geologica', system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 300;
+  color: rgba(255, 255, 255, 0.45);
+  letter-spacing: 0.08em;
+  text-transform: lowercase;
+  margin-bottom: 22px;
+}
+
+.milestone-card .message {
+  font-family: 'Geologica', system-ui, sans-serif;
+  font-size: 15px;
+  font-weight: 300;
+  line-height: 1.55;
   color: #ffffff;
-  line-height: 1.5;
   margin-bottom: 24px;
 }
 
-.milestone-btn {
+.milestone-card .message p {
+  margin: 0;
+}
+
+.milestone-card .dots-row {
+  display: flex;
+  justify-content: center;
+  gap: 7px;
+  margin-bottom: 24px;
+}
+
+.milestone-card .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.milestone-card .dot.filled {
+  background: #D4F26B;
+}
+
+.milestone-card .dot.current {
+  background: #D4F26B;
+  box-shadow: 0 0 0 3px rgba(212, 242, 107, 0.28);
+  animation: milestoneDotPulse 1.4s ease-in-out infinite;
+}
+
+.milestone-card .btn-milestone {
+  width: 100%;
+  border: none;
+  border-radius: 14px;
+  padding: 16px 24px;
   background: #D4F26B;
   color: #1A1A1A;
-  border: none;
-  border-radius: 12px;
-  padding: 14px 32px;
+  font-family: 'Geologica', system-ui, sans-serif;
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
-  width: 100%;
-  font-family: inherit;
 }
 
 .confetti-piece {
   position: fixed;
+  top: -10px;
   width: 8px;
   height: 8px;
   border-radius: 2px;
-  top: -10px;
-  animation: confettiFall linear forwards;
-  z-index: 1001;
   pointer-events: none;
+  z-index: 1001;
+  animation: confettiFall linear forwards;
+}
+
+@keyframes milestoneFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes milestoneSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(32px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes milestoneStarPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.12);
+    opacity: 0.82;
+  }
+}
+
+@keyframes milestoneDotPulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 3px rgba(212, 242, 107, 0.28);
+  }
+  50% {
+    transform: scale(1.15);
+    box-shadow: 0 0 0 5px rgba(212, 242, 107, 0.18);
+  }
 }
 
 @keyframes confettiFall {
-  to { transform: translateY(100vh) rotate(720deg); opacity: 0; }
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  to {
+    transform: translateY(100vh) rotate(720deg);
+    opacity: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -856,5 +974,8 @@ body.tg-app { background: var(--bg); }
   .streak-dot.done,
   .streak-dot.today { animation-duration: 0.01ms; }
   .milestone-overlay,
+  .milestone-card,
+  .milestone-card .star,
+  .milestone-card .dot.current,
   .confetti-piece { animation-duration: 0.01ms; }
 }
