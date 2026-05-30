@@ -3131,18 +3131,18 @@ def _display_streak(profile: dict, telegram_id: str | None) -> int:
     if not telegram_id:
         return int(profile.get("streak") or 0)
 
-    # Count consecutive days from today backwards
     today = _profile_local_date(profile)
     summaries = db_store.list_daily_summaries(telegram_id)
+    log.info("display_streak tid=%s summaries_count=%s", telegram_id, len(summaries))
 
-    # Build set of dates where user was active (any interaction)
     active_dates = set()
     for s in summaries:
         d = str(s.get("date") or "")[:10]
         if d:
             active_dates.add(d)
 
-    # Count consecutive days from today backwards
+    log.info("display_streak active_dates=%s", sorted(active_dates))
+
     streak = 0
     check = today
     for _ in range(84):
@@ -3152,6 +3152,7 @@ def _display_streak(profile: dict, telegram_id: str | None) -> int:
         else:
             break
 
+    log.info("display_streak result=%s", streak)
     return max(streak, int(profile.get("streak") or 0))
 
 
