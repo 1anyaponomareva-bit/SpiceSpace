@@ -822,13 +822,13 @@
     showMain();
     setCanEditName(true);
     setCanEditTimes(true);
+    await checkMilestone();
 
     await markStreakOnOpen();
     tasks = await fetchTasks();
     calendarData = await fetchCalendar();
     renderAll(result.user || tgUser);
     syncTimezone();
-    await checkMilestone();
     document.querySelector('.settings-block')?.classList.add('loaded');
   }
 
