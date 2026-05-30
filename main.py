@@ -51,6 +51,7 @@ from prompts import (
     evening_reply_missed,
     morning_opening,
     prepend_user_time,
+    refresh_user_time_in_system,
 )
 from summaries import maybe_save_daily_summary
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -1616,7 +1617,7 @@ async def _morning_message_text(
                     claude_generate(
                         mid,
                         [{"role": "user", "content": user_content}],
-                        system=morning_system,
+                        system=refresh_user_time_in_system(profile, morning_system),
                         max_tokens=360,
                         cache_core=False,
                     )
@@ -1743,7 +1744,7 @@ async def _evening_message_text(
                     claude_generate(
                         mid,
                         [{"role": "user", "content": user_content}],
-                        system=evening_system,
+                        system=refresh_user_time_in_system(profile, evening_system),
                         max_tokens=200,
                         cache_core=False,
                     ).strip()
@@ -2044,8 +2045,9 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
         messages = _hist_to_claude_messages(hist_prefix, user_text)
         for mid in model_names:
             try:
+                fresh_system = refresh_user_time_in_system(prof, system)
                 reply_text = sanitize_bot_reply(
-                    claude_generate(mid, messages, system=system)
+                    claude_generate(mid, messages, system=fresh_system)
                 )
                 log.info("Claude ответ через модель %s", mid)
                 return reply_text
@@ -2125,7 +2127,7 @@ async def _coach_reply_photo(
                 claude_generate(
                     _VISION_MODEL,
                     messages,
-                    system=system,
+                    system=refresh_user_time_in_system(prof, system),
                     cache_core=False,
                 )
             )
@@ -2751,9 +2753,9 @@ async def _generate_today_task(profile: dict, model_names: list[str]) -> str:
                 text = claude_generate(
                     mid,
                     [{"role": "user", "content": prompt}],
-                    system=prepend_user_time(
+                    system=refresh_user_time_in_system(
                         profile,
-                        "Верни только задачу на сегодня.",
+                        prepend_user_time(profile, "Верни только задачу на сегодня."),
                     ),
                     max_tokens=120,
                     cache_core=False,

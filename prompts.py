@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 import pytz
@@ -506,6 +507,20 @@ def prepend_user_time(profile: dict | None, system: str) -> str:
     body = (system or "").strip()
     head = f"{line}\n\n{CURRENT_TIME_INSTRUCTION}"
     return f"{head}\n\n{body}" if body else head
+
+
+def refresh_user_time_in_system(profile: dict | None, system: str) -> str:
+    """Replace time line with fresh current time right before a Claude call."""
+    fresh_line = f"Текущее время пользователя: {get_current_time_for_user(profile)}"
+    text = (system or "").strip()
+    if re.search(r"Текущее время пользователя:", text):
+        return re.sub(
+            r"Текущее время пользователя: .+",
+            fresh_line,
+            text,
+            count=1,
+        )
+    return prepend_user_time(profile, text)
 
 
 def build_chat_system(
