@@ -542,6 +542,50 @@
     } catch (_) {}
   }
 
+  async function checkMilestone() {
+    try {
+      const resp = await apiFetch('/api/milestone');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data?.milestone) {
+        showMilestoneCard(data.milestone);
+      }
+    } catch (_) {
+      /* no milestone */
+    }
+  }
+
+  function showMilestoneCard(milestone) {
+    const card = document.createElement('div');
+    card.className = 'milestone-overlay';
+    card.innerHTML = `
+      <div class="milestone-card">
+        <div class="milestone-days">${escapeHtml(String(milestone.days || ''))} дней 🔥</div>
+        <div class="milestone-message">${escapeHtml(milestone.message || '')}</div>
+        <button type="button" class="milestone-btn">Погнали дальше 💙</button>
+      </div>
+    `;
+    card.querySelector('.milestone-btn')?.addEventListener('click', () => card.remove());
+    document.body.appendChild(card);
+    setTimeout(() => triggerConfetti(), 300);
+  }
+
+  function triggerConfetti() {
+    const colors = ['#D4F26B', '#ffffff', '#1A1A1A'];
+    for (let i = 0; i < 80; i++) {
+      const confetti = document.createElement('div');
+      confetti.className = 'confetti-piece';
+      confetti.style.cssText = `
+        left: ${Math.random() * 100}vw;
+        background: ${colors[Math.floor(Math.random() * colors.length)]};
+        animation-delay: ${Math.random() * 0.5}s;
+        animation-duration: ${0.8 + Math.random() * 0.6}s;
+      `;
+      document.body.appendChild(confetti);
+      setTimeout(() => confetti.remove(), 1500);
+    }
+  }
+
   async function fetchProfile() {
     const resp = await apiFetch('/api/profile');
     if (resp.status === 401 || resp.status === 404) return { ok: false, status: resp.status };
@@ -784,6 +828,7 @@
     calendarData = await fetchCalendar();
     renderAll(result.user || tgUser);
     syncTimezone();
+    await checkMilestone();
     document.querySelector('.settings-block')?.classList.add('loaded');
   }
 
