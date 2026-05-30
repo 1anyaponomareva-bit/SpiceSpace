@@ -1961,7 +1961,6 @@ async def _handle_evening_reply(
     model_names: list[str],
 ) -> str:
     state = pending_evening.setdefault(chat_id, {})
-    has_task = _today_has_task(chat_id, profile)
 
     if state.get("awaiting_tomorrow_task"):
         task = (user_text or "").strip()
@@ -1983,22 +1982,26 @@ async def _handle_evening_reply(
             save_daily_task(chat_id, profile, future_task, source="evening_flow")
 
     if outcome:
-        pending_evening.pop(chat_id, None)
         patch: dict[str, object] = {"task_completed": outcome}
         if outcome == "true":
             patch["completed"] = True
+            today = _profile_local_date(profile)
+            _bump_streak_on_mark(profile, today)
+            ws = min(100, int(profile.get("weekly_score") or 0) + 15)
+            profile["weekly_score"] = ws
+            db_store.update_profile(
+                chat_id,
+                {
+                    "streak": int(profile.get("streak") or 0),
+                    "last_streak_date": str(profile.get("last_streak_date") or ""),
+                    "weekly_score": ws,
+                },
+            )
+            user_profiles[str(chat_id)] = profile
         elif outcome == "false":
             patch["completed"] = False
         _update_today_summary_field(chat_id, profile, **patch)
-        return await _coach_reply(
-            chat_id, user_text, model_names, append_history=False
-        )
-
-    if has_task and not state.get("asked_completion"):
-        state["asked_completion"] = True
-        return await _coach_reply(
-            chat_id, user_text, model_names, append_history=False
-        )
+        log.info("evening task_completed saved cid=%s outcome=%s", chat_id, outcome)
 
     pending_evening.pop(chat_id, None)
     return await _coach_reply(
