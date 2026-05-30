@@ -47,8 +47,6 @@ from prompts import (
     TODAY_TASK_PROMPT,
     build_chat_system,
     evening_opening,
-    evening_reply_done,
-    evening_reply_missed,
     morning_opening,
     prepend_user_time,
     refresh_user_time_in_system,
@@ -1868,6 +1866,19 @@ def _is_future_task(text: str) -> bool:
     return any(m in low for m in future_markers)
 
 
+def _extract_future_task(text: str) -> str:
+    """Extract tomorrow's task from user message."""
+    low = (text or "").lower()
+    markers = ("на завтра", "завтра надо", "завтра буду", "завтра сделаю")
+    for marker in markers:
+        if marker in low:
+            idx = low.find(marker) + len(marker)
+            task = text[idx:].strip().strip("—-:,").strip()
+            if len(task) > 5:
+                return task[:200]
+    return ""
+
+
 async def _try_save_task_from_message(
     chat_id: int,
     bot_reply: str,
@@ -1961,14 +1972,13 @@ async def _handle_evening_reply(
         state["awaiting_tomorrow_task"] = True
         return "Что конкретно сделаешь завтра?"
 
-    if not has_task:
-        pending_evening.pop(chat_id, None)
-        return (
-            "Спасибо, что написала 💙 Завтра утром наметим задачу — "
-            "или напиши сейчас, если хочешь наметить на завтра."
-        )
-
     outcome = _detect_evening_task_completed(user_text)
+
+    if _is_future_task(user_text):
+        future_task = _extract_future_task(user_text)
+        if future_task:
+            save_daily_task(chat_id, profile, future_task, source="evening_flow")
+
     if outcome:
         pending_evening.pop(chat_id, None)
         patch: dict[str, object] = {"task_completed": outcome}
@@ -1977,16 +1987,19 @@ async def _handle_evening_reply(
         elif outcome == "false":
             patch["completed"] = False
         _update_today_summary_field(chat_id, profile, **patch)
-        if outcome == "true":
-            return evening_reply_done()
-        if outcome == "false":
-            return evening_reply_missed()
-        return (
-            "Поняла — частично тоже считается 💙 Завтра добьём остаток или утром наметим план?"
+        return await _coach_reply(
+            chat_id, user_text, model_names, append_history=False
         )
-    return (
-        "Расскажи честно — получилось сегодня или нет? "
-        "Можно: да / нет / частично."
+
+    if has_task and not state.get("asked_completion"):
+        state["asked_completion"] = True
+        return await _coach_reply(
+            chat_id, user_text, model_names, append_history=False
+        )
+
+    pending_evening.pop(chat_id, None)
+    return await _coach_reply(
+        chat_id, user_text, model_names, append_history=False
     )
 
 
@@ -2001,7 +2014,13 @@ async def _generate_weekly_summary_async(
         log.warning("weekly_summary_async failed cid=%s: %s", cid, e)
 
 
-async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> str:
+async def _coach_reply(
+    chat_id: int,
+    user_text: str,
+    model_names: list[str],
+    *,
+    append_history: bool = True,
+) -> str:
     tid = str(chat_id)
     prof = db_store.get_profile(chat_id) or user_profiles.get(tid) or {}
     if isinstance(prof, dict):
@@ -2070,11 +2089,14 @@ async def _coach_reply(chat_id: int, user_text: str, model_names: list[str]) -> 
             raise last_err
         raise RuntimeError("Ни одна модель Claude не ответила")
 
-    _append_history_turn(chat_id, user_text, reply)
-    _maybe_save_task_from_user_reply(chat_id, prof, user_text)
-    asyncio.create_task(
-        maybe_save_daily_summary(chat_id, prof, histories.get(chat_id, []), model_names)
-    )
+    if append_history:
+        _append_history_turn(chat_id, user_text, reply)
+        _maybe_save_task_from_user_reply(chat_id, prof, user_text)
+        asyncio.create_task(
+            maybe_save_daily_summary(
+                chat_id, prof, histories.get(chat_id, []), model_names
+            )
+        )
 
     return reply
 
