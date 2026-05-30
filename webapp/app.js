@@ -258,20 +258,6 @@
     return todayTaskCompletionStatus(prof) === 'done';
   }
 
-  function calendarCellClass(day) {
-    if (day.is_future) return 'calendar-cell--future';
-    if (day.is_today) {
-      if (day.task_completed === 'true') return 'calendar-cell--done calendar-cell--today';
-      if (day.task_completed === 'partial') return 'calendar-cell--partial calendar-cell--today';
-      if (day.task_completed === 'false') return 'calendar-cell--miss calendar-cell--today';
-      return 'calendar-cell--today';
-    }
-    if (day.task_completed === 'true') return 'calendar-cell--done';
-    if (day.task_completed === 'partial') return 'calendar-cell--partial';
-    if (day.task_completed === 'false') return 'calendar-cell--miss';
-    return 'calendar-cell--future';
-  }
-
   function renderCalendar() {
     const host = document.getElementById('calendar-grid');
     const badge = document.getElementById('calendar-week-badge');
