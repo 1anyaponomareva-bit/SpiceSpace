@@ -50,6 +50,9 @@ from prompts import (
     morning_opening,
     prepend_user_time,
     refresh_user_time_in_system,
+    resolve_user_timezone,
+    get_current_time_for_user,
+    user_message_with_fresh_time,
 )
 from summaries import maybe_save_daily_summary
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -1614,7 +1617,7 @@ async def _morning_message_text(
                 text = sanitize_bot_reply(
                     claude_generate(
                         mid,
-                        [{"role": "user", "content": user_content}],
+                        [{"role": "user", "content": user_message_with_fresh_time(profile, user_content)}],
                         system=refresh_user_time_in_system(profile, morning_system),
                         max_tokens=360,
                         cache_core=False,
@@ -1741,7 +1744,7 @@ async def _evening_message_text(
                 text = sanitize_bot_reply(
                     claude_generate(
                         mid,
-                        [{"role": "user", "content": user_content}],
+                        [{"role": "user", "content": user_message_with_fresh_time(profile, user_content)}],
                         system=refresh_user_time_in_system(profile, evening_system),
                         max_tokens=200,
                         cache_core=False,
@@ -2050,6 +2053,12 @@ async def _coach_reply(
     extra = "\n\n".join(extra_parts)
 
     system = build_chat_system(prof, yesterday, today_summary, extra=extra)
+    log.info(
+        "coach_reply time cid=%s tz=%s now=%s",
+        chat_id,
+        resolve_user_timezone(prof),
+        get_current_time_for_user(prof),
+    )
 
     hist = histories.setdefault(chat_id, [])
     history_prefixes: list[list[dict]] = [list(hist)]
@@ -2060,7 +2069,9 @@ async def _coach_reply(
 
     def try_models(hist_prefix: list[dict]) -> str | None:
         nonlocal last_err
-        messages = _hist_to_claude_messages(hist_prefix, user_text)
+        messages = _hist_to_claude_messages(
+            hist_prefix, user_message_with_fresh_time(prof, user_text or "")
+        )
         for mid in model_names:
             try:
                 fresh_system = refresh_user_time_in_system(prof, system)
@@ -2119,7 +2130,9 @@ async def _coach_reply_photo(
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
     system = build_chat_system(prof, yesterday, today_summary, extra="")
 
-    user_label = (caption or "Что на фото?").strip()
+    user_label = user_message_with_fresh_time(
+        prof, (caption or "Что на фото?").strip()
+    )
     user_content = [
         {
             "type": "image",

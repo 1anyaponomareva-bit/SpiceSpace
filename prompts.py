@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime
 
@@ -16,6 +17,7 @@ SPICESPACE_CORE_SYSTEM = """Ты — Спейс, AI companion. Ты не бот 
 КРИТИЧЕСКИ ВАЖНО — время:
 Текущее время всегда указано в самом начале системного промпта как "Текущее время пользователя: HH:MM".
 Текущее время пользователя обновляется при каждом сообщении и написано в первой строке.
+В каждом новом сообщении пользователя время также указано в квадратных скобках [Текущее время пользователя: ...] — это актуальное время СЕЙЧАС.
 Используй ТОЛЬКО это время.
 ЗАПРЕЩЕНО брать время из истории разговора или daily summary.
 Если в разговоре упоминалось время — это прошлое, не настоящее.
@@ -482,14 +484,18 @@ _MONTHS_RU = (
 )
 
 
-def get_current_time_for_user(profile: dict | None) -> str:
-    tz_name = "UTC"
+def resolve_user_timezone(profile: dict | None) -> str:
+    default = os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
     if isinstance(profile, dict):
         raw = str(profile.get("timezone") or "").strip()
         if raw and raw.lower() not in ("pending", ""):
-            tz_name = raw
+            return raw
+    return default
+
+
+def get_current_time_for_user(profile: dict | None) -> str:
     try:
-        tz = pytz.timezone(tz_name)
+        tz = pytz.timezone(resolve_user_timezone(profile))
     except Exception:
         tz = pytz.UTC
     now = datetime.now(tz)
@@ -498,9 +504,17 @@ def get_current_time_for_user(profile: dict | None) -> str:
     return f"{now.strftime('%H:%M')}, {weekday} {now.day} {month}"
 
 
+def user_message_with_fresh_time(profile: dict | None, user_text: str) -> str:
+    """Prefix current user time onto the message Claude sees right now."""
+    stamp = get_current_time_for_user(profile)
+    text = (user_text or "").strip()
+    prefix = f"[Текущее время пользователя: {stamp}]"
+    return f"{prefix}\n\n{text}" if text else prefix
+
+
 CURRENT_TIME_INSTRUCTION = """КРИТИЧЕСКИ ВАЖНО — время:
-Текущее время всегда указано в самом начале системного промпта как "Текущее время пользователя: HH:MM".
-Используй ТОЛЬКО это время.
+Текущее время указано в первой строке системного промпта и в квадратных скобках в последнем сообщении пользователя.
+Используй ТОЛЬКО это время — оно обновляется при каждом сообщении.
 ЗАПРЕЩЕНО брать время из истории разговора или daily summary.
 Если в разговоре упоминалось время — это прошлое, не настоящее."""
 
@@ -518,7 +532,7 @@ def refresh_user_time_in_system(profile: dict | None, system: str) -> str:
     text = (system or "").strip()
     if re.search(r"Текущее время пользователя:", text):
         return re.sub(
-            r"Текущее время пользователя: .+",
+            r"Текущее время пользователя: [^\n]+",
             fresh_line,
             text,
             count=1,

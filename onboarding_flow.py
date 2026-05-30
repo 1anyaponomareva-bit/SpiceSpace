@@ -1530,7 +1530,6 @@ async def handle_onboarding_turn(
             )
             return
         st["evening_time"] = parsed
-        st["timezone"] = "pending"
         await _complete_onboarding(
             update,
             context,
