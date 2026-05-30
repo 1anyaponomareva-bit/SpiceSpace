@@ -245,6 +245,15 @@
     return 'pending';
   }
 
+  function getDayStatus(day) {
+    if (day.is_future) return 'future';
+    if (day.task_completed === 'true') return 'done';
+    if (day.task_completed === 'false') return 'missed';
+    if (day.task_completed === 'partial') return 'partial';
+    if (day.is_today) return 'today';
+    return 'no-data';
+  }
+
   function isTaskCompletedStrict(prof) {
     return todayTaskCompletionStatus(prof) === 'done';
   }
@@ -280,7 +289,14 @@
     const rows = [];
     for (let w = 0; w < 12; w++) {
       const slice = days.slice(w * 7, w * 7 + 7);
-      const cells = slice.map((d) => `<div class="calendar-cell ${calendarCellClass(d)}" title="${escapeHtml(d.date || '')}"></div>`).join('');
+      const cells = slice.map((d) => {
+        const status = getDayStatus(d);
+        return (
+          `<div class="calendar-cell">` +
+          `<div class="day-dot ${status}" title="${escapeHtml(d.date || '')}"></div>` +
+          `</div>`
+        );
+      }).join('');
       rows.push(
         `<div class="calendar-row${w + 1 === cw ? ' calendar-row--current' : ''}">` +
         `<span class="calendar-row-label">Нед ${w + 1}</span>${cells}</div>`

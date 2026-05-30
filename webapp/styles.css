@@ -215,20 +215,28 @@ body.tg-app { background: var(--bg); }
   aspect-ratio: 1;
   max-width: 36px;
   margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.day-dot {
+  width: 100%;
+  aspect-ratio: 1;
+  max-width: 36px;
   border-radius: 50%;
-  background: #E5E5E5;
   border: 2px solid transparent;
 }
-.calendar-cell--done { background: #D4F26B; }
-.calendar-cell--miss { background: #2C2C2C; }
-.calendar-cell--partial {
-  background: linear-gradient(90deg, #D4F26B 50%, #2C2C2C 50%);
+.day-dot.done { background: #D4F26B; }
+.day-dot.missed { background: #1A1A1A; }
+.day-dot.partial {
+  background: linear-gradient(90deg, #D4F26B 50%, #1A1A1A 50%);
 }
-.calendar-cell--today {
-  border-color: #D4F26B;
-  box-shadow: 0 0 0 1px #D4F26B;
+.day-dot.today {
+  background: transparent;
+  border: 2px solid #D4F26B;
 }
-.calendar-cell--future { background: #E5E5E5; }
+.day-dot.future { background: #E0E0E0; }
+.day-dot.no-data { background: #F5F5F5; }
 .calendar-legend {
   display: flex;
   flex-wrap: wrap;
@@ -245,10 +253,11 @@ body.tg-app { background: var(--bg); }
 }
 .legend-dot--done { background: #D4F26B; }
 .legend-dot--partial {
-  background: linear-gradient(90deg, #D4F26B 50%, #2C2C2C 50%);
+  background: linear-gradient(90deg, #D4F26B 50%, #1A1A1A 50%);
 }
-.legend-dot--miss { background: #2C2C2C; }
-.legend-dot--future { background: #E5E5E5; }
+.legend-dot--miss { background: #1A1A1A; }
+.legend-dot--future { background: #E0E0E0; }
+.legend-dot--no-data { background: #F5F5F5; border: 1px solid #E0E0E0; }
 
 .header {
   display: flex;
