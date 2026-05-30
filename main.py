@@ -885,7 +885,7 @@ if result:
 subscribers: set[int] = db_store.load_subscribers()
 user_profiles: dict[str, dict] = db_store.load_all_profiles()
 histories: dict[int, list[dict]] = {}
-pending_morning: dict[int, str] = {}  # chat_id → morning message text (awaiting task pick)
+pending_morning: dict[int, dict[str, object]] = {}  # morning pick / midday reminder state
 pending_evening: dict[int, dict] = {}
 onboarding: dict[int, dict[str, object]] = {}
 # Последнее напоминание по задаче (для «ГОТОВО» в чате).
@@ -2116,7 +2116,11 @@ async def _coach_reply(
 
     if append_history:
         _append_history_turn(chat_id, user_text, reply)
-        _maybe_save_task_from_user_reply(chat_id, prof, user_text)
+        picked_task = _maybe_save_task_from_user_reply(chat_id, prof, user_text)
+        if picked_task and telegram_app:
+            asyncio.create_task(
+                _ask_midday_reminder(telegram_app.bot, chat_id, prof, picked_task)
+            )
         asyncio.create_task(
             maybe_save_daily_summary(
                 chat_id, prof, histories.get(chat_id, []), model_names
@@ -2443,6 +2447,50 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     prof_d = prof_raw if isinstance(prof_raw, dict) else None
     if prof_d:
         await _touch_streak_for_activity(cid, prof_d)
+
+    morning_state = pending_morning.get(cid)
+    if isinstance(morning_state, dict) and morning_state.get("awaiting_reminder"):
+        raw_lower = raw.strip().lower()
+
+        if any(w in raw_lower for w in ("нет", "не надо", "не нужно", "ненадо")):
+            pending_morning.pop(cid, None)
+            await _bot_reply(update.message, "Окей 💙")
+            return
+
+        parsed = _parse_daily_time(raw.strip())
+        if parsed:
+            pending_morning.pop(cid, None)
+            task_title = str(morning_state.get("task") or "Задача на сегодня")
+            prof_rem = prof_d or _resolve_user_profile(str(cid)) or {}
+            tz_name = _profile_timezone_name(prof_rem)
+            tz = _zone_or_default(tz_name)
+            today = datetime.now(tz).strftime("%Y-%m-%d")
+            try:
+                _create_task_from_payload(
+                    cid,
+                    prof_rem,
+                    {
+                        "title": task_title[:200],
+                        "date": today,
+                        "time": parsed,
+                        "timezone": tz_name,
+                        "repeat": "none",
+                    },
+                )
+                await _bot_reply(update.message, f"Напомню в {parsed} 💙")
+            except Exception as e:
+                log.warning("midday reminder create failed: %s", e)
+                await _bot_reply(
+                    update.message,
+                    "Не вышло сохранить напоминание — попробуй ещё раз.",
+                )
+            return
+
+        await _bot_reply(
+            update.message,
+            "Напиши время в формате ЧЧ:ММ — например, 14:00. Или «нет».",
+        )
+        return
 
     if _looks_like_reminder_capability_question(raw):
         prof_raw = user_profiles.get(str(cid))
@@ -2853,39 +2901,67 @@ def _save_today_task_choice(
     save_daily_task(chat_id, profile, task, source="morning_flow")
 
 
+def _pending_morning_text(state: object | None) -> str:
+    if isinstance(state, dict):
+        return str(state.get("text") or "")
+    if isinstance(state, str):
+        return state
+    return ""
+
+
+async def _ask_midday_reminder(bot, chat_id: int, profile: dict, task: str) -> None:
+    """Ask user if they want a midday reminder for today's task."""
+    await asyncio.sleep(1)
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "Напомнить тебе про задачу днём? "
+                "Напиши время — например, 14:00. Или «нет» если не нужно."
+            ),
+        )
+    except Exception as e:
+        log.warning("midday reminder ask failed cid=%s: %s", chat_id, e)
+        return
+    pending_morning[chat_id] = {"task": task, "awaiting_reminder": True}
+
+
 def _maybe_save_task_from_user_reply(
     chat_id: int,
     profile: dict,
     user_text: str,
-) -> None:
+) -> str | None:
     weekly = str(profile.get("weekly_goal") or "").strip()
     raw = (user_text or "").strip()
     if _is_future_task(raw):
-        return
+        return None
     if len(raw) < 3 or len(raw) > 200:
-        return
+        return None
     if _looks_like_greeting_or_chat(raw):
-        return
+        return None
 
-    morning_text = pending_morning.pop(chat_id, "")
-    if morning_text:
-        picked = _pick_morning_task_from_reply(raw, morning_text)
-    else:
-        picked = raw
+    state = pending_morning.get(chat_id)
+    if isinstance(state, dict) and state.get("awaiting_reminder"):
+        return None
 
+    morning_text = _pending_morning_text(state)
     if not morning_text:
-        return
+        return None
+
+    pending_morning.pop(chat_id, None)
+    picked = _pick_morning_task_from_reply(raw, morning_text)
 
     picked = _sanitize_today_task(picked, weekly_goal=weekly)
     if not picked:
-        return
+        return None
 
     today = _profile_local_date(profile)
     existing = db_store.get_daily_summary(chat_id, today) or {}
     current = str(existing.get("task") or "").strip()
     if current == picked and existing.get("task_completed") is None:
-        return
+        return None
     _save_today_task_choice(chat_id, profile, picked)
+    return picked
 
 
 _GREETING_TASK_MARKERS = (
@@ -3147,7 +3223,11 @@ async def _bootstrap_bot() -> None:
                             text=sanitize_bot_reply(text),
                             reply_markup=keyboard,
                         )
-                        pending_morning[cid] = text
+                        pending_morning[cid] = {
+                            "task": "",
+                            "text": text,
+                            "awaiting_reminder": False,
+                        }
                     except Exception as e:
                         log.warning("Morning message failed for %s: %s", cid, e)
 
