@@ -65,6 +65,7 @@ from pydantic import BaseModel, Field
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    Message,
     Update,
     WebAppInfo,
 )
@@ -1436,6 +1437,55 @@ def _get_timezone() -> ZoneInfo:
         return ZoneInfo("Asia/Ho_Chi_Minh")
 
 
+def _telegram_message_plain_text(message: Message | None) -> str:
+    if not message:
+        return ""
+    if message.text:
+        return message.text.strip()
+    if message.caption:
+        return message.caption.strip()
+    return ""
+
+
+def _reply_context_from_message(message: Message | None) -> str | None:
+    """Контекст, когда пользователь отвечает реплаем на конкретное сообщение в Telegram."""
+    if not message or not message.reply_to_message:
+        return None
+    quoted_msg = message.reply_to_message
+    quoted = _telegram_message_plain_text(quoted_msg)
+    if not quoted:
+        if quoted_msg.voice:
+            quoted = "[голосовое сообщение]"
+        elif quoted_msg.photo:
+            quoted = "[фото]"
+            cap = (quoted_msg.caption or "").strip()
+            if cap:
+                quoted = f"{quoted} {cap}"
+        else:
+            return None
+    if len(quoted) > 2000:
+        quoted = quoted[:2000] + "…"
+    if quoted_msg.from_user and quoted_msg.from_user.is_bot:
+        author = "Спейс (бот)"
+    else:
+        author = "пользователь"
+    return (
+        f"Пользователь отвечает реплаем на сообщение ({author}):\n"
+        f"«{quoted}»\n\n"
+        "Отвечай именно в контексте этого сообщения и ответа пользователя. "
+        "Не уводи разговор в другие темы из прошлого чата."
+    )
+
+
+def _user_text_with_reply_context(user_text: str, reply_context: str | None) -> str:
+    if not reply_context:
+        return user_text
+    body = (user_text or "").strip()
+    if body:
+        return f"{reply_context}\n\n---\nОтвет пользователя:\n{body}"
+    return reply_context
+
+
 def _hist_to_claude_messages(hist_prefix: list[dict], user_text: str | None = None) -> list[dict]:
     messages: list[dict] = []
     for turn in hist_prefix:
@@ -2112,6 +2162,8 @@ async def _handle_evening_reply(
     user_text: str,
     profile: dict,
     model_names: list[str],
+    *,
+    reply_context: str | None = None,
 ) -> str:
     state = pending_evening.setdefault(chat_id, {})
 
@@ -2164,7 +2216,11 @@ async def _handle_evening_reply(
 
     pending_evening.pop(chat_id, None)
     reply = await _coach_reply(
-        chat_id, user_text, model_names, append_history=False
+        chat_id,
+        user_text,
+        model_names,
+        append_history=False,
+        reply_context=reply_context,
     )
 
     if not outcome:
@@ -2246,6 +2302,7 @@ async def _coach_reply(
     model_names: list[str],
     *,
     append_history: bool = True,
+    reply_context: str | None = None,
 ) -> str:
     tid = str(chat_id)
     prof = db_store.get_profile(chat_id) or user_profiles.get(tid) or {}
@@ -2306,17 +2363,23 @@ async def _coach_reply(
         get_current_time_for_user(prof),
     )
 
+    effective_text = _user_text_with_reply_context(user_text, reply_context)
+
     hist = histories.setdefault(chat_id, [])
-    history_prefixes: list[list[dict]] = [list(hist)]
-    if len(hist) > 20:
-        history_prefixes.append(hist[-20:])
+    if reply_context:
+        history_prefixes: list[list[dict]] = [[]]
+    else:
+        history_prefixes = [list(hist)]
+        if len(hist) > 20:
+            history_prefixes.append(hist[-20:])
 
     last_err: BaseException | None = None
 
     def try_models(hist_prefix: list[dict]) -> str | None:
         nonlocal last_err
         messages = _hist_to_claude_messages(
-            hist_prefix, user_message_with_fresh_time(prof, user_text or "")
+            hist_prefix,
+            user_message_with_fresh_time(prof, effective_text or ""),
         )
         for mid in model_names:
             try:
@@ -2347,7 +2410,7 @@ async def _coach_reply(
         raise RuntimeError("Ни одна модель Claude не ответила")
 
     if append_history:
-        _append_history_turn(chat_id, user_text, reply)
+        _append_history_turn(chat_id, effective_text, reply)
         picked_task = _maybe_save_task_from_user_reply(chat_id, prof, user_text)
         if picked_task and telegram_app:
             asyncio.create_task(
@@ -2370,6 +2433,8 @@ async def _coach_reply_photo(
     photo_b64: str,
     caption: str,
     model_names: list[str],
+    *,
+    reply_context: str | None = None,
 ) -> str:
     tid = str(chat_id)
     prof = db_store.get_profile(chat_id) or user_profiles.get(tid) or {}
@@ -2381,9 +2446,10 @@ async def _coach_reply_photo(
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
     system = build_chat_system(prof, yesterday, today_summary, extra="")
 
-    user_label = user_message_with_fresh_time(
-        prof, (caption or "Что на фото?").strip()
+    caption_body = _user_text_with_reply_context(
+        (caption or "Что на фото?").strip(), reply_context
     )
+    user_label = user_message_with_fresh_time(prof, caption_body)
     user_content = [
         {
             "type": "image",
@@ -2397,9 +2463,12 @@ async def _coach_reply_photo(
     ]
 
     hist = histories.setdefault(chat_id, [])
-    history_prefixes: list[list[dict]] = [list(hist)]
-    if len(hist) > 20:
-        history_prefixes.append(hist[-20:])
+    if reply_context:
+        history_prefixes: list[list[dict]] = [[]]
+    else:
+        history_prefixes = [list(hist)]
+        if len(hist) > 20:
+            history_prefixes.append(hist[-20:])
 
     last_err: BaseException | None = None
 
@@ -2665,6 +2734,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not raw:
         return
 
+    reply_ctx = _reply_context_from_message(update.message)
+
     st_ob = onboarding.get(cid)
     if st_ob is not None:
         await handle_onboarding_turn(update, context, raw)
@@ -2755,7 +2826,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         pe_state["replied"] = True
         try:
             prof_evening = prof_d or _resolve_user_profile(str(cid)) or {}
-            reply = await _handle_evening_reply(cid, raw, prof_evening, model_names)
+            reply = await _handle_evening_reply(
+                cid, raw, prof_evening, model_names, reply_context=reply_ctx
+            )
             _append_history_turn(cid, raw, reply)
             await _bot_reply(update.message, reply)
         finally:
@@ -2843,7 +2916,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         async with typing_while(context.bot, cid):
-            reply = await _coach_reply(cid, raw, model_names)
+            reply = await _coach_reply(
+                cid, raw, model_names, reply_context=reply_ctx
+            )
     except anthropic.RateLimitError:
         log.exception("Claude quota exhausted")
         await _bot_reply(
@@ -2905,8 +2980,11 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         tg_file = await context.bot.get_file(msg.photo[-1].file_id)
         photo_bytes = await tg_file.download_as_bytearray()
         photo_b64 = base64.b64encode(photo_bytes).decode()
+        reply_ctx = _reply_context_from_message(msg)
         async with typing_while(context.bot, cid):
-            reply = await _coach_reply_photo(cid, photo_b64, caption, model_names)
+            reply = await _coach_reply_photo(
+                cid, photo_b64, caption, model_names, reply_context=reply_ctx
+            )
     except anthropic.RateLimitError:
         log.exception("Claude quota exhausted (photo)")
         await _bot_reply(
