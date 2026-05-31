@@ -3306,7 +3306,7 @@ async def _bootstrap_bot() -> None:
     tz = _get_timezone()
     scheduler = AsyncIOScheduler(
         timezone=tz,
-        job_defaults={"coalesce": True, "max_instances": 1},
+        job_defaults={"coalesce": True, "max_instances": 2},
     )
 
     telegram_app = Application.builder().token(token).build()
@@ -3505,7 +3505,11 @@ async def _bootstrap_bot() -> None:
     )
     scheduler.add_job(
         task_reminder_job,
-        IntervalTrigger(minutes=1, timezone=tz),
+        IntervalTrigger(
+            minutes=1,
+            timezone=tz,
+            start_date=datetime.now(tz).replace(second=30, microsecond=0),
+        ),
         id="task_reminders",
         replace_existing=True,
     )
@@ -3517,7 +3521,7 @@ async def _bootstrap_bot() -> None:
     )
     scheduler.start()
     log.info(
-        "Scheduler started: daily_check + task_reminders (1m), onboarding_reminder (15m) (%s)",
+        "Scheduler started: daily_check (:00), task_reminders (:30), onboarding_reminder (15m) (%s)",
         tz,
     )
 
