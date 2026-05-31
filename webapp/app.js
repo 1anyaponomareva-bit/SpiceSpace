@@ -491,13 +491,12 @@
       wrap.className = 'streak-day-wrap';
 
       if (i < streak) {
+        const isToday = i === streak - 1;
         wrap.innerHTML = `
-          <div class="streak-day active">
+          <div class="streak-day active${isToday ? ' is-today' : ''}">
             <img src="./spicespace-logo.jpg" alt="" class="streak-logo-icon"/>
           </div>
         `;
-      } else if (i === streak) {
-        wrap.innerHTML = '<div class="streak-day today"></div>';
       } else {
         wrap.innerHTML = '<div class="streak-day empty"></div>';
       }
