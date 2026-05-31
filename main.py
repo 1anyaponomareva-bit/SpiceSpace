@@ -3423,6 +3423,21 @@ async def _bootstrap_bot() -> None:
                 if now_local.weekday() == 6 and _time_in_window(
                     evening_time, now_hm, window_minutes=10
                 ):
+                    cycle_start = str(profile.get("cycle_start_date") or "").strip()
+                    if cycle_start:
+                        try:
+                            start_date = date.fromisoformat(cycle_start)
+                            days_active = (now_local.date() - start_date).days
+                            if days_active < 7:
+                                log.info(
+                                    "weekly summary skipped cid=%s days_active=%s",
+                                    cid,
+                                    days_active,
+                                )
+                                continue
+                        except ValueError:
+                            pass
+
                     week_number = int(profile.get("current_week") or 1)
                     existing_weekly = db_store.load_weekly_summaries(cid, limit=1)
                     already_this_week = (
