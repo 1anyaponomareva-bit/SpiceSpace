@@ -1163,6 +1163,15 @@ async def _complete_onboarding(
     user_profiles[str(cid)] = profile
     subscribers.add(cid)
 
+    if not profile.get("cycle_start_date"):
+        try:
+            tz = ZoneInfo(str(profile.get("timezone") or _default_timezone()))
+        except Exception:
+            tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
+        today_iso = datetime.now(tz).date().isoformat()
+        profile["cycle_start_date"] = today_iso
+        db.update_profile(cid, {"cycle_start_date": today_iso})
+
     name = profile.get("name", "")
     mt = profile.get("morning_time", "09:30")
     et = profile.get("evening_time", "21:00")

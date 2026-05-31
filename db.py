@@ -184,6 +184,53 @@ def mark_weekly_recap_sent(user_id: int | str, today: str) -> dict:
     return profile
 
 
+def _cycle_flags_for_row(p: dict) -> dict:
+    cf = p.get("cycle_flags")
+    out: dict = {}
+    if isinstance(cf, dict):
+        for k, v in cf.items():
+            if v:
+                out[str(k)] = True
+    for k, v in p.items():
+        if (
+            k.startswith("weekly_sent_day_")
+            or k.startswith("new_week_sent_day_")
+            or k.startswith("weekly_sent_")
+        ) and v:
+            out[str(k)] = True
+    return out
+
+
+def _apply_cycle_flags_to_profile(p: dict) -> None:
+    raw = p.pop("cycle_flags", None)
+    if not isinstance(raw, dict):
+        raw = {}
+    p["cycle_flags"] = {str(k): bool(v) for k, v in raw.items() if v}
+    for flag_key, shown in p["cycle_flags"].items():
+        if shown:
+            p[flag_key] = True
+
+
+def cycle_flag_sent(profile: dict, flag_key: str) -> bool:
+    cf = profile.get("cycle_flags")
+    if isinstance(cf, dict) and cf.get(flag_key):
+        return True
+    return bool(profile.get(flag_key))
+
+
+def mark_cycle_flag(user_id: int | str, flag_key: str) -> dict:
+    profile = dict(get_profile(user_id) or {})
+    cf = profile.get("cycle_flags")
+    if not isinstance(cf, dict):
+        cf = {}
+    cf = dict(cf)
+    cf[flag_key] = True
+    profile["cycle_flags"] = cf
+    profile[flag_key] = True
+    upsert_profile(user_id, profile)
+    return profile
+
+
 def _milestones_shown_for_row(p: dict) -> dict:
     ms = p.get("milestones_shown")
     out: dict = {}
@@ -454,12 +501,14 @@ def _profile_to_row(p: dict) -> dict:
         "cycle_start_date": p.get("cycle_start_date"),
         "milestones_shown": _milestones_shown_for_row(p),
         "last_weekly_recap_date": p.get("last_weekly_recap_date") or None,
+        "cycle_flags": _cycle_flags_for_row(p),
     }
 
 
 def _row_to_profile(row: dict) -> dict:
     p = dict(row)
     _apply_milestones_shown_to_profile(p)
+    _apply_cycle_flags_to_profile(p)
     for key in ("last_daily_sent_date", "last_morning_sent_date", "last_evening_sent_date"):
         if p.get(key):
             p[key] = str(p[key])[:10]

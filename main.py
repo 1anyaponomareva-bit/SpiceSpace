@@ -3500,63 +3500,119 @@ async def _bootstrap_bot() -> None:
                     except Exception as e:
                         log.warning("Evening message failed for %s: %s", cid, e)
 
-                if now_local.weekday() == 6 and _time_in_window(
-                    evening_time, now_hm, window_minutes=10
-                ):
-                    cycle_start = str(profile.get("cycle_start_date") or "").strip()
-                    if cycle_start:
-                        try:
-                            start_date = date.fromisoformat(cycle_start)
-                            days_active = (now_local.date() - start_date).days
-                            if days_active < 7:
-                                log.info(
-                                    "weekly summary skipped cid=%s days_active=%s",
-                                    cid,
-                                    days_active,
-                                )
-                                continue
-                        except ValueError:
-                            pass
-
-                    week_number = int(profile.get("current_week") or 1)
-                    existing_weekly = db_store.load_weekly_summaries(cid, limit=1)
-                    already_this_week = (
-                        existing_weekly
-                        and int(existing_weekly[0].get("week_number") or 0) == week_number
-                    )
-                    if not already_this_week:
-                        await _generate_weekly_summary_async(cid, profile, model_chain)
-
-                    weekly_summ = db_store.load_last_weekly_summary(cid)
-                    if not weekly_summ:
-                        continue
-
-                    weekly_sent_key = f"weekly_sent_{today}"
-                    fresh = db_store.get_profile(key)
-                    if isinstance(fresh, dict):
-                        profile = fresh
-                        user_profiles[key] = fresh
-
-                    if db_store.weekly_recap_sent_today(profile, today):
-                        continue
-
-                    active_days = len(db_store.list_daily_summaries(cid))
-                    recap = (
-                        f"{active_days} дней вместе 💙\n\n"
-                        f"{weekly_summ.get('summary', '')}\n\n"
-                        f"На следующую неделю: {weekly_summ.get('next_week_goal', '')}"
-                    )
+                cycle_start_raw = str(profile.get("cycle_start_date") or "").strip()
+                if cycle_start_raw:
                     try:
-                        await bot.send_message(
-                            chat_id=cid,
-                            text=sanitize_bot_reply(recap),
+                        cycle_start = date.fromisoformat(cycle_start_raw)
+                    except ValueError:
+                        cycle_start = None
+                    if cycle_start is not None:
+                        days_since_start = (now_local.date() - cycle_start).days
+                        current_week = max(
+                            1, min(12, (days_since_start // 7) + 1)
                         )
-                        profile = db_store.mark_weekly_recap_sent(cid, today)
-                        profile[weekly_sent_key] = True
-                        user_profiles[key] = profile
-                        log.info("weekly summary sent cid=%s", cid)
-                    except Exception as e:
-                        log.warning("Weekly recap failed for %s: %s", cid, e)
+                        is_week_end = (
+                            days_since_start > 0 and days_since_start % 7 == 0
+                        )
+                        is_week_start = (
+                            days_since_start > 0 and days_since_start % 7 == 1
+                        )
+
+                        fresh = db_store.get_profile(key)
+                        if isinstance(fresh, dict):
+                            profile = fresh
+                            user_profiles[key] = fresh
+
+                        if int(profile.get("current_week") or 1) != current_week:
+                            profile["current_week"] = current_week
+                            db_store.update_profile(
+                                cid, {"current_week": current_week}
+                            )
+                            user_profiles[key] = profile
+
+                        if is_week_end and days_since_start >= 7 and _time_in_window(
+                            evening_time, now_hm, window_minutes=10
+                        ):
+                            weekly_sent_key = f"weekly_sent_day_{days_since_start}"
+                            if not db_store.cycle_flag_sent(
+                                profile, weekly_sent_key
+                            ):
+                                week_number = current_week - 1
+                                existing_weekly = (
+                                    db_store.load_weekly_summaries(cid, limit=1)
+                                )
+                                already_this_week = (
+                                    existing_weekly
+                                    and int(
+                                        existing_weekly[0].get("week_number") or 0
+                                    )
+                                    == week_number
+                                )
+                                if not already_this_week:
+                                    await _generate_weekly_summary_async(
+                                        cid, profile, model_chain
+                                    )
+                                active_days = len(
+                                    db_store.list_daily_summaries(str(cid))
+                                )
+                                recap = (
+                                    f"{active_days} дней вместе 💙\n\n"
+                                    f"Неделя {current_week - 1} закрыта. "
+                                    f"На следующей неделе: "
+                                    f"{profile.get('weekly_goal', '')}"
+                                )
+                                try:
+                                    await bot.send_message(
+                                        chat_id=cid,
+                                        text=sanitize_bot_reply(recap),
+                                    )
+                                    profile = db_store.mark_cycle_flag(
+                                        cid, weekly_sent_key
+                                    )
+                                    user_profiles[key] = profile
+                                    log.info(
+                                        "weekly summary sent cid=%s day=%s",
+                                        cid,
+                                        days_since_start,
+                                    )
+                                except Exception as e:
+                                    log.warning(
+                                        "Weekly recap failed for %s: %s",
+                                        cid,
+                                        e,
+                                    )
+
+                        if is_week_start and _time_in_window(
+                            evening_time, now_hm, window_minutes=10
+                        ):
+                            new_week_sent_key = (
+                                f"new_week_sent_day_{days_since_start}"
+                            )
+                            if not db_store.cycle_flag_sent(
+                                profile, new_week_sent_key
+                            ):
+                                ob.start_change_weekly(onboarding, cid, profile)
+                                opening = ob.change_weekly_opening(profile)
+                                try:
+                                    await bot.send_message(
+                                        chat_id=cid,
+                                        text=sanitize_bot_reply(opening),
+                                    )
+                                    profile = db_store.mark_cycle_flag(
+                                        cid, new_week_sent_key
+                                    )
+                                    user_profiles[key] = profile
+                                    log.info(
+                                        "new week prompt sent cid=%s day=%s",
+                                        cid,
+                                        days_since_start,
+                                    )
+                                except Exception as e:
+                                    log.warning(
+                                        "New week prompt failed for %s: %s",
+                                        cid,
+                                        e,
+                                    )
         except Exception as e:
             log.exception("daily_check_job crashed: %s", e)
 
