@@ -3448,8 +3448,9 @@ async def _bootstrap_bot() -> None:
                         await _generate_weekly_summary_async(cid, profile, model_chain)
                     weekly_summ = db_store.load_last_weekly_summary(cid)
                     if weekly_summ and profile.get("last_weekly_recap_date") != today:
+                        active_days = len(db_store.list_daily_summaries(cid))
                         recap = (
-                            f"Неделя {weekly_summ.get('week_number')} позади 💙\n\n"
+                            f"{active_days} дней вместе 💙\n\n"
                             f"{weekly_summ.get('summary', '')}\n\n"
                             f"На следующую неделю: {weekly_summ.get('next_week_goal', '')}"
                         )
