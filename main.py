@@ -1828,7 +1828,7 @@ async def _check_and_send_milestone(
                 except Exception as e:
                     log.warning("milestone telegram generate %s: %s", mid, e)
             display_name = name or "подруга"
-            return f"{display_name}, {active_days} дней вместе — это уже что-то 💙"
+            return f"{display_name}, {active_days} дней вместе — это уже что-то 💚"
 
         message = await asyncio.to_thread(gen)
         await bot.send_message(chat_id=cid, text=message)
@@ -2686,7 +2686,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         if any(w in raw_lower for w in ("нет", "не надо", "не нужно", "ненадо")):
             pending_morning.pop(cid, None)
-            await _bot_reply(update.message, "Окей 💙")
+            await _bot_reply(update.message, "Окей 💚")
             return
 
         parsed = _parse_daily_time(raw.strip())
@@ -2709,7 +2709,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                         "repeat": "none",
                     },
                 )
-                await _bot_reply(update.message, f"Напомню в {parsed} 💙")
+                await _bot_reply(update.message, f"Напомню в {parsed} 💚")
             except Exception as e:
                 log.warning("midday reminder create failed: %s", e)
                 await _bot_reply(
@@ -3623,7 +3623,7 @@ async def _bootstrap_bot() -> None:
                                     db_store.list_daily_summaries(str(cid))
                                 )
                                 recap = (
-                                    f"{active_days} дней вместе 💙\n\n"
+                                    f"{active_days} дней вместе 💚\n\n"
                                     f"Неделя {current_week - 1} закрыта. "
                                     f"На следующей неделе: "
                                     f"{profile.get('weekly_goal', '')}"
@@ -3721,7 +3721,7 @@ async def _bootstrap_bot() -> None:
                 greeting = f"{name}, ты там?" if name else "Ты там?"
                 await bot.send_message(
                     chat_id=cid,
-                    text=f"{greeting} Осталось буквально пара вопросов 💙",
+                    text=f"{greeting} Осталось буквально пара вопросов 💚",
                 )
                 st["reminder_sent"] = True
             except Exception as e:
@@ -4186,7 +4186,7 @@ async def get_milestone(
             except Exception as e:
                 log.warning("milestone generate %s: %s", mid, e)
         display_name = name or "подруга"
-        return f"{display_name}, {completed_days} дней — ты реально двигаешься к своей цели 💙"
+        return f"{display_name}, {completed_days} дней — ты реально двигаешься к своей цели 💚"
 
     message = await asyncio.to_thread(generate_message)
 

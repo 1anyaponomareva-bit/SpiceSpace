@@ -260,7 +260,7 @@ def _wants_adjust_reply(raw: str) -> bool:
 
 def greeting_after_name(name: str) -> str:
     n = (name or "").strip() or "подруга"
-    return f"{n}, приятно познакомиться 💙"
+    return f"{n}, приятно познакомиться 💚"
 
 
 def vision_question_message() -> str:
@@ -393,7 +393,7 @@ def _fallback_vision_reply(turns: list[dict]) -> dict:
     if n >= 2:
         return {
             "message": (
-                "Слышу тебя — картина уже вырисовывается 💙 "
+                "Слышу тебя — картина уже вырисовывается 💚 "
                 "Окей, из всего этого — что самое важное реализовать за эти 12 недель?"
             ),
             "ready_for_goal": True,
@@ -645,7 +645,7 @@ async def _finish_change_weekly(
     )
     user_profiles[str(cid)] = profile
     onboarding.pop(cid, None)
-    return f"Записала 💙 Цель на эту неделю: {weekly}. Погнали."
+    return f"Записала 💚 Цель на эту неделю: {weekly}. Погнали."
 
 
 async def _dispatch_goal_confirm_after(
@@ -719,7 +719,7 @@ async def _finish_change_12w(
     return (
         f"Записала ✨ Новая цель на 12 недель: {main_goal}\n"
         f"На эту неделю: {weekly_goal}\n"
-        "Погнали с чистого листа 💙"
+        "Погнали с чистого листа 💚"
     )
 
 
@@ -1198,7 +1198,7 @@ async def _complete_onboarding(
         f"Цель на 12 недель: {main_goal}\n"
         f"Первая неделя: {weekly_goal}\n\n"
         f"Буду писать утром в {mt} и вечером в {et}.\n\n"
-        "Погнали 💙",
+        "Погнали 💚",
         reply_markup=progress_kb,
     )
 
@@ -1224,7 +1224,7 @@ async def _complete_onboarding(
                 ).strip()
             except Exception:
                 pass
-        return "Кому первому отправишь бота на тест? 💙"
+        return "Кому первому отправишь бота на тест? 💚"
 
     await asyncio.sleep(1)
     webapp_base = os.getenv(
@@ -1421,7 +1421,7 @@ async def handle_onboarding_turn(
         st["vision_turns"] = []
         n = (name or "").strip() or "подруга"
         await msg.reply_text(
-            f"{n}, приятно познакомиться 💙\n\n"
+            f"{n}, приятно познакомиться 💚\n\n"
             "Прежде чем ставить цели — давай помечтаем.\n\n"
             "Представь: прошло 3 месяца, и всё получилось именно так как ты хотела. "
             "Как выглядит твой день? Что изменилось в твоей жизни?"
