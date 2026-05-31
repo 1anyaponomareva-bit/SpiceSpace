@@ -2274,6 +2274,28 @@ async def _coach_reply(
         extra_parts.append(f"Профиль личности:\n{personality_text}")
     if weekly_context:
         extra_parts.append(f"Прошлая неделя:\n{weekly_context}")
+
+    summaries = await asyncio.to_thread(db_store.list_daily_summaries, chat_id)
+    completed_count = sum(
+        1 for s in summaries if s.get("task_completed") == "true"
+    )
+    level = _calculate_user_level(completed_count)
+    level_context = (
+        f"Уровень пользователя: {level['name']} ({completed_count} выполненных задач)."
+    )
+    if level["key"] == "spark":
+        level_context += " Она только начинает — поддерживай особенно тепло."
+    elif level["key"] == "flow":
+        level_context += " Она вошла в ритм — можно чуть больше требовать."
+    elif level["key"] == "power":
+        level_context += " Она стабильна — говори как с равной."
+    elif level["key"] == "legend":
+        level_context += (
+            " Она прошла долгий путь — говори как старая подруга "
+            "которая знает её насквозь."
+        )
+    extra_parts.append(level_context)
+
     extra = "\n\n".join(extra_parts)
 
     system = build_chat_system(prof, yesterday, today_summary, extra=extra)
@@ -3308,6 +3330,41 @@ def _bump_streak_on_mark(profile: dict, today: date) -> int:
     return new
 
 
+def _calculate_user_level(completed_tasks: int) -> dict:
+    """Уровень пользователя по числу выполненных задач."""
+    if completed_tasks >= 50:
+        return {
+            "key": "legend",
+            "name": "Легенда",
+            "emoji": "⭐",
+            "min": 50,
+            "next": None,
+        }
+    if completed_tasks >= 21:
+        return {
+            "key": "power",
+            "name": "Сила",
+            "emoji": "✦",
+            "min": 21,
+            "next": 50,
+        }
+    if completed_tasks >= 7:
+        return {
+            "key": "flow",
+            "name": "Поток",
+            "emoji": "◆",
+            "min": 7,
+            "next": 21,
+        }
+    return {
+        "key": "spark",
+        "name": "Искра",
+        "emoji": "·",
+        "min": 0,
+        "next": 7,
+    }
+
+
 def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> dict:
     """Старые профили без новых полей получают разумные дефолты при отдаче в Mini App."""
     p = dict(profile)
@@ -3351,6 +3408,16 @@ def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> di
 
     p["week_scores"] = _week_scores_array(p, tid or None)
     p["display_streak"] = _display_streak(p, tid or None)
+    if tid:
+        summaries = db_store.list_daily_summaries(tid)
+        completed_count = sum(
+            1 for s in summaries if s.get("task_completed") == "true"
+        )
+        p["completed_tasks_count"] = completed_count
+        p["level"] = _calculate_user_level(completed_count)
+    else:
+        p["completed_tasks_count"] = 0
+        p["level"] = _calculate_user_level(0)
     return p
 
 

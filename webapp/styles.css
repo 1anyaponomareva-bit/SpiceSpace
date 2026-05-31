@@ -276,6 +276,45 @@ body.tg-app { background: var(--bg); }
 
 .user-name { font-size: 22px; font-weight: 700; color: var(--dark); line-height: 1.2; }
 
+.level-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-top: 6px;
+}
+
+.level-badge.level-spark {
+  background: rgba(255, 255, 255, 0.05);
+  color: #555;
+  border: 1px solid #2a2a2a;
+}
+
+.level-badge.level-flow {
+  background: rgba(212, 242, 107, 0.08);
+  color: #D4F26B;
+  border: 1px solid rgba(212, 242, 107, 0.2);
+}
+
+.level-badge.level-power {
+  background: rgba(212, 242, 107, 0.15);
+  color: #D4F26B;
+  border: 1px solid rgba(212, 242, 107, 0.4);
+  box-shadow: 0 0 12px rgba(212, 242, 107, 0.15);
+}
+
+.level-badge.level-legend {
+  background: linear-gradient(135deg, rgba(255, 215, 0, 0.15), rgba(212, 242, 107, 0.15));
+  color: #ffd700;
+  border: 1px solid rgba(255, 215, 0, 0.4);
+  box-shadow: 0 0 16px rgba(255, 215, 0, 0.2);
+}
+
 .edit-name-btn {
   flex-shrink: 0;
   border: none;

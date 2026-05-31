@@ -409,6 +409,12 @@
 
   function renderHeader(user, prof) {
     document.getElementById('user-name').textContent = pickName(user, prof);
+    const levelBadge = document.getElementById('level-badge');
+    if (levelBadge) {
+      const level = prof?.level || { name: 'Искра', emoji: '·', key: 'spark' };
+      levelBadge.className = `level-badge level-${level.key || 'spark'}`;
+      levelBadge.innerHTML = `<span>${level.emoji || '·'} ${level.name || 'Искра'}</span>`;
+    }
     const avatar = document.getElementById('avatar');
     const photo = user?.photo_url || tg?.initDataUnsafe?.user?.photo_url;
     if (avatar && photo) {
