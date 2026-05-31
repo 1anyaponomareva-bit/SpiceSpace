@@ -479,29 +479,40 @@
     }).join('');
   }
 
+  function renderStreakCircles(prof) {
+    const streak = effectiveStreak(prof);
+    const container = document.querySelector('.streak-circles');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    for (let i = 0; i < 7; i++) {
+      const wrap = document.createElement('div');
+      wrap.className = 'streak-day-wrap';
+
+      if (i < streak) {
+        wrap.innerHTML = `
+          <div class="streak-day active">
+            <img src="./spicespace-logo.jpg" alt="" class="streak-logo-icon"/>
+          </div>
+        `;
+      } else if (i === streak) {
+        wrap.innerHTML = '<div class="streak-day today"></div>';
+      } else {
+        wrap.innerHTML = '<div class="streak-day empty"></div>';
+      }
+
+      container.appendChild(wrap);
+    }
+  }
+
   function renderStreak(prof) {
     const streak = effectiveStreak(prof);
     const countEl = document.getElementById('streak-count');
     if (countEl) {
       countEl.textContent = streak > 0 ? `${streak} ${pluralizeDays(streak)} 🔥` : 'начни сегодня';
     }
-
-    const host = document.getElementById('streak-dots');
-    if (!host) return;
-
-    const filled = Math.min(7, Math.max(0, streak));
-    const parts = [];
-    for (let i = 0; i < 7; i++) {
-      let cls = 'streak-dot';
-      if (i < filled) {
-        cls += ' done';
-        if (i === filled - 1) cls += ' today';
-      } else if (filled === 0 && i === 0) {
-        cls += ' today';
-      }
-      parts.push(`<div class="${cls}" style="animation-delay:${i * 0.05}s"></div>`);
-    }
-    host.innerHTML = parts.join('');
+    renderStreakCircles(prof);
   }
 
   function renderTimes(prof) {
