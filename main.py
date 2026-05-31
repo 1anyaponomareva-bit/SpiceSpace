@@ -1589,7 +1589,9 @@ async def _morning_message_text(
         )
 
     tz_name = str(profile.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
-    yesterday = db_store.get_yesterday_summary(chat_id, tz_name) or {}
+    yesterday_date = _profile_local_date(profile) - timedelta(days=1)
+    yesterday = db_store.get_daily_summary(chat_id, yesterday_date) or {}
+    yesterday_context = str(yesterday.get("summary") or "").strip()
     name = str(profile.get("name", "")).strip()
     display_name = name or "подруга"
     name_instruction = _exact_name_prompt_instruction(profile, chat_id)
@@ -1598,15 +1600,14 @@ async def _morning_message_text(
     ).strip() or "не указана"
     vision = str(profile.get("vision") or "").strip() or "не указана"
     weekly_goal = str(profile.get("weekly_goal") or "").strip() or main_goal
-    last_summary = str(
-        yesterday.get("summary") or yesterday.get("key_detail") or ""
-    ).strip() or "нет"
+    last_summary = yesterday_context or str(yesterday.get("key_detail") or "").strip() or "нет"
     time_per_day = _format_time_per_day_for_prompt(profile)
     facts_block = _facts_block_for_prompt(chat_id)
     personality_block = _personality_block_for_prompt(chat_id)
 
     user_content = (
         f"{name_instruction}\n\n"
+        f"Вчерашний контекст:\n{yesterday_context or 'нет'}\n\n"
         + MORNING_MESSAGE_PROMPT.format(
             name=display_name,
             vision=vision,
