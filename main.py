@@ -1576,6 +1576,18 @@ async def _morning_message_text(
     profile: dict,
     model_names: list[str],
 ) -> str:
+    today = _profile_local_date(profile)
+    today_summary = db_store.get_daily_summary(chat_id, today) or {}
+    preset_task = str(today_summary.get("task") or "").strip()
+
+    if preset_task:
+        name = str(profile.get("name", "")).strip()
+        return (
+            f"{name}, доброе утро 🌅\n\n"
+            f"Вчера ты сказала что сегодня: {preset_task}\n\n"
+            f"Всё в силе или хочешь поменять?"
+        )
+
     tz_name = str(profile.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name) or {}
     name = str(profile.get("name", "")).strip()
@@ -1942,14 +1954,51 @@ def _is_future_task(text: str) -> bool:
 def _extract_future_task(text: str) -> str:
     """Extract tomorrow's task from user message."""
     low = (text or "").lower()
-    markers = ("на завтра", "завтра надо", "завтра буду", "завтра сделаю")
+    markers = [
+        "на завтра",
+        "завтра надо",
+        "завтра буду",
+        "завтра сделаю",
+        "завтра займусь",
+        "завтра планирую",
+        "завтра хочу",
+        "завтра попробую",
+    ]
     for marker in markers:
         if marker in low:
             idx = low.find(marker) + len(marker)
-            task = text[idx:].strip().strip("—-:,").strip()
+            task = text[idx:].strip().strip("—-:,. ").strip()
             if len(task) > 5:
                 return task[:200]
     return ""
+
+
+def _save_tomorrows_task(chat_id: int, profile: dict, task: str) -> None:
+    """Save task for tomorrow, not today."""
+    if not task or len(task.strip()) < 5:
+        return
+    tomorrow = _profile_local_date(profile) + timedelta(days=1)
+    weekly = str(profile.get("weekly_goal") or "").strip()
+    cleaned = _sanitize_today_task(task, weekly_goal=weekly)
+    if not cleaned:
+        return
+    existing = db_store.get_daily_summary(chat_id, tomorrow) or {}
+    if existing.get("task"):
+        return
+    db_store.patch_daily_summary(
+        chat_id,
+        tomorrow,
+        summary=existing.get("summary", ""),
+        mood=existing.get("mood", ""),
+        key_detail=existing.get("key_detail", ""),
+        task=cleaned,
+    )
+    log.info(
+        "tomorrow task saved cid=%s date=%s task=%s",
+        chat_id,
+        tomorrow,
+        cleaned[:50],
+    )
 
 
 async def _try_save_task_from_message(
@@ -2037,7 +2086,7 @@ async def _handle_evening_reply(
         task = (user_text or "").strip()
         if len(task) >= 5:
             pending_evening.pop(chat_id, None)
-            save_daily_task(chat_id, profile, task, source="evening_flow")
+            _save_tomorrows_task(chat_id, profile, task)
             return f"Записала ✨ На завтра: {task[:200]}"
         return "Что конкретно сделаешь завтра?"
 
@@ -2047,10 +2096,14 @@ async def _handle_evening_reply(
 
     outcome = _detect_evening_task_completed(user_text)
 
-    if _is_future_task(user_text):
-        future_task = _extract_future_task(user_text)
-        if future_task:
-            save_daily_task(chat_id, profile, future_task, source="evening_flow")
+    future_task = _extract_future_task(user_text)
+    if future_task:
+        _save_tomorrows_task(chat_id, profile, future_task)
+        log.info(
+            "future task extracted and saved cid=%s task=%s",
+            chat_id,
+            future_task[:50],
+        )
 
     if outcome:
         patch: dict[str, object] = {"task_completed": outcome}
@@ -2712,6 +2765,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _bot_reply(update.message, reply)
     if prof_d:
         await _try_save_task_from_message(cid, reply, raw, prof_d)
+        future_task = _extract_future_task(raw)
+        if future_task:
+            _save_tomorrows_task(cid, prof_d, future_task)
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
