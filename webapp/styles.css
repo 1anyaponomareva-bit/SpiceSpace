@@ -499,8 +499,146 @@ body.tg-app { background: var(--bg); }
 .streak-dots {
   display: flex;
   gap: 8px;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   justify-content: space-between;
+}
+
+.streak-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+/* Hanging language sign (gastropub style) */
+.lang-hanging-sign {
+  position: relative;
+  flex-shrink: 0;
+  padding-top: 4px;
+}
+
+.lang-hanging-sign__toggle {
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: inherit;
+}
+
+.lang-hanging-sign__rope {
+  display: block;
+  width: 2px;
+  height: 10px;
+  background: linear-gradient(180deg, #8a8a8a, #4a4a4a);
+  border-radius: 1px;
+  margin-bottom: 2px;
+}
+
+.lang-hanging-sign__board {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 6px 7px;
+  background: linear-gradient(165deg, #2a2a28 0%, #141414 100%);
+  border: 1.5px solid rgba(212, 242, 107, 0.35);
+  border-radius: 8px;
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  transform: rotate(-2deg);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.lang-hanging-sign__toggle:active .lang-hanging-sign__board,
+.lang-hanging-sign--open .lang-hanging-sign__board {
+  transform: rotate(0deg);
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.3),
+    0 0 12px rgba(212, 242, 107, 0.15);
+}
+
+.lang-hanging-sign__flag {
+  display: block;
+  width: 32px;
+  height: 22px;
+  object-fit: cover;
+  border-radius: 3px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.lang-hanging-sign__caret {
+  font-size: 10px;
+  color: rgba(212, 242, 107, 0.85);
+  line-height: 1;
+  margin-top: 1px;
+}
+
+.lang-hanging-sign__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 88px;
+  padding: 6px;
+  background: #1a1a1a;
+  border: 1.5px solid rgba(212, 242, 107, 0.3);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  animation: langMenuDrop 0.22s ease both;
+}
+
+.lang-hanging-sign__menu[hidden] {
+  display: none !important;
+}
+
+.lang-hanging-sign__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: transparent;
+  color: #fff;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.lang-hanging-sign__option img {
+  flex-shrink: 0;
+  border-radius: 3px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.lang-hanging-sign__option:hover,
+.lang-hanging-sign__option:focus-visible {
+  background: rgba(212, 242, 107, 0.12);
+}
+
+.lang-hanging-sign__option--active {
+  background: rgba(212, 242, 107, 0.18);
+  outline: 1px solid rgba(212, 242, 107, 0.35);
+}
+
+@keyframes langMenuDrop {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .streak-day-wrap {
