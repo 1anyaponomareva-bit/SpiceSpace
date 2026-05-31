@@ -1791,13 +1791,13 @@ async def _check_and_send_milestone(
         if active_days not in MILESTONE_DAYS:
             return
 
-        shown_key = f"milestone_shown_{active_days}"
-        if profile.get(shown_key):
+        fresh = db_store.get_profile(tid) or profile
+        if db_store.milestone_already_shown(fresh, active_days):
             return
 
-        name = str(profile.get("name") or "").strip()
-        main_goal = str(profile.get("main_goal") or "").strip()
-        vision = str(profile.get("vision") or "").strip()
+        name = str(fresh.get("name") or "").strip()
+        main_goal = str(fresh.get("main_goal") or "").strip()
+        vision = str(fresh.get("vision") or "").strip()
 
         prompt = f"""Напиши короткое тёплое сообщение пользователю который {active_days} дней использует бота.
 
@@ -1832,9 +1832,8 @@ async def _check_and_send_milestone(
 
         message = await asyncio.to_thread(gen)
         await bot.send_message(chat_id=cid, text=message)
-        profile[shown_key] = True
-        db_store.update_profile(cid, {shown_key: True})
-        user_profiles[tid] = profile
+        updated = db_store.mark_milestone_shown(cid, active_days)
+        user_profiles[tid] = updated
         log.info("milestone sent cid=%s days=%s", cid, active_days)
     except Exception as e:
         log.warning("milestone check failed cid=%s: %s", cid, e)
@@ -3929,13 +3928,15 @@ async def get_milestone(
     if completed_days not in MILESTONE_DAYS:
         return {"milestone": None}
 
-    shown_key = f"milestone_shown_{completed_days}"
-    if profile.get(shown_key):
+    fresh_profile = db_store.get_profile(tid)
+    if not isinstance(fresh_profile, dict):
+        raise HTTPException(status_code=404, detail="profile not found")
+    if db_store.milestone_already_shown(fresh_profile, completed_days):
         return {"milestone": None}
 
-    name = str(profile.get("name") or "").strip()
-    main_goal = str(profile.get("main_goal") or "").strip()
-    vision = str(profile.get("vision") or "").strip()
+    name = str(fresh_profile.get("name") or "").strip()
+    main_goal = str(fresh_profile.get("main_goal") or "").strip()
+    vision = str(fresh_profile.get("vision") or "").strip()
 
     prompt = f"""Напиши короткое персональное поздравление для пользователя.
 
@@ -3974,9 +3975,8 @@ async def get_milestone(
 
     message = await asyncio.to_thread(generate_message)
 
-    profile[shown_key] = True
-    db_store.update_profile(int(tid), {shown_key: True})
-    user_profiles[tid] = profile
+    fresh_profile = db_store.mark_milestone_shown(int(tid), completed_days)
+    user_profiles[tid] = fresh_profile
 
     return {
         "milestone": {

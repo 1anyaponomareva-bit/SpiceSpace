@@ -150,6 +150,50 @@ def update_profile(user_id: int | str, fields: dict) -> dict:
     return profile
 
 
+def milestone_already_shown(profile: dict, days: int) -> bool:
+    ms = profile.get("milestones_shown")
+    if isinstance(ms, dict) and (ms.get(str(days)) or ms.get(days)):
+        return True
+    return bool(profile.get(f"milestone_shown_{days}"))
+
+
+def mark_milestone_shown(user_id: int | str, days: int) -> dict:
+    profile = dict(get_profile(user_id) or {})
+    ms = profile.get("milestones_shown")
+    if not isinstance(ms, dict):
+        ms = {}
+    ms = dict(ms)
+    ms[str(days)] = True
+    profile["milestones_shown"] = ms
+    profile[f"milestone_shown_{days}"] = True
+    upsert_profile(user_id, profile)
+    return profile
+
+
+def _milestones_shown_for_row(p: dict) -> dict:
+    ms = p.get("milestones_shown")
+    out: dict = {}
+    if isinstance(ms, dict):
+        for k, v in ms.items():
+            if v:
+                out[str(k)] = True
+    for k, v in p.items():
+        if k.startswith("milestone_shown_") and v:
+            day = k[len("milestone_shown_") :]
+            out[str(day)] = True
+    return out
+
+
+def _apply_milestones_shown_to_profile(p: dict) -> None:
+    raw = p.pop("milestones_shown", None)
+    if not isinstance(raw, dict):
+        raw = {}
+    p["milestones_shown"] = {str(k): bool(v) for k, v in raw.items() if v}
+    for day, shown in p["milestones_shown"].items():
+        if shown:
+            p[f"milestone_shown_{day}"] = True
+
+
 def upsert_profile(user_id: int | str, profile: dict) -> None:
     key = str(user_id)
     row = _profile_to_row(profile)
@@ -394,11 +438,13 @@ def _profile_to_row(p: dict) -> dict:
         "weekly_score": p.get("weekly_score", 0),
         "time_per_day": p.get("time_per_day"),
         "cycle_start_date": p.get("cycle_start_date"),
+        "milestones_shown": _milestones_shown_for_row(p),
     }
 
 
 def _row_to_profile(row: dict) -> dict:
     p = dict(row)
+    _apply_milestones_shown_to_profile(p)
     for key in ("last_daily_sent_date", "last_morning_sent_date", "last_evening_sent_date"):
         if p.get(key):
             p[key] = str(p[key])[:10]
