@@ -2051,25 +2051,58 @@ def _detect_evening_task_completed(text: str) -> str | None:
     low = (text or "").strip().lower()
     if not low:
         return None
+
     if any(
         w in low
         for w in (
             "частич",
             "немного",
             "половин",
-            "чуть-чуть",
-            "чуть ",
-            "наполовину",
+            "чуть",
             "не всё",
             "не все",
+            "наполовину",
         )
     ):
         return "partial"
-    done, missed = _detect_evening_outcome(text)
+
+    done_words = (
+        "сделала",
+        "получилось",
+        "успела",
+        "выполнила",
+        "сделано",
+        "закрыла",
+        "закрыл",
+        "готово",
+        "да",
+        "все задачи",
+        "всё закрыла",
+        "всё сделала",
+        "все сделала",
+        "справилась",
+        "закончила",
+    )
+    miss_words = (
+        "нет",
+        "не получилось",
+        "не сделала",
+        "не успела",
+        "не вышло",
+        "сорвал",
+        "не смогла",
+        "не закрыла",
+    )
+
+    if re.fullmatch(r"да[\s!\.?]*", low):
+        return "true"
+
+    done = any(w in low for w in done_words)
+    missed = any(w in low for w in miss_words)
+
     if done and not missed:
         return "true"
-    explicit_no = bool(re.search(r"\bнет\b", low)) or "не получилось" in low
-    if explicit_no and not done:
+    if missed and not done:
         return "false"
     return None
 
@@ -2130,9 +2163,57 @@ async def _handle_evening_reply(
             user_profiles[str(chat_id)] = profile
 
     pending_evening.pop(chat_id, None)
-    return await _coach_reply(
+    reply = await _coach_reply(
         chat_id, user_text, model_names, append_history=False
     )
+
+    if not outcome:
+        reply_lower = reply.lower()
+        if any(
+            w in reply_lower
+            for w in (
+                "сделала",
+                "выполнила",
+                "молодец",
+                "отлично",
+                "закрыла",
+                "получилось",
+            )
+        ):
+            outcome = "true"
+        elif any(
+            w in reply_lower
+            for w in ("не получилось", "не вышло", "не сделала", "жаль")
+        ):
+            outcome = "false"
+
+        if outcome:
+            patch: dict[str, object] = {"task_completed": outcome}
+            if outcome == "true":
+                patch["completed"] = True
+                today = _profile_local_date(profile)
+                _bump_streak_on_mark(profile, today)
+                ws = min(100, int(profile.get("weekly_score") or 0) + 15)
+                profile["weekly_score"] = ws
+                db_store.update_profile(
+                    chat_id,
+                    {
+                        "streak": int(profile.get("streak") or 0),
+                        "last_streak_date": str(profile.get("last_streak_date") or ""),
+                        "weekly_score": ws,
+                    },
+                )
+                user_profiles[str(chat_id)] = profile
+            elif outcome == "false":
+                patch["completed"] = False
+            _update_today_summary_field(chat_id, profile, **patch)
+            log.info(
+                "evening task_completed detected from reply cid=%s outcome=%s",
+                chat_id,
+                outcome,
+            )
+
+    return reply
 
 
 async def _generate_weekly_summary_async(
