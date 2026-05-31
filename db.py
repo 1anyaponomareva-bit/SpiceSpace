@@ -170,6 +170,20 @@ def mark_milestone_shown(user_id: int | str, days: int) -> dict:
     return profile
 
 
+def weekly_recap_sent_today(profile: dict, today: str) -> bool:
+    if str(profile.get("last_weekly_recap_date") or "")[:10] == today:
+        return True
+    return bool(profile.get(f"weekly_sent_{today}"))
+
+
+def mark_weekly_recap_sent(user_id: int | str, today: str) -> dict:
+    profile = dict(get_profile(user_id) or {})
+    profile["last_weekly_recap_date"] = today
+    profile[f"weekly_sent_{today}"] = True
+    upsert_profile(user_id, profile)
+    return profile
+
+
 def _milestones_shown_for_row(p: dict) -> dict:
     ms = p.get("milestones_shown")
     out: dict = {}
@@ -439,6 +453,7 @@ def _profile_to_row(p: dict) -> dict:
         "time_per_day": p.get("time_per_day"),
         "cycle_start_date": p.get("cycle_start_date"),
         "milestones_shown": _milestones_shown_for_row(p),
+        "last_weekly_recap_date": p.get("last_weekly_recap_date") or None,
     }
 
 
@@ -448,6 +463,9 @@ def _row_to_profile(row: dict) -> dict:
     for key in ("last_daily_sent_date", "last_morning_sent_date", "last_evening_sent_date"):
         if p.get(key):
             p[key] = str(p[key])[:10]
+    if p.get("last_weekly_recap_date"):
+        p["last_weekly_recap_date"] = str(p["last_weekly_recap_date"])[:10]
+        p[f"weekly_sent_{p['last_weekly_recap_date']}"] = True
     if not p.get("morning_time") and p.get("daily_time"):
         p["morning_time"] = p["daily_time"]
     if not p.get("evening_time"):
@@ -466,6 +484,7 @@ def _row_to_profile(row: dict) -> dict:
     p.setdefault("weekly_goal", p.get("weekly_goal") or "")
     p.setdefault("time_per_day", p.get("time_per_day") or "")
     p.setdefault("cycle_start_date", p.get("cycle_start_date") or "")
+    p.setdefault("last_weekly_recap_date", p.get("last_weekly_recap_date") or "")
     return p
 
 

@@ -3445,26 +3445,37 @@ async def _bootstrap_bot() -> None:
                     )
                     if not already_this_week:
                         await _generate_weekly_summary_async(cid, profile, model_chain)
+
                     weekly_summ = db_store.load_last_weekly_summary(cid)
-                    if weekly_summ and profile.get("last_weekly_recap_date") != today:
-                        active_days = len(db_store.list_daily_summaries(cid))
-                        recap = (
-                            f"{active_days} дней вместе 💙\n\n"
-                            f"{weekly_summ.get('summary', '')}\n\n"
-                            f"На следующую неделю: {weekly_summ.get('next_week_goal', '')}"
+                    if not weekly_summ:
+                        continue
+
+                    weekly_sent_key = f"weekly_sent_{today}"
+                    fresh = db_store.get_profile(key)
+                    if isinstance(fresh, dict):
+                        profile = fresh
+                        user_profiles[key] = fresh
+
+                    if db_store.weekly_recap_sent_today(profile, today):
+                        continue
+
+                    active_days = len(db_store.list_daily_summaries(cid))
+                    recap = (
+                        f"{active_days} дней вместе 💙\n\n"
+                        f"{weekly_summ.get('summary', '')}\n\n"
+                        f"На следующую неделю: {weekly_summ.get('next_week_goal', '')}"
+                    )
+                    try:
+                        await bot.send_message(
+                            chat_id=cid,
+                            text=sanitize_bot_reply(recap),
                         )
-                        try:
-                            await bot.send_message(
-                                chat_id=cid,
-                                text=sanitize_bot_reply(recap),
-                            )
-                            profile["last_weekly_recap_date"] = today
-                            user_profiles[key] = profile
-                            db_store.update_profile(
-                                cid, {"last_weekly_recap_date": today}
-                            )
-                        except Exception as e:
-                            log.warning("Weekly recap failed for %s: %s", cid, e)
+                        profile = db_store.mark_weekly_recap_sent(cid, today)
+                        profile[weekly_sent_key] = True
+                        user_profiles[key] = profile
+                        log.info("weekly summary sent cid=%s", cid)
+                    except Exception as e:
+                        log.warning("Weekly recap failed for %s: %s", cid, e)
         except Exception as e:
             log.exception("daily_check_job crashed: %s", e)
 
