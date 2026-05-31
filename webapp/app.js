@@ -779,72 +779,6 @@
     document.getElementById('edit-times-save')?.addEventListener('click', saveEditTimes);
   }
 
-  const LANG_FLAGS = {
-    ru: './flags/ru.svg',
-    en: './flags/en.svg',
-    de: './flags/de.svg',
-    fr: './flags/fr.svg',
-    es: './flags/es.svg',
-    it: './flags/it.svg',
-  };
-
-  function bindLangSign() {
-    const root = document.getElementById('lang-sign');
-    const toggle = document.getElementById('lang-sign-toggle');
-    const menu = document.getElementById('lang-sign-menu');
-    const currentImg = document.getElementById('lang-current-flag');
-    if (!root || !toggle || !menu || !currentImg) return;
-
-    const saved = localStorage.getItem('spicespace_lang') || 'ru';
-
-    function setLang(code) {
-      const src = LANG_FLAGS[code] || LANG_FLAGS.ru;
-      currentImg.src = src;
-      localStorage.setItem('spicespace_lang', code);
-      menu.querySelectorAll('.lang-hanging-sign__option').forEach((btn) => {
-        btn.classList.toggle('lang-hanging-sign__option--active', btn.dataset.lang === code);
-      });
-    }
-
-    function closeMenu() {
-      menu.hidden = true;
-      root.classList.remove('lang-hanging-sign--open');
-      toggle.setAttribute('aria-expanded', 'false');
-    }
-
-    function openMenu() {
-      menu.hidden = false;
-      root.classList.add('lang-hanging-sign--open');
-      toggle.setAttribute('aria-expanded', 'true');
-    }
-
-    setLang(saved in LANG_FLAGS ? saved : 'ru');
-
-    toggle.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (menu.hidden) {
-        openMenu();
-        haptic('light');
-      } else {
-        closeMenu();
-      }
-    });
-
-    menu.querySelectorAll('.lang-hanging-sign__option').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const code = btn.dataset.lang;
-        if (code) setLang(code);
-        closeMenu();
-        haptic('light');
-      });
-    });
-
-    document.addEventListener('click', (e) => {
-      if (!root.contains(e.target)) closeMenu();
-    });
-  }
-
   function bindEvents() {
     document.getElementById('sync-banner-open')?.addEventListener('click', openBotChat);
     document.getElementById('empty-open-bot')?.addEventListener('click', openBotChat);
@@ -887,7 +821,6 @@
   async function start() {
     initTelegram();
     bindEvents();
-    bindLangSign();
     bindEditName();
     bindEditTimes();
 
