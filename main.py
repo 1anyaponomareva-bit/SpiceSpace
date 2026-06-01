@@ -1278,6 +1278,14 @@ def _shift_calendar_day(d: date, delta_days: int) -> date:
     return d + timedelta(days=delta_days)
 
 
+def _weekday_mentioned(low: str, word: str) -> bool:
+    """День недели в тексте, без ложных «пт» внутри «опять» и т.п."""
+    w = word.lower()
+    if len(w) <= 3:
+        return bool(re.search(rf"(?<![а-яёa-z]){re.escape(w)}(?![а-яёa-z])", low))
+    return w in low
+
+
 def _parse_natural_reminder(text: str, profile: dict | None) -> dict | None:
     """
     Возвращает dict полей для _create_task_from_payload или
@@ -1302,11 +1310,12 @@ def _parse_natural_reminder(text: str, profile: dict | None) -> dict | None:
 
     days: list[str] = []
     for word, key in sorted(_WEEKDAY_RU.items(), key=lambda kv: -len(kv[0])):
-        if word in low and key not in days:
+        if _weekday_mentioned(low, word) and key not in days:
             days.append(key)
+
     if days:
         repeat = "weekly"
-    elif "каждый день" in low or "ежедневно" in low or re.search(r"\bкаждый\s+день\b", low):
+    elif "каждый день" in low or "ежедневно" in low:
         repeat = "daily"
     else:
         repeat = "none"
@@ -1325,7 +1334,7 @@ def _parse_natural_reminder(text: str, profile: dict | None) -> dict | None:
     if not time_str:
         return None
 
-    # заголовок: после времени или после ключевых слов
+    # заголовок: после времени или весь текст с очисткой
     title = ""
     m_title = re.search(
         r"(?:\d{1,2}[:\.]\d{2})\s*(?:чтобы|что|про|—|:|-)?\s*(.+)$",
@@ -1334,22 +1343,32 @@ def _parse_natural_reminder(text: str, profile: dict | None) -> dict | None:
     )
     if m_title:
         title = m_title.group(1).strip()
+    if not title:
+        m_pro = re.search(r"(?i)\bпро\s+(.+)$", raw)
+        if m_pro:
+            title = m_pro.group(1).strip()
+    if not title:
+        title = raw
+
     title = re.sub(
         r"(?i)^(напомни(?:\s+мне)?|напоминай|напоминание|"
+        r"можешь напомнить|напомни пожалуйста|"
         r"(?:можешь|сможешь)(?:\s+мне)?\s+напомнить)[\s,:-]*",
         "",
         title,
     ).strip()
+    title = re.sub(r"\b(в\s+)?\d{1,2}[:.]\d{2}\b", "", title, flags=re.I).strip()
     title = re.sub(
-        r"(?i)\b(завтра|послезавтра|сегодня|каждый\s+день|ежедневно|в|к|на)\b",
+        r"(?i)\b(завтра|послезавтра|сегодня|каждый\s+день|ежедневно|"
+        r"за\s+\d+\s*минут(?:ы)?)\b",
         "",
         title,
-    )
-    title = re.sub(r"\s+", " ", title).strip(" .,-—")
-    # убрать хвост «за 10 минут» и дни недели словами
+    ).strip()
+    title = re.sub(r"(?i)\bмне\b", "", title).strip()
     title = re.sub(r"(?i)\bза\s+(10|30)\s*(минут|мин)?\b", "", title).strip()
     for word in sorted(_WEEKDAY_RU.keys(), key=len, reverse=True):
-        title = re.sub(re.escape(word), "", title, flags=re.I)
+        if _weekday_mentioned(title.lower(), word):
+            title = re.sub(re.escape(word), "", title, flags=re.I)
     title = re.sub(r"\s+", " ", title).strip(" .,-—")
 
     if repeat == "weekly" and not days:
@@ -1368,7 +1387,7 @@ def _parse_natural_reminder(text: str, profile: dict | None) -> dict | None:
         "days_of_week": days if repeat == "weekly" else [],
         "remind_before_minutes": remind,
     }
-    if not title:
+    if not title or len(title) < 3:
         payload["_need_title"] = True
     return payload
 
