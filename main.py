@@ -1286,6 +1286,25 @@ def _weekday_mentioned(low: str, word: str) -> bool:
     return w in low
 
 
+def _has_weekly_repeat_intent(low: str) -> bool:
+    """weekly только при явном «каждый понедельник», «по пятницам» и т.п."""
+    if "каждый день" in low or "ежедневно" in low:
+        return False
+    if "каждый" in low:
+        for word in _WEEKDAY_RU:
+            if _weekday_mentioned(low, word):
+                return True
+    if re.search(
+        r"\bпо\s+(?:\w+\s+){0,2}(?:"
+        r"пн|вт|ср|чт|пт|сб|вс|"
+        r"понедельник|вторник|сред|четверг|пятниц|суббот|воскресен"
+        r")",
+        low,
+    ):
+        return True
+    return False
+
+
 def _parse_natural_reminder(text: str, profile: dict | None) -> dict | None:
     """
     Возвращает dict полей для _create_task_from_payload или
@@ -1313,20 +1332,21 @@ def _parse_natural_reminder(text: str, profile: dict | None) -> dict | None:
         if _weekday_mentioned(low, word) and key not in days:
             days.append(key)
 
-    if days:
+    if _has_weekly_repeat_intent(low) and days:
         repeat = "weekly"
     elif "каждый день" in low or "ежедневно" in low:
         repeat = "daily"
+        days = []
     else:
         repeat = "none"
+        days = []
 
-    # дата «завтра» / «послезавтра» / «сегодня»
-    target = today
+    # По умолчанию — сегодня, разово; иначе завтра / послезавтра
     if "послезавтра" in low:
         target = _shift_calendar_day(today, 2)
     elif "завтра" in low:
         target = _shift_calendar_day(today, 1)
-    elif "сегодня" in low:
+    else:
         target = today
 
     # время HH:MM или HH.MM
@@ -2564,9 +2584,10 @@ def _reminder_created_message(task: dict) -> str:
     tail = f"в {task['time']}"
     if task.get("repeat") == "daily":
         tail += ", каждый день"
-    elif task.get("repeat") == "weekly":
-        tail += ", по выбранным дням недели"
-    return f"Напомню про «{task['title']}» {tail} ✨"
+    elif task.get("repeat") == "weekly" and task.get("days_of_week"):
+        days_str = ", ".join(str(d) for d in task["days_of_week"])
+        tail += f", по {days_str}"
+    return f"Окей ✨ Напомню про «{task['title']}» {tail}."
 
 
 async def _try_handle_natural_reminder(
