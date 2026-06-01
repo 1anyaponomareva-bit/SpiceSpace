@@ -1223,11 +1223,8 @@ def _reminder_display_name(profile: dict | None) -> str:
 
 def _format_task_reminder_text(profile: dict | None, title: str) -> str:
     name = _reminder_display_name(profile)
-    head = f"{name}, напоминание ✨" if name else "Напоминание ✨"
-    return (
-        f"{head}\n\n{title}\n\n"
-        "Если сделано — отметь в Mini App или напиши ГОТОВО."
-    )
+    head = f"{name} ✨" if name else "✨"
+    return f"{head} {title}"
 
 
 async def _run_task_reminders(bot) -> None:
