@@ -1255,8 +1255,23 @@ async def _run_task_reminders(bot) -> None:
 
 
 def _looks_like_reminder_command(text: str) -> bool:
-    low = text.lower()
-    return "напомни" in low or "напоминай" in low or "напоминание" in low
+    low = (text or "").lower()
+    if any(w in low for w in ("напомни", "напоминай", "напоминание")):
+        return True
+    if re.search(r"\b(?:можешь|сможешь)\s+(?:мне\s+)?напомнить\b", low):
+        return True
+    return False
+
+
+def _extract_hhmm_from_text(raw: str) -> str | None:
+    """HH:MM из фразы: «12:00», «12.00», «напомни в 12:00»."""
+    m = re.search(r"\b(\d{1,2})[:\.](\d{2})\b", (raw or "").strip())
+    if not m:
+        return None
+    hh, mm = int(m.group(1)), int(m.group(2))
+    if 0 <= hh <= 23 and 0 <= mm <= 59:
+        return f"{hh:02d}:{mm:02d}"
+    return None
 
 
 def _shift_calendar_day(d: date, delta_days: int) -> date:
@@ -1305,26 +1320,23 @@ def _parse_natural_reminder(text: str, profile: dict | None) -> dict | None:
     elif "сегодня" in low:
         target = today
 
-    # время HH:MM
-    tm_match = re.search(r"\b(\d{1,2}):(\d{2})\b", raw)
-    if not tm_match:
+    # время HH:MM или HH.MM
+    time_str = _extract_hhmm_from_text(raw)
+    if not time_str:
         return None
-    hh, mm = int(tm_match.group(1)), int(tm_match.group(2))
-    if hh > 23 or mm > 59:
-        return None
-    time_str = f"{hh:02d}:{mm:02d}"
 
     # заголовок: после времени или после ключевых слов
     title = ""
     m_title = re.search(
-        r"(?:\d{1,2}:\d{2})\s*(?:чтобы|что|про|—|:|-)?\s*(.+)$",
+        r"(?:\d{1,2}[:\.]\d{2})\s*(?:чтобы|что|про|—|:|-)?\s*(.+)$",
         raw,
         re.I | re.DOTALL,
     )
     if m_title:
         title = m_title.group(1).strip()
     title = re.sub(
-        r"(?i)^(напомни(?:\s+мне)?|напоминай|напоминание)[\s,:-]*",
+        r"(?i)^(напомни(?:\s+мне)?|напоминай|напоминание|"
+        r"(?:можешь|сможешь)(?:\s+мне)?\s+напомнить)[\s,:-]*",
         "",
         title,
     ).strip()
@@ -2517,6 +2529,9 @@ async def _coach_reply_photo(
 
 
 def _parse_daily_time(raw: str) -> str | None:
+    parsed = _extract_hhmm_from_text(raw)
+    if parsed:
+        return parsed
     m = re.fullmatch(r"(\d{1,2}):(\d{2})", raw.strip())
     if not m:
         return None
@@ -2524,6 +2539,46 @@ def _parse_daily_time(raw: str) -> str | None:
     if h > 23 or mi > 59:
         return None
     return f"{h:02d}:{mi:02d}"
+
+
+def _reminder_created_message(task: dict) -> str:
+    tail = f"в {task['time']}"
+    if task.get("repeat") == "daily":
+        tail += ", каждый день"
+    elif task.get("repeat") == "weekly":
+        tail += ", по выбранным дням недели"
+    return f"Напомню про «{task['title']}» {tail} ✨"
+
+
+async def _try_handle_natural_reminder(
+    cid: int,
+    prof_d: dict,
+    raw: str,
+    message: Message,
+) -> bool:
+    """Создать напоминание по запросу. False — не обработано (пусть Claude ответит)."""
+    if not _looks_like_reminder_command(raw):
+        return False
+    parsed = _parse_natural_reminder(raw, prof_d)
+    if not parsed:
+        return False
+    need_title = bool(parsed.pop("_need_title", False)) or not (
+        parsed.get("title") or ""
+    ).strip()
+    if need_title:
+        pending_natural_reminder[cid] = dict(parsed)
+        msg = "Что напомнить?"
+        await _bot_reply(message, msg)
+        _append_history_turn(cid, raw, msg)
+        return True
+    try:
+        task = _create_task_from_payload(cid, prof_d, parsed)
+    except ValueError:
+        return False
+    msg = _reminder_created_message(task)
+    await _bot_reply(message, msg)
+    _append_history_turn(cid, raw, msg)
+    return True
 
 
 def _time_in_window(target_hm: str, now_hm: str, window_minutes: int = 5) -> bool:
@@ -2755,12 +2810,15 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(morning_state, dict) and morning_state.get("awaiting_reminder"):
         raw_lower = raw.strip().lower()
 
-        if any(w in raw_lower for w in ("нет", "не надо", "не нужно", "ненадо")):
+        if any(
+            w in raw_lower
+            for w in ("нет", "не надо", "не нужно", "ненадо")
+        ):
             pending_morning.pop(cid, None)
             await _bot_reply(update.message, "Окей 💚")
             return
 
-        parsed = _parse_daily_time(raw.strip())
+        parsed = _extract_hhmm_from_text(raw) or _parse_daily_time(raw.strip())
         if parsed:
             pending_morning.pop(cid, None)
             task_title = str(morning_state.get("task") or "Задача на сегодня")
@@ -2791,8 +2849,34 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         await _bot_reply(
             update.message,
-            "Напиши время в формате ЧЧ:ММ — например, 14:00. Или «нет».",
+            "Напиши время — например, 14:00 или «напомни в 12:00». Или «нет».",
         )
+        return
+
+    if cid in pending_natural_reminder and prof_d:
+        if not _looks_like_reminder_command(raw):
+            user_title = raw.strip()
+            if user_title and len(user_title) <= 500:
+                base = dict(pending_natural_reminder.pop(cid))
+                base["title"] = user_title[:500]
+                try:
+                    task = _create_task_from_payload(cid, prof_d, base)
+                except ValueError:
+                    await _bot_reply(
+                        update.message,
+                        "Не вышло сохранить напоминание — проверь дату и время в сообщении.",
+                    )
+                    return
+                msg = _reminder_created_message(task)
+                await _bot_reply(update.message, msg)
+                _append_history_turn(cid, raw, msg)
+                return
+        else:
+            pending_natural_reminder.pop(cid, None)
+
+    if prof_d and await _try_handle_natural_reminder(
+        cid, prof_d, raw, update.message
+    ):
         return
 
     if _looks_like_reminder_capability_question(raw):
@@ -2835,32 +2919,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             pe_state.pop("replied", None)
         return
 
-    if cid in pending_natural_reminder and prof_d:
-        if _looks_like_reminder_command(raw):
-            pending_natural_reminder.pop(cid, None)
-        else:
-            user_title = raw.strip()
-            if user_title and len(user_title) <= 500:
-                base = dict(pending_natural_reminder.pop(cid))
-                base["title"] = user_title[:500]
-                try:
-                    task = _create_task_from_payload(cid, prof_d, base)
-                except ValueError:
-                    await _bot_reply(
-                        update.message,
-                        "Не вышло сохранить напоминание — проверь дату и время в сообщении.",
-                    )
-                    return
-                tail = f"в {task['time']}"
-                if task.get("repeat") == "daily":
-                    tail += ", каждый день"
-                elif task.get("repeat") == "weekly":
-                    tail += ", по выбранным дням недели"
-                msg = f"Окей ✨ Напомню про «{task['title']}» {tail}."
-                await _bot_reply(update.message, msg)
-                _append_history_turn(cid, raw, msg)
-                return
-
     if _is_gotovo_message(raw):
         tid_key = last_reminder_task_id.get(cid)
         if tid_key and _mark_task_done_by_id(tid_key, cid):
@@ -2876,31 +2934,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _bot_reply(update.message, msg)
         _append_history_turn(cid, raw, msg)
         return
-
-    if prof_d and _looks_like_reminder_command(raw):
-        parsed = _parse_natural_reminder(raw, prof_d)
-        if parsed:
-            need_title = bool(parsed.pop("_need_title", False)) or not (parsed.get("title") or "").strip()
-            if need_title:
-                pending_natural_reminder[cid] = dict(parsed)
-                msg = "Что напомнить?"
-                await _bot_reply(update.message, msg)
-                _append_history_turn(cid, raw, msg)
-                return
-            try:
-                task = _create_task_from_payload(cid, prof_d, parsed)
-            except ValueError:
-                task = None
-            if task:
-                tail = f"в {task['time']}"
-                if task.get("repeat") == "daily":
-                    tail += ", каждый день"
-                elif task.get("repeat") == "weekly":
-                    tail += ", по выбранным дням недели"
-                msg = f"Окей ✨ Напомню про «{task['title']}» {tail}."
-                await _bot_reply(update.message, msg)
-                _append_history_turn(cid, raw, msg)
-                return
 
     # Restore history from Supabase if not in memory.
     if cid not in histories or not histories[cid]:
@@ -3571,7 +3604,7 @@ async def _bootstrap_bot() -> None:
 
                 if _time_in_window(morning_time, now_hm) and profile.get("last_morning_sent_date") != today:
                     try:
-                        # Save FIRST, then send — prevents duplicate if scheduler fires again
+                        # Save FIRST, then send — prevents duplicate if scheduler fires again.
                         profile["last_morning_sent_date"] = today
                         profile["last_daily_sent_date"] = today
                         user_profiles[key] = profile
@@ -3615,9 +3648,22 @@ async def _bootstrap_bot() -> None:
                         )
                     except Exception as e:
                         log.warning("Morning message failed for %s: %s", cid, e)
+                        profile["last_morning_sent_date"] = ""
+                        db_store.update_profile(
+                            cid,
+                            {"last_morning_sent_date": ""},
+                        )
+                        user_profiles[key] = profile
 
                 if _time_in_window(evening_time, now_hm) and profile.get("last_evening_sent_date") != today:
                     try:
+                        # Save FIRST, then send — prevents duplicate if scheduler fires again.
+                        profile["last_evening_sent_date"] = today
+                        user_profiles[key] = profile
+                        db_store.update_profile(
+                            cid,
+                            {"last_evening_sent_date": today},
+                        )
                         pending_evening[cid] = {"date": today}
                         await _restore_history_from_db(cid, "evening message")
                         async with typing_while(bot, cid):
@@ -3639,11 +3685,14 @@ async def _bootstrap_bot() -> None:
                             text=sanitize_bot_reply(evening_text),
                             reply_markup=keyboard,
                         )
-                        profile["last_evening_sent_date"] = today
-                        user_profiles[key] = profile
-                        db_store.upsert_profile(cid, profile)
                     except Exception as e:
                         log.warning("Evening message failed for %s: %s", cid, e)
+                        profile["last_evening_sent_date"] = ""
+                        db_store.update_profile(
+                            cid,
+                            {"last_evening_sent_date": ""},
+                        )
+                        user_profiles[key] = profile
 
                 cycle_start_raw = str(profile.get("cycle_start_date") or "").strip()
                 if cycle_start_raw:
