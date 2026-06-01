@@ -129,8 +129,9 @@ const translations = {
   },
 };
 
-const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
-const userLang = tgUser?.language_code?.toLowerCase().startsWith('ru') ? 'ru' : 'en';
+const urlLang = new URLSearchParams(window.location.search).get('lang');
+const tgLang = window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code;
+const userLang = urlLang || (tgLang?.startsWith('ru') ? 'ru' : 'en');
 
 function t(key) {
   return translations[userLang]?.[key] || translations.ru[key] || key;
