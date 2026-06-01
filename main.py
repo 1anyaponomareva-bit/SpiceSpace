@@ -4250,6 +4250,26 @@ class TimesPatchPayload(BaseModel):
     evening_time: str | None = None
 
 
+class LanguagePayload(BaseModel):
+    language_code: str = Field(min_length=2, max_length=10)
+
+
+@app.patch("/api/profile/language")
+async def patch_language(
+    request: Request,
+    payload: LanguagePayload,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+) -> dict:
+    tid = _auth_telegram_id(request, telegram_id)
+    profile = _resolve_user_profile(tid)
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=404, detail="profile not found")
+    profile["language_code"] = payload.language_code.strip()[:10]
+    db_store.upsert_profile(int(tid), profile)
+    user_profiles[tid] = profile
+    return {"ok": True}
+
+
 @app.patch("/api/profile")
 async def patch_profile_endpoint(
     request: Request,

@@ -14,7 +14,9 @@
   const DEMO_TG = new URLSearchParams(window.location.search).get('telegram_id') || '';
 
   const MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+  const MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const WEEKDAYS_SHORT = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+  const WEEKDAYS_EN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   let profile = null;
   let tasks = [];
@@ -68,33 +70,136 @@
 
   function formatTodayTag() {
     const d = new Date();
+    const lang = window.userLang || 'ru';
+    if (lang === 'en') {
+      return `${WEEKDAYS_EN[d.getDay()]} ${d.getDate()} ${MONTHS_EN[d.getMonth()]}`;
+    }
     return `${WEEKDAYS_SHORT[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
   }
 
   function pluralizeDays(n) {
+    const lang = window.userLang || 'ru';
+    if (lang === 'en') {
+      return Math.abs(n) === 1 ? t('streak_day_one') : t('streak_days');
+    }
     const a = Math.abs(n) % 100;
     const b = a % 10;
-    if (a > 10 && a < 20) return 'дней';
-    if (b > 1 && b < 5) return 'дня';
-    if (b === 1) return 'день';
-    return 'дней';
+    if (a > 10 && a < 20) return t('streak_days');
+    if (b > 1 && b < 5) return t('streak_day_few');
+    if (b === 1) return t('streak_day_one');
+    return t('streak_days');
+  }
+
+  function weekBadgeText(week) {
+    return `${t('week_label')} ${week} ${t('of_12')}`;
   }
 
   function applyGreeting() {
     const el = document.getElementById('greeting');
     if (!el) return;
     const h = new Date().getHours();
-    let g = 'Доброе утро,';
-    if (h >= 12 && h < 18) g = 'Добрый день,';
-    else if (h >= 18 && h < 23) g = 'Добрый вечер,';
-    else if (h >= 23 || h < 5) g = 'Доброй ночи,';
+    let g = t('greeting_morning');
+    if (h >= 12 && h < 18) g = t('greeting_day');
+    else if (h >= 18 && h < 23) g = t('greeting_evening');
+    else if (h >= 23 || h < 5) g = t('greeting_night');
     el.textContent = g;
   }
 
   function pickName(user, prof) {
     if (prof?.name) return String(prof.name).trim();
     const n = (user?.first_name || user?.username || '').trim();
-    return n || 'друг';
+    return n || t('friend_default');
+  }
+
+  function applyStaticI18n() {
+    document.documentElement.lang = window.userLang || 'ru';
+
+    const setText = (sel, key) => {
+      const el = document.querySelector(sel);
+      if (el) el.textContent = t(key);
+    };
+
+    setText('#sync-banner .sync-banner__text', 'sync_banner_text');
+    setText('#sync-banner-open', 'sync_open');
+    setText('#empty-state .empty-state__title', 'no_goal_title');
+    setText('#empty-state .empty-state__text', 'no_goal_text');
+    setText('#empty-open-bot', 'go_to_bot');
+
+    const setLabelWithSvg = (selector, key) => {
+      const el = document.querySelector(selector);
+      if (!el) return;
+      const svg = el.querySelector('svg');
+      el.textContent = '';
+      if (svg) el.appendChild(svg);
+      el.append(` ${t(key)}`);
+    };
+
+    setLabelWithSvg('.month-card .card-label', 'goal_12weeks');
+    setText('.week-card .card-label', 'goal_week');
+    setLabelWithSvg('.today-card .card-label', 'tasks_today');
+    setText('.streak-card .card-label', 'streak_label');
+    setText('.time-item:first-child .time-label', 'morning_time');
+    setText('.time-item:nth-child(3) .time-label', 'evening_time');
+
+    const editTimesBtn = document.getElementById('edit-times-btn');
+    if (editTimesBtn) editTimesBtn.textContent = `✏️ ${t('change_btn')}`;
+
+    const editNameBtn = document.getElementById('edit-name-btn');
+    if (editNameBtn) editNameBtn.setAttribute('aria-label', t('edit_name'));
+
+    setText('#btn-reset', 'settings_reset');
+    setText('#btn-subscription', 'settings_subscription');
+    setText('#btn-stop', 'settings_stop');
+
+    setText('.calendar-title', 'weeks_12');
+    const legends = document.querySelectorAll('.calendar-legend .legend-item');
+    const legendKeys = ['done_label', 'partial_label', 'no_label', 'no_data_label', 'future_label'];
+    legends.forEach((el, i) => {
+      if (legendKeys[i]) {
+        const dot = el.querySelector('.legend-dot');
+        el.textContent = '';
+        if (dot) el.appendChild(dot);
+        el.append(` ${t(legendKeys[i])}`);
+      }
+    });
+
+    const tabHome = document.querySelector('.tab-bar__btn[data-tab="home"]');
+    const tabCal = document.querySelector('.tab-bar__btn[data-tab="calendar"]');
+    if (tabHome) tabHome.textContent = `🏠 ${t('tab_home')}`;
+    if (tabCal) tabCal.textContent = `📅 ${t('tab_progress')}`;
+
+    setText('#edit-name-heading', 'edit_name_title');
+    const nameInput = document.getElementById('edit-name-input');
+    if (nameInput) nameInput.placeholder = t('name_placeholder');
+    setText('#edit-name-cancel', 'cancel');
+    setText('#edit-name-save', 'save');
+
+    setText('#edit-times-heading', 'times_sheet_title');
+    const morningLbl = document.querySelector('label.edit-times-sheet__field');
+    const eveningLbl = document.querySelectorAll('label.edit-times-sheet__field')[1];
+    if (morningLbl) {
+      const inp = morningLbl.querySelector('input');
+      morningLbl.textContent = '';
+      morningLbl.append(t('morning_field'));
+      if (inp) morningLbl.appendChild(inp);
+    }
+    if (eveningLbl) {
+      const inp = eveningLbl.querySelector('input');
+      eveningLbl.textContent = '';
+      eveningLbl.append(t('evening_field'));
+      if (inp) eveningLbl.appendChild(inp);
+    }
+    setText('#edit-times-cancel', 'cancel');
+    setText('#edit-times-save', 'save');
+  }
+
+  function syncLanguageCode() {
+    const lang = window.userLang || 'ru';
+    apiFetch('/api/profile/language', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ language_code: lang }),
+    }).catch(() => {});
   }
 
   function haptic(type = 'light') {
@@ -163,8 +268,8 @@
 
   function buildDemoProfile() {
     return {
-      name: 'Привет! 👋',
-      main_goal: 'Открой через бота чтобы увидеть свои цели',
+      name: t('demo_name'),
+      main_goal: t('demo_goal'),
       weekly_goal: '',
       streak: 0,
       display_streak: 0,
@@ -269,7 +374,7 @@
     if (!host || !calendarData) return;
 
     const cw = Number(calendarData.current_week || profile?.current_week || 1);
-    if (badge) badge.textContent = `Неделя ${cw} из 12`;
+    if (badge) badge.textContent = weekBadgeText(cw);
 
     const days = Array.isArray(calendarData.days) ? calendarData.days : [];
     const rows = [];
@@ -285,7 +390,7 @@
       }).join('');
       rows.push(
         `<div class="calendar-row${w + 1 === cw ? ' calendar-row--current' : ''}">` +
-        `<span class="calendar-row-label">Нед ${w + 1}</span>${cells}</div>`
+        `<span class="calendar-row-label">${t('week_short')} ${w + 1}</span>${cells}</div>`
       );
     }
     host.innerHTML = rows.join('');
@@ -314,7 +419,9 @@
     document.querySelector('.settings-block')?.classList.add('loaded');
   }
 
-  const TODAY_TASK_FALLBACK = 'Задача будет поставлена утром 🌅';
+  function todayTaskFallback() {
+    return `${t('task_pending')} 🌅`;
+  }
 
   function normalizeGoalText(text) {
     return String(text || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -362,7 +469,7 @@
     if (method) return method;
     const main = (prof.main_goal || prof.final_goal || '').trim();
     if (main.length > 100) return `${main.slice(0, 97)}…`;
-    return main || 'Шаги на эту неделю';
+    return main || t('weekly_fallback');
   }
 
   function effectiveStreak(prof) {
@@ -411,8 +518,8 @@
     document.getElementById('user-name').textContent = pickName(user, prof);
     const levelBadge = document.getElementById('level-badge');
     if (levelBadge) {
-      const level = prof?.level || { name: 'Искра', emoji: '·' };
-      levelBadge.textContent = `${level.emoji || '·'} ${level.name || 'Искра'}`;
+      const level = prof?.level || { name: t('level_spark'), emoji: '·', key: 'spark' };
+      levelBadge.textContent = `${level.emoji || '·'} ${levelName(level)}`;
     }
     const avatar = document.getElementById('avatar');
     const photo = user?.photo_url || tg?.initDataUnsafe?.user?.photo_url;
@@ -430,7 +537,7 @@
     const week = Number(prof.current_week || 1);
     const pct = Math.max(0, Math.min(100, Number(prof.weekly_score || 0)));
 
-    document.getElementById('week-badge').textContent = `Неделя ${week} из 12`;
+    document.getElementById('week-badge').textContent = weekBadgeText(week);
     document.getElementById('week-goal').textContent = weeklyGoalText(prof);
     document.getElementById('week-pct').textContent = `${pct}%`;
 
@@ -451,8 +558,8 @@
 
     if (!todayItems.length) {
       const emptyMsg = displayTodayTask(prof)
-        ? 'Пока нет задач — обсуди шаг с ботом утром.'
-        : TODAY_TASK_FALLBACK;
+        ? t('tasks_empty_discuss')
+        : todayTaskFallback();
       host.innerHTML = `<p class="task-empty">${escapeHtml(emptyMsg)}</p>`;
       return;
     }
@@ -468,12 +575,12 @@
         : '';
       const checkDisabled = done || missed || isFocus;
       const checkLabel = done
-        ? 'Выполнено'
+        ? t('task_done_aria')
         : missed
-          ? 'Не выполнено'
+          ? t('task_missed_aria')
           : isFocus
-            ? 'Подтверди вечером в чате с ботом'
-            : 'Отметить выполненным';
+            ? t('task_focus_aria')
+            : t('task_mark_aria');
       const textStyle = missed ? ' style="text-decoration:line-through;opacity:0.7"' : '';
       return `
         <div class="task-row">
@@ -514,7 +621,9 @@
     const streak = effectiveStreak(prof);
     const countEl = document.getElementById('streak-count');
     if (countEl) {
-      countEl.textContent = streak > 0 ? `${streak} ${pluralizeDays(streak)} 🔥` : 'начни сегодня';
+      countEl.textContent = streak > 0
+        ? `${streak} ${pluralizeDays(streak)} 🔥`
+        : t('streak_start');
     }
     renderStreakCircles(prof);
   }
@@ -589,14 +698,14 @@
         </div>
         <div class="days-row">
           <span class="days-number">${escapeHtml(String(completedDays))}</span>
-          <span class="days-label">дней</span>
+          <span class="days-label">${escapeHtml(t('streak_days'))}</span>
         </div>
-        <div class="subtitle">подряд</div>
+        <div class="subtitle">${escapeHtml(t('milestone_subtitle'))}</div>
         <div class="message">
           <p>${escapeHtml(milestone.message || '')}</p>
         </div>
         <div class="dots-row">${dotsHTML}</div>
-        <button type="button" class="btn-milestone">Погнали дальше →</button>
+        <button type="button" class="btn-milestone">${escapeHtml(t('milestone_btn'))}</button>
       </div>
     `;
     overlay.querySelector('.btn-milestone')?.addEventListener('click', () => overlay.remove());
@@ -806,23 +915,24 @@
     });
 
     document.getElementById('btn-reset')?.addEventListener('click', async () => {
-      if (!confirm('Сбросить всю память бота? Это удалит твой профиль и историю.')) return;
+      if (!confirm(t('confirm_reset'))) return;
       await apiFetch('/api/profile/reset', { method: 'POST' });
       if (tg) tg.close();
     });
 
     document.getElementById('btn-subscription')?.addEventListener('click', () => {
-      alert('Подписка скоро будет доступна 💳');
+      alert(t('subscription_soon'));
     });
 
     document.getElementById('btn-stop')?.addEventListener('click', async () => {
       await apiFetch('/api/profile/stop', { method: 'POST' });
-      alert('Бот остановлен. Напиши /start чтобы возобновить.');
+      alert(t('bot_stopped'));
       if (tg) tg.close();
     });
   }
 
   async function start() {
+    applyStaticI18n();
     initTelegram();
     bindEvents();
     bindEditName();
@@ -862,6 +972,7 @@
     calendarData = await fetchCalendar();
     renderAll(result.user || tgUser);
     syncTimezone();
+    syncLanguageCode();
     document.querySelector('.settings-block')?.classList.add('loaded');
   }
 
