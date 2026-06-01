@@ -956,6 +956,26 @@ def _init_tasks_store() -> None:
         tasks_store = loaded
 
 
+def _sync_profile_language_code(
+    cid: int,
+    update: Update,
+    profile: dict | None,
+) -> dict | None:
+    """Сохранить language_code из Telegram в профиль."""
+    prof = profile
+    if not isinstance(prof, dict):
+        prof = db_store.get_profile(cid) or user_profiles.get(str(cid))
+    if not isinstance(prof, dict):
+        return None
+    user = update.effective_user
+    lang = (user.language_code if user else None) or "ru"
+    if prof.get("language_code") != lang:
+        prof["language_code"] = lang
+        db_store.update_profile(cid, {"language_code": lang})
+        user_profiles[str(cid)] = prof
+    return prof
+
+
 def _profile_timezone_name(profile: dict | None) -> str:
     if isinstance(profile, dict):
         tz = str(profile.get("timezone") or "").strip()
@@ -2798,6 +2818,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tid = str(cid)
     prof = db_store.get_profile(cid) or user_profiles.get(tid)
     if isinstance(prof, dict):
+        prof = _sync_profile_language_code(cid, update, prof) or prof
         user_profiles[tid] = prof
     if isinstance(prof, dict) and prof.get("name"):
         ob.start_returning_choice(onboarding, cid)
@@ -2876,6 +2897,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     prof_raw = user_profiles.get(str(cid))
     prof_d = prof_raw if isinstance(prof_raw, dict) else None
     if prof_d:
+        prof_d = _sync_profile_language_code(cid, update, prof_d) or prof_d
         _touch_streak_for_activity(cid, prof_d)
 
     morning_state = pending_morning.get(cid)
