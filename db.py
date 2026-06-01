@@ -502,7 +502,7 @@ def _profile_to_row(p: dict) -> dict:
         "milestones_shown": _milestones_shown_for_row(p),
         "last_weekly_recap_date": p.get("last_weekly_recap_date") or None,
         "cycle_flags": _cycle_flags_for_row(p),
-        "language_code": str(p.get("language_code") or "ru")[:16],
+        "language_code": str(p.get("language_code") or "en")[:16],
     }
 
 
@@ -535,7 +535,7 @@ def _row_to_profile(row: dict) -> dict:
     p.setdefault("time_per_day", p.get("time_per_day") or "")
     p.setdefault("cycle_start_date", p.get("cycle_start_date") or "")
     p.setdefault("last_weekly_recap_date", p.get("last_weekly_recap_date") or "")
-    p.setdefault("language_code", p.get("language_code") or "ru")
+    p.setdefault("language_code", p.get("language_code") or "en")
     return p
 
 

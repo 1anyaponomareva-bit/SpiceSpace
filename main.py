@@ -41,12 +41,12 @@ from bot_typing import typing_while
 from claude_client import build_model_chain, configure as configure_claude, generate as claude_generate
 from claude_client import select_model_id
 from prompts import (
-    EVENING_MESSAGE_PROMPT,
-    EVENING_NO_TASK_PROMPT,
-    MORNING_MESSAGE_PROMPT,
     TODAY_TASK_PROMPT,
     build_chat_system,
+    evening_message_prompt,
+    evening_no_task_prompt,
     evening_opening,
+    morning_message_prompt,
     morning_opening,
     prepend_user_time,
     refresh_user_time_in_system,
@@ -956,6 +956,39 @@ def _init_tasks_store() -> None:
         tasks_store = loaded
 
 
+def _user_lang(profile: dict | None = None, update: Update | None = None) -> str:
+    if isinstance(profile, dict):
+        lc = str(profile.get("language_code") or "").strip()
+        if lc:
+            return lc
+    if update and update.effective_user:
+        return str(update.effective_user.language_code or "en")
+    return "en"
+
+
+def _webapp_keyboard(
+    cid: int,
+    lang: str,
+    *,
+    chart: bool = False,
+    sparkle: bool = False,
+) -> InlineKeyboardMarkup:
+    url = ob.mini_app_webapp_url(_mini_app_url(), cid, lang)
+    prefix = ""
+    if chart:
+        prefix = "📊 "
+    elif sparkle:
+        prefix = "✦ "
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                ob.open_spicespace_button_label(lang, prefix=prefix),
+                web_app=WebAppInfo(url=url),
+            )
+        ],
+    ])
+
+
 def _sync_profile_language_code(
     cid: int,
     update: Update,
@@ -968,7 +1001,7 @@ def _sync_profile_language_code(
     if not isinstance(prof, dict):
         return None
     user = update.effective_user
-    lang = (user.language_code if user else None) or "ru"
+    lang = (user.language_code if user else None) or "en"
     if prof.get("language_code") != lang:
         prof["language_code"] = lang
         db_store.update_profile(cid, {"language_code": lang})
@@ -1729,16 +1762,24 @@ async def _morning_message_text(
     profile: dict,
     model_names: list[str],
 ) -> str:
+    lang = str(profile.get("language_code") or "en")
+    ru = lang.lower().startswith("ru")
     today = _profile_local_date(profile)
     today_summary = db_store.get_daily_summary(chat_id, today) or {}
     preset_task = str(today_summary.get("task") or "").strip()
 
     if preset_task:
         name = str(profile.get("name", "")).strip()
+        if ru:
+            return (
+                f"{name}, доброе утро 🌅\n\n"
+                f"Вчера ты сказала что сегодня: {preset_task}\n\n"
+                f"Всё в силе или хочешь поменять?"
+            )
         return (
-            f"{name}, доброе утро 🌅\n\n"
-            f"Вчера ты сказала что сегодня: {preset_task}\n\n"
-            f"Всё в силе или хочешь поменять?"
+            f"{name}, good morning 🌅\n\n"
+            f"Yesterday you said for today: {preset_task}\n\n"
+            f"Still on track or want to change it?"
         )
 
     tz_name = str(profile.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
@@ -1746,22 +1787,27 @@ async def _morning_message_text(
     yesterday = db_store.get_daily_summary(chat_id, yesterday_date) or {}
     yesterday_context = str(yesterday.get("summary") or "").strip()
     name = str(profile.get("name", "")).strip()
-    display_name = name or "подруга"
+    display_name = name or ("подруга" if ru else "friend")
     name_instruction = _exact_name_prompt_instruction(profile, chat_id)
+    na = "не указана" if ru else "not specified"
+    none_word = "нет" if ru else "none"
     main_goal = str(
         profile.get("main_goal") or profile.get("final_goal") or ""
-    ).strip() or "не указана"
-    vision = str(profile.get("vision") or "").strip() or "не указана"
+    ).strip() or na
+    vision = str(profile.get("vision") or "").strip() or na
     weekly_goal = str(profile.get("weekly_goal") or "").strip() or main_goal
-    last_summary = yesterday_context or str(yesterday.get("key_detail") or "").strip() or "нет"
+    last_summary = (
+        yesterday_context or str(yesterday.get("key_detail") or "").strip() or none_word
+    )
     time_per_day = _format_time_per_day_for_prompt(profile)
     facts_block = _facts_block_for_prompt(chat_id)
     personality_block = _personality_block_for_prompt(chat_id)
+    yctx_label = "Вчерашний контекст" if ru else "Yesterday's context"
 
     user_content = (
         f"{name_instruction}\n\n"
-        f"Вчерашний контекст:\n{yesterday_context or 'нет'}\n\n"
-        + MORNING_MESSAGE_PROMPT.format(
+        f"{yctx_label}:\n{yesterday_context or none_word}\n\n"
+        + morning_message_prompt(lang).format(
             name=display_name,
             vision=vision,
             main_goal=main_goal,
@@ -1773,10 +1819,7 @@ async def _morning_message_text(
         )
     )
 
-    morning_body = (
-        "Напиши только текст утреннего сообщения для Telegram. Без markdown.\n"
-        f"{name_instruction}"
-    )
+    morning_body = _morning_personal_system(lang) + f"{name_instruction}"
     for block in (facts_block, personality_block):
         if block:
             morning_body += f"\n\n{block}"
@@ -1804,12 +1847,13 @@ async def _morning_message_text(
             main_goal=main_goal,
             vision=vision,
             key_detail=str(yesterday.get("key_detail") or ""),
+            lang=lang,
         )
 
     return await asyncio.to_thread(call)
 
 
-_EVENING_PERSONAL_SYSTEM = (
+_EVENING_PERSONAL_SYSTEM_RU = (
     "Напиши только текст вечернего сообщения для Telegram. Без markdown.\n"
     "Обращайся по имени из профиля полностью — не сокращай (не «Поля», если имя Полина).\n\n"
     "ЗАПРЕЩЕНО:\n"
@@ -1820,6 +1864,32 @@ _EVENING_PERSONAL_SYSTEM = (
     'Если пользователь говорит "давай наметим задачу" — он ХОЧЕТ поставить задачу, а не выполнил её.\n'
     'Просто спроси: "Что конкретно сделаешь завтра?"'
 )
+
+_EVENING_PERSONAL_SYSTEM = (
+    "Write only the evening message text for Telegram. No markdown.\n"
+    "Use the profile name in full — don't shorten (not «Poly» if the name is Polina).\n\n"
+    "FORBIDDEN:\n"
+    '- Saying "you did it!", "well done!" when the user is only planning to do something\n'
+    '- Confusing intent ("let\'s do it") with fact ("I did it")\n'
+    "- Profanity\n"
+    "- Asking the same question twice in a row\n\n"
+    'If she says "let\'s plan a task" — she WANTS to set a task, not that she finished.\n'
+    'Just ask: "What specifically will you do tomorrow?"'
+)
+
+
+def _evening_personal_system(lang: str) -> str:
+    if str(lang or "en").lower().startswith("ru"):
+        return _EVENING_PERSONAL_SYSTEM_RU
+    return _EVENING_PERSONAL_SYSTEM
+
+
+def _morning_personal_system(lang: str) -> str:
+    if str(lang or "en").lower().startswith("ru"):
+        return (
+            "Напиши только текст утреннего сообщения для Telegram. Без markdown.\n"
+        )
+    return "Write only the morning message text for Telegram. No markdown.\n"
 
 
 def _today_has_task(chat_id: int, profile: dict) -> bool:
@@ -1834,13 +1904,17 @@ async def _evening_message_text(
     profile: dict,
     model_names: list[str],
 ) -> str:
+    lang = str(profile.get("language_code") or "en")
+    ru = lang.lower().startswith("ru")
     today = _profile_local_date(profile)
     today_summary = db_store.get_daily_summary(chat_id, today) or {}
     today_context = str(today_summary.get("summary") or "").strip()
     if not today_context:
         lines: list[str] = []
+        user_l = "Пользователь" if ru else "User"
+        space_l = "Спейс" if ru else "Space"
         for msg in (histories.get(chat_id, []) or [])[-10:]:
-            role = "Пользователь" if msg.get("role") == "user" else "Спейс"
+            role = user_l if msg.get("role") == "user" else space_l
             content = msg.get("content") or (msg.get("parts") or [""])[0]
             text = str(content or "").strip()
             if text:
@@ -1858,14 +1932,16 @@ async def _evening_message_text(
     )
 
     if not summary_text and not today_context:
-        return evening_opening(has_task=has_task)
+        return evening_opening(has_task=has_task, lang=lang)
 
     name = str(profile.get("name", "")).strip()
-    display_name = name or "подруга"
+    display_name = name or ("подруга" if ru else "friend")
     name_instruction = _exact_name_prompt_instruction(profile, chat_id)
     goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
     facts_block = _facts_block_for_prompt(chat_id)
     personality_block = _personality_block_for_prompt(chat_id)
+    na = "не указана" if ru else "not specified"
+    no_task = "не задана" if ru else "not set"
 
     summary_lines: list[str] = []
     if summary_text:
@@ -1878,17 +1954,28 @@ async def _evening_message_text(
         summary_lines.append(f"key_detail: {key_detail}")
     if has_task:
         summary_lines.append(f"task: {task}")
-    summary_block = "\n".join(summary_lines) if summary_lines else "пока нет сводки"
+    summary_block = (
+        "\n".join(summary_lines)
+        if summary_lines
+        else ("пока нет сводки" if ru else "no summary yet")
+    )
 
-    prompt_tpl = EVENING_MESSAGE_PROMPT if has_task else EVENING_NO_TASK_PROMPT
+    ctx_ref = (
+        "(см. блок «Сегодняшний диалог» в системном промпте)"
+        if ru
+        else "(see «Today's dialog» block in the system prompt)"
+    )
+    prompt_tpl = (
+        evening_message_prompt(lang) if has_task else evening_no_task_prompt(lang)
+    )
     user_content = (
         f"{name_instruction}\n\n"
         + prompt_tpl.format(
             name=display_name,
-            goal=goal or "не указана",
+            goal=goal or na,
             summary_block=summary_block,
-            today_context="(см. блок «Сегодняшний диалог» в системном промпте)",
-            today_task=task or "не задана",
+            today_context=ctx_ref,
+            today_task=task or no_task,
             name_rule=name_instruction,
             facts_block=facts_block,
             personality_block=personality_block,
@@ -1898,15 +1985,24 @@ async def _evening_message_text(
         b for b in (facts_block, personality_block) if b
     )
     evening_body = (
-        f"{_EVENING_PERSONAL_SYSTEM}\n\n{name_instruction}"
+        f"{_evening_personal_system(lang)}\n\n{name_instruction}"
         + (f"\n\n{evening_extra}" if evening_extra else "")
     )
     if today_context:
-        evening_body += (
-            f"\n\nСегодняшний диалог (время в репликах — прошлое, не текущее):\n"
-            f"{today_context}\n"
-            "Используй контекст дня — упомяни конкретную деталь. ЗАПРЕЩЕНО начинать с нуля."
-        )
+        if ru:
+            evening_body += (
+                f"\n\nСегодняшний диалог (время в репликах — прошлое, не текущее):\n"
+                f"{today_context}\n"
+                "Используй контекст дня — упомяни конкретную деталь. "
+                "ЗАПРЕЩЕНО начинать с нуля."
+            )
+        else:
+            evening_body += (
+                f"\n\nToday's dialog (timestamps in replies are past, not now):\n"
+                f"{today_context}\n"
+                "Use today's context — mention a specific detail. "
+                "FORBIDDEN to start from scratch."
+            )
     evening_system = prepend_user_time(profile, evening_body)
 
     def call() -> str:
@@ -1925,7 +2021,7 @@ async def _evening_message_text(
                     return text
             except Exception as e:
                 log.warning("evening personal message %s: %s", mid, e)
-        return evening_opening(has_task=has_task)
+        return evening_opening(has_task=has_task, lang=lang)
 
     return await asyncio.to_thread(call)
 
@@ -2812,23 +2908,30 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_chat or not update.message:
         return
     cid = update.effective_chat.id
-    subscribers.add(cid)
 
-    # /start and /start webapp (Mini App deep link) — одинаковый сценарий
+    lang = (update.effective_user.language_code if update.effective_user else None) or "en"
+
+    subscribers.add(cid)
     tid = str(cid)
     prof = db_store.get_profile(cid) or user_profiles.get(tid)
     if isinstance(prof, dict):
-        prof = _sync_profile_language_code(cid, update, prof) or prof
+        prof["language_code"] = lang
+        db_store.update_profile(cid, {"language_code": lang})
         user_profiles[tid] = prof
+    else:
+        prof = db_store.update_profile(cid, {"language_code": lang})
+        user_profiles[tid] = prof
+
     if isinstance(prof, dict) and prof.get("name"):
-        ob.start_returning_choice(onboarding, cid)
+        ob.start_returning_choice(onboarding, cid, lang)
         await _bot_reply(
-            update.message, ob.greeting_returning(str(prof.get("name", "")))
+            update.message,
+            ob.greeting_returning(str(prof.get("name", "")), lang),
         )
         return
 
-    ob.start_new_onboarding(onboarding, cid)
-    await _bot_reply(update.message, ob.GREETING_NEW)
+    ob.start_new_onboarding(onboarding, cid, lang)
+    await _bot_reply(update.message, ob.get_greeting_new(lang))
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2839,23 +2942,25 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     pending_morning.pop(cid, None)
     pending_evening.pop(cid, None)
     db_store.save_subscriber(cid, False)
-    prof = user_profiles.get(str(cid))
+    prof = user_profiles.get(str(cid)) or db_store.get_profile(cid)
     if isinstance(prof, dict):
         prof["daily_enabled"] = False
         db_store.upsert_profile(cid, prof)
+    lang = _user_lang(prof if isinstance(prof, dict) else None, update)
     await _bot_reply(
         update.message,
-        "Утренние и вечерние сообщения выключены. Напиши /start, чтобы снова включить.",
+        ob.ob_text("cmd_stop_msg", lang),
     )
 
 
 async def app_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
-    webapp_url = f"https://spicespace-production.up.railway.app/webapp/?telegram_id={cid}"
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("📊 Открыть SpiceSpace", web_app=WebAppInfo(url=webapp_url))
-    ]])
-    await update.message.reply_text("Твой прогресс 👇", reply_markup=keyboard)
+    prof = user_profiles.get(str(cid)) or db_store.get_profile(cid)
+    lang = _user_lang(prof if isinstance(prof, dict) else None, update)
+    await update.message.reply_text(
+        ob.ob_text("app_progress_hint", lang),
+        reply_markup=_webapp_keyboard(cid, lang, chart=True),
+    )
 
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2868,9 +2973,11 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     pending_natural_reminder.pop(cid, None)
     last_reminder_task_id.pop(cid, None)
     onboarding.pop(cid, None)
+    prof = user_profiles.get(str(cid)) or db_store.get_profile(cid)
+    lang = _user_lang(prof if isinstance(prof, dict) else None, update)
     await _bot_reply(
         update.message,
-        "Контекст диалога сброшен. Можем начать с чистого листа. Чтобы пройти знакомство снова — /start.",
+        ob.ob_text("cmd_reset_msg", lang),
     )
 
 
@@ -2890,8 +2997,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if not user_profiles.get(str(cid)):
-        ob.start_new_onboarding(onboarding, cid)
-        await _bot_reply(update.message, ob.GREETING_NEW)
+        lang = (update.effective_user.language_code if update.effective_user else None) or "en"
+        ob.start_new_onboarding(onboarding, cid, lang)
+        await _bot_reply(update.message, ob.get_greeting_new(lang))
         return
 
     prof_raw = user_profiles.get(str(cid))
@@ -2986,13 +3094,15 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if prof_d:
         if _wants_to_change_weekly_goal(raw):
             ob.start_change_weekly(onboarding, cid, prof_d)
-            opening = ob.change_weekly_opening(prof_d)
+            plang = str(prof_d.get("language_code") or "en")
+            opening = ob.change_weekly_opening(prof_d, plang)
             await _bot_reply(update.message, opening)
             _append_history_turn(cid, raw, opening)
             return
         if _wants_to_change_12w_goal(raw):
             ob.start_change_12w(onboarding, cid, prof_d)
-            opening = ob.change_12w_choice_prompt()
+            plang = str(prof_d.get("language_code") or "en")
+            opening = ob.change_12w_choice_prompt(plang)
             await _bot_reply(update.message, opening)
             _append_history_turn(cid, raw, opening)
             return
@@ -3090,8 +3200,9 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if not user_profiles.get(str(cid)):
-        ob.start_new_onboarding(onboarding, cid)
-        await _bot_reply(msg, ob.GREETING_NEW)
+        lang = (update.effective_user.language_code if update.effective_user else None) or "en"
+        ob.start_new_onboarding(onboarding, cid, lang)
+        await _bot_reply(msg, ob.get_greeting_new(lang))
         return
 
     prof_photo = user_profiles.get(str(cid))
@@ -3695,6 +3806,7 @@ async def _bootstrap_bot() -> None:
 
                 morning_time = profile.get("morning_time") or profile.get("daily_time", "09:30")
                 evening_time = profile.get("evening_time") or "21:00"
+                ulang = _user_lang(profile)
 
                 if _time_in_window(morning_time, now_hm) and profile.get("last_morning_sent_date") != today:
                     try:
@@ -3717,16 +3829,7 @@ async def _bootstrap_bot() -> None:
                         histories.setdefault(cid, []).append(
                             {"role": "model", "parts": [text]}
                         )
-                        webapp_url = os.getenv(
-                            "MINI_APP_URL",
-                            "https://spicespace-production.up.railway.app/webapp/",
-                        )
-                        keyboard = InlineKeyboardMarkup([[
-                            InlineKeyboardButton(
-                                "Открыть SpiceSpace",
-                                web_app=WebAppInfo(url=webapp_url),
-                            )
-                        ]])
+                        keyboard = _webapp_keyboard(cid, ulang)
                         await bot.send_message(
                             chat_id=cid,
                             text=sanitize_bot_reply(text),
@@ -3750,30 +3853,20 @@ async def _bootstrap_bot() -> None:
                         user_profiles[key] = profile
 
                 if _time_in_window(evening_time, now_hm) and profile.get("last_evening_sent_date") != today:
+
+                    # SAVE FLAG FIRST — before any async operation
+                    profile["last_evening_sent_date"] = today
+                    user_profiles[key] = profile
+                    db_store.update_profile(cid, {"last_evening_sent_date": today})
+
                     try:
-                        # Save FIRST, then send — prevents duplicate if scheduler fires again.
-                        profile["last_evening_sent_date"] = today
-                        user_profiles[key] = profile
-                        db_store.update_profile(
-                            cid,
-                            {"last_evening_sent_date": today},
-                        )
-                        pending_evening[cid] = {"date": today}
+                        pending_evening[cid] = {"date": today, "replied": False}
                         await _restore_history_from_db(cid, "evening message")
                         async with typing_while(bot, cid):
                             evening_text = await _evening_message_text(
                                 cid, profile, model_chain
                             )
-                        webapp_url = os.getenv(
-                            "MINI_APP_URL",
-                            "https://spicespace-production.up.railway.app/webapp/",
-                        )
-                        keyboard = InlineKeyboardMarkup([[
-                            InlineKeyboardButton(
-                                "Открыть SpiceSpace",
-                                web_app=WebAppInfo(url=webapp_url),
-                            )
-                        ]])
+                        keyboard = _webapp_keyboard(cid, ulang)
                         await bot.send_message(
                             chat_id=cid,
                             text=sanitize_bot_reply(evening_text),
@@ -3781,11 +3874,9 @@ async def _bootstrap_bot() -> None:
                         )
                     except Exception as e:
                         log.warning("Evening message failed for %s: %s", cid, e)
+                        # Reset flag if send failed
                         profile["last_evening_sent_date"] = ""
-                        db_store.update_profile(
-                            cid,
-                            {"last_evening_sent_date": ""},
-                        )
+                        db_store.update_profile(cid, {"last_evening_sent_date": ""})
                         user_profiles[key] = profile
 
                 cycle_start_raw = str(profile.get("cycle_start_date") or "").strip()
@@ -3880,7 +3971,8 @@ async def _bootstrap_bot() -> None:
                                 profile, new_week_sent_key
                             ):
                                 ob.start_change_weekly(onboarding, cid, profile)
-                                opening = ob.change_weekly_opening(profile)
+                                plang = str(profile.get("language_code") or "en")
+                                opening = ob.change_weekly_opening(profile, plang)
                                 try:
                                     await bot.send_message(
                                         chat_id=cid,

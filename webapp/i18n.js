@@ -134,7 +134,7 @@ const tgLang = window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code;
 const userLang = urlLang || (tgLang?.startsWith('ru') ? 'ru' : 'en');
 
 function t(key) {
-  return translations[userLang]?.[key] || translations.ru[key] || key;
+  return translations[userLang]?.[key] || translations.en[key] || key;
 }
 
 function levelName(level) {

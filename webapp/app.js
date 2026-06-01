@@ -70,7 +70,7 @@
 
   function formatTodayTag() {
     const d = new Date();
-    const lang = window.userLang || 'ru';
+    const lang = window.userLang || 'en';
     if (lang === 'en') {
       return `${WEEKDAYS_EN[d.getDay()]} ${d.getDate()} ${MONTHS_EN[d.getMonth()]}`;
     }
@@ -78,7 +78,7 @@
   }
 
   function pluralizeDays(n) {
-    const lang = window.userLang || 'ru';
+    const lang = window.userLang || 'en';
     if (lang === 'en') {
       return Math.abs(n) === 1 ? t('streak_day_one') : t('streak_days');
     }
@@ -112,7 +112,7 @@
   }
 
   function applyStaticI18n() {
-    document.documentElement.lang = window.userLang || 'ru';
+    document.documentElement.lang = window.userLang || 'en';
 
     const setText = (sel, key) => {
       const el = document.querySelector(sel);
@@ -193,8 +193,20 @@
     setText('#edit-times-save', 'save');
   }
 
+  function applyLanguageFromProfile(prof) {
+    const urlLang = new URLSearchParams(window.location.search).get('lang');
+    if (urlLang === 'ru' || urlLang === 'en') {
+      window.userLang = urlLang;
+    } else {
+      const lc = String(prof?.language_code || tg?.initDataUnsafe?.user?.language_code || '').toLowerCase();
+      window.userLang = lc.startsWith('ru') ? 'ru' : 'en';
+    }
+    document.documentElement.lang = window.userLang;
+    applyStaticI18n();
+  }
+
   function syncLanguageCode() {
-    const lang = window.userLang || 'ru';
+    const lang = window.userLang || 'en';
     apiFetch('/api/profile/language', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -961,6 +973,7 @@
     }
 
     profile = result.profile;
+    applyLanguageFromProfile(profile);
     hideSyncBanner();
     showMain();
     setCanEditName(true);
