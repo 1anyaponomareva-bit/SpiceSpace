@@ -1036,6 +1036,7 @@ def _append_task(task: dict) -> None:
     with tasks_lock:
         tasks_store.append(task)
         _save_tasks_to_disk_locked()
+    db_store.save_task(task)
 
 
 def _find_task_index(task_id: str) -> int | None:
@@ -1046,54 +1047,68 @@ def _find_task_index(task_id: str) -> int | None:
 
 
 def _delete_task_by_id(task_id: str, telegram_id: int) -> bool:
+    ok = False
     with tasks_lock:
         idx = _find_task_index(task_id)
-        if idx is None:
-            return False
-        if int(tasks_store[idx].get("telegram_id") or 0) != int(telegram_id):
-            return False
-        tasks_store.pop(idx)
-        _save_tasks_to_disk_locked()
-        return True
+        if idx is not None:
+            if int(tasks_store[idx].get("telegram_id") or 0) != int(telegram_id):
+                return False
+            tasks_store.pop(idx)
+            _save_tasks_to_disk_locked()
+            ok = True
+    if db_store._use_supabase:
+        ok = db_store.delete_task_db(task_id, telegram_id) or ok
+    return ok
 
 
 def _update_task_by_id(task_id: str, telegram_id: int, patch: dict) -> dict | None:
+    result: dict | None = None
     with tasks_lock:
         idx = _find_task_index(task_id)
-        if idx is None:
-            return None
-        t = tasks_store[idx]
-        if int(t.get("telegram_id") or 0) != int(telegram_id):
-            return None
-        for k, v in patch.items():
-            if k == "id" or k == "telegram_id" or k == "created_at":
-                continue
-            if k == "days_of_week" and isinstance(v, list):
-                t[k] = _normalize_days(v)
-            elif k == "repeat" and v in ("none", "daily", "weekly"):
-                t[k] = v
-            elif k == "remind_before_minutes":
-                t[k] = max(0, min(int(v or 0), 24 * 60))
-            elif k in (
-                "title",
-                "description",
-                "date",
-                "time",
-                "timezone",
-                "status",
-                "done",
-                "last_sent_at",
-                "snooze_until",
-            ):
-                if k == "done":
-                    t[k] = bool(v)
-                else:
+        if idx is not None:
+            t = tasks_store[idx]
+            if int(t.get("telegram_id") or 0) != int(telegram_id):
+                return None
+            for k, v in patch.items():
+                if k == "id" or k == "telegram_id" or k == "created_at":
+                    continue
+                if k == "days_of_week" and isinstance(v, list):
+                    t[k] = _normalize_days(v)
+                elif k == "repeat" and v in ("none", "daily", "weekly"):
                     t[k] = v
-        _save_tasks_to_disk_locked()
-        return dict(t)
+                elif k == "remind_before_minutes":
+                    t[k] = max(0, min(int(v or 0), 24 * 60))
+                elif k in (
+                    "title",
+                    "description",
+                    "date",
+                    "time",
+                    "timezone",
+                    "status",
+                    "done",
+                    "last_sent_at",
+                    "snooze_until",
+                ):
+                    if k == "done":
+                        t[k] = bool(v)
+                    else:
+                        t[k] = v
+            _save_tasks_to_disk_locked()
+            result = dict(t)
+    if db_store._use_supabase:
+        db_store.update_task(task_id, patch)
+        if result is None:
+            for t in db_store.load_tasks(telegram_id):
+                if str(t.get("id")) == str(task_id):
+                    result = dict(t)
+                    result.update(patch)
+                    break
+    return result
 
 
 def _tasks_for_user(telegram_id: int) -> list[dict]:
+    if db_store._use_supabase:
+        return db_store.load_tasks(telegram_id)
     with tasks_lock:
         return [dict(t) for t in tasks_store if int(t.get("telegram_id") or 0) == int(telegram_id)]
 
@@ -1208,10 +1223,10 @@ def _mark_task_last_sent(task_id: str) -> None:
     now_iso = datetime.now(tz=ZoneInfo("UTC")).isoformat()
     with tasks_lock:
         idx = _find_task_index(task_id)
-        if idx is None:
-            return
-        tasks_store[idx]["last_sent_at"] = now_iso
-        _save_tasks_to_disk_locked()
+        if idx is not None:
+            tasks_store[idx]["last_sent_at"] = now_iso
+            _save_tasks_to_disk_locked()
+    db_store.update_task(task_id, {"last_sent_at": now_iso})
 
 
 def _reminder_display_name(profile: dict | None) -> str:
@@ -1228,9 +1243,11 @@ def _format_task_reminder_text(profile: dict | None, title: str) -> str:
 
 
 async def _run_task_reminders(bot) -> None:
-    snapshot: list[dict]
-    with tasks_lock:
-        snapshot = [dict(t) for t in tasks_store]
+    if db_store._use_supabase:
+        snapshot = db_store.load_all_tasks()
+    else:
+        with tasks_lock:
+            snapshot = [dict(t) for t in tasks_store]
     for task in snapshot:
         tid = int(task.get("telegram_id") or 0)
         if not tid:
@@ -1411,19 +1428,37 @@ def _parse_natural_reminder(text: str, profile: dict | None) -> dict | None:
 
 _init_tasks_store()
 
+if db_store._use_supabase:
+    existing_tasks = db_store._request("GET", "tasks?limit=1") or []
+    if not existing_tasks:
+        loaded = _load_tasks_from_disk()
+        if loaded:
+            log.info("Migrating %d tasks from JSON to Supabase", len(loaded))
+            for task in loaded:
+                db_store.save_task(task)
+            log.info("Tasks migration complete")
+
 
 def _mark_task_done_by_id(task_id: str, telegram_id: int) -> bool:
+    found = False
     with tasks_lock:
         idx = _find_task_index(task_id)
-        if idx is None:
-            return False
-        t = tasks_store[idx]
-        if int(t.get("telegram_id") or 0) != int(telegram_id):
-            return False
-        t["done"] = True
-        t["status"] = "completed"
-        _save_tasks_to_disk_locked()
-        return True
+        if idx is not None:
+            if int(tasks_store[idx].get("telegram_id") or 0) != int(telegram_id):
+                return False
+            tasks_store[idx]["done"] = True
+            tasks_store[idx]["status"] = "completed"
+            _save_tasks_to_disk_locked()
+            found = True
+    if db_store._use_supabase:
+        db_store.update_task(task_id, {"done": True, "status": "completed"})
+        if not found:
+            rows = db_store._request(
+                "GET",
+                f"tasks?id=eq.{task_id}&telegram_id=eq.{telegram_id}&limit=1",
+            ) or []
+            found = bool(rows)
+    return found
 
 
 def _is_gotovo_message(text: str) -> bool:
@@ -4140,6 +4175,7 @@ def _purge_user_runtime(chat_id: int) -> None:
     last_reminder_task_id.pop(chat_id, None)
     subscribers.discard(chat_id)
     user_profiles.pop(tid, None)
+    db_store.delete_all_tasks(chat_id)
     with tasks_lock:
         before = len(tasks_store)
         tasks_store[:] = [
@@ -4543,9 +4579,18 @@ async def mark_task_done_endpoint(
     ok = _mark_task_done_by_id(task_id, int(tid))
     if not ok:
         raise HTTPException(status_code=404, detail="task not found")
+    out: dict = {}
     with tasks_lock:
         idx = _find_task_index(task_id)
-        out = dict(tasks_store[idx]) if idx is not None else {}
+        if idx is not None:
+            out = dict(tasks_store[idx])
+    if not out:
+        for t in _tasks_for_user(int(tid)):
+            if str(t.get("id")) == str(task_id):
+                out = dict(t)
+                out["done"] = True
+                out["status"] = "completed"
+                break
     return out
 
 

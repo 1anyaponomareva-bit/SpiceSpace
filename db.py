@@ -730,3 +730,87 @@ def delete_personality(user_id: int | str) -> None:
     key = str(user_id)
     if _use_supabase:
         _request("DELETE", f"user_personality?user_id=eq.{key}")
+
+
+def save_task(task: dict) -> None:
+    """Save or update task in Supabase."""
+    if not _use_supabase:
+        return
+    row = {
+        "id": str(task.get("id", "")),
+        "telegram_id": int(task.get("telegram_id", 0)),
+        "title": str(task.get("title", ""))[:500],
+        "description": str(task.get("description", ""))[:2000],
+        "date": str(task.get("date", "")),
+        "time": str(task.get("time", "")),
+        "timezone": str(task.get("timezone", "UTC")),
+        "repeat": str(task.get("repeat", "none")),
+        "days_of_week": task.get("days_of_week") or [],
+        "remind_before_minutes": int(task.get("remind_before_minutes") or 0),
+        "status": str(task.get("status", "active")),
+        "done": bool(task.get("done", False)),
+        "last_sent_at": str(task.get("last_sent_at") or ""),
+        "snooze_until": str(task.get("snooze_until") or ""),
+    }
+    created = str(task.get("created_at") or "").strip()
+    if created:
+        row["created_at"] = created
+    _request(
+        "POST",
+        "tasks?on_conflict=id",
+        json=row,
+        headers={**_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+    )
+
+
+def load_tasks(telegram_id: int | str) -> list[dict]:
+    """Load all active tasks for user from Supabase."""
+    key = str(telegram_id)
+    if not _use_supabase:
+        return []
+    rows = _request(
+        "GET",
+        f"tasks?telegram_id=eq.{key}&status=eq.active&done=eq.false&order=created_at.asc",
+    ) or []
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def load_all_tasks() -> list[dict]:
+    """Load all active tasks from Supabase for reminder job."""
+    if not _use_supabase:
+        return []
+    rows = _request(
+        "GET",
+        "tasks?status=eq.active&done=eq.false&order=created_at.asc",
+    ) or []
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def update_task(task_id: str, patch: dict) -> None:
+    """Update specific task fields in Supabase."""
+    if not _use_supabase:
+        return
+    _request(
+        "PATCH",
+        f"tasks?id=eq.{task_id}",
+        json=patch,
+        headers={**_headers(), "Prefer": "return=minimal"},
+    )
+
+
+def delete_task_db(task_id: str, telegram_id: int | str) -> bool:
+    """Delete task from Supabase."""
+    if not _use_supabase:
+        return False
+    result = _request(
+        "DELETE",
+        f"tasks?id=eq.{task_id}&telegram_id=eq.{telegram_id}",
+    )
+    return result is not None
+
+
+def delete_all_tasks(telegram_id: int | str) -> None:
+    """Delete all tasks for user."""
+    key = str(telegram_id)
+    if _use_supabase:
+        _request("DELETE", f"tasks?telegram_id=eq.{key}")
