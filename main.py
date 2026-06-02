@@ -1824,6 +1824,11 @@ async def _morning_message_text(
         if block:
             morning_body += f"\n\n{block}"
     morning_system = prepend_user_time(profile, morning_body)
+    if not ru:
+        morning_system = (
+            "CRITICAL: Write ONLY in English. Not a single Russian word. "
+            "This is an English-speaking user.\n\n"
+        ) + morning_system
 
     def call() -> str:
         for mid in model_names:
@@ -2004,6 +2009,10 @@ async def _evening_message_text(
                 "FORBIDDEN to start from scratch."
             )
     evening_system = prepend_user_time(profile, evening_body)
+    if not ru:
+        evening_system = (
+            "CRITICAL: Write ONLY in English. Not a single Russian word.\n\n"
+        ) + evening_system
 
     def call() -> str:
         for mid in model_names:
@@ -2554,6 +2563,16 @@ async def _coach_reply(
 
     extra = "\n\n".join(extra_parts)
 
+    lang = str(prof.get("language_code") or "en")
+    is_russian = lang.lower().startswith("ru")
+    if not is_russian:
+        extra = (
+            "CRITICAL: This user speaks ONLY English. "
+            "NEVER write in Russian. NEVER mix languages. "
+            "If you accidentally wrote Russian — that is a bug. "
+            "Every single word must be in English.\n\n"
+        ) + extra
+
     system = build_chat_system(prof, yesterday, today_summary, extra=extra)
     log.info(
         "coach_reply time cid=%s tz=%s now=%s",
@@ -2643,10 +2662,24 @@ async def _coach_reply_photo(
     tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name)
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
-    system = build_chat_system(prof, yesterday, today_summary, extra="")
+    lang = str(prof.get("language_code") or "en")
+    is_russian = lang.lower().startswith("ru")
+    photo_extra = ""
+    if not is_russian:
+        photo_extra = (
+            "CRITICAL: This user speaks ONLY English. "
+            "NEVER write in Russian. NEVER mix languages. "
+            "Every single word must be in English.\n\n"
+        )
+    system = build_chat_system(prof, yesterday, today_summary, extra=photo_extra)
 
     caption_body = _user_text_with_reply_context(
-        (caption or "Что на фото?").strip(), reply_context
+        (
+            (caption or "What's in the photo?").strip()
+            if not is_russian
+            else (caption or "Что на фото?").strip()
+        ),
+        reply_context,
     )
     user_label = user_message_with_fresh_time(prof, caption_body)
     user_content = [
@@ -2910,6 +2943,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
 
     lang = (update.effective_user.language_code if update.effective_user else None) or "en"
+    log.info(
+        "cmd_start cid=%s telegram_language_code=%s effective_lang=%s",
+        cid,
+        update.effective_user.language_code if update.effective_user else "NO_USER",
+        lang,
+    )
 
     subscribers.add(cid)
     tid = str(cid)
@@ -3808,76 +3847,89 @@ async def _bootstrap_bot() -> None:
                 evening_time = profile.get("evening_time") or "21:00"
                 ulang = _user_lang(profile)
 
-                if _time_in_window(morning_time, now_hm) and profile.get("last_morning_sent_date") != today:
-                    try:
-                        # Save FIRST, then send — prevents duplicate if scheduler fires again.
+                if _time_in_window(morning_time, now_hm):
+                    claimed = db_store.claim_send_slot(
+                        cid, "last_morning_sent_date", today
+                    )
+                    if claimed:
                         profile["last_morning_sent_date"] = today
                         profile["last_daily_sent_date"] = today
                         user_profiles[key] = profile
-                        db_store.update_profile(
-                            cid,
-                            {
-                                "last_morning_sent_date": today,
-                                "last_daily_sent_date": today,
-                            },
-                        )
-                        await _restore_history_from_db(cid, "morning message")
-                        async with typing_while(bot, cid):
-                            text = await _morning_message_text(
-                                cid, profile, model_chain
+                        db_store.update_profile(cid, {"last_daily_sent_date": today})
+
+                        try:
+                            await _restore_history_from_db(cid, "morning message")
+                            async with typing_while(bot, cid):
+                                text = await _morning_message_text(
+                                    cid, profile, model_chain
+                                )
+                            histories.setdefault(cid, []).append(
+                                {"role": "model", "parts": [text]}
                             )
-                        histories.setdefault(cid, []).append(
-                            {"role": "model", "parts": [text]}
-                        )
-                        keyboard = _webapp_keyboard(cid, ulang)
-                        await bot.send_message(
-                            chat_id=cid,
-                            text=sanitize_bot_reply(text),
-                            reply_markup=keyboard,
-                        )
-                        pending_morning[cid] = {
-                            "task": "",
-                            "text": text,
-                            "awaiting_reminder": False,
-                        }
-                        asyncio.create_task(
-                            _check_and_send_milestone(bot, cid, profile, model_chain)
-                        )
-                    except Exception as e:
-                        log.warning("Morning message failed for %s: %s", cid, e)
-                        profile["last_morning_sent_date"] = ""
-                        db_store.update_profile(
-                            cid,
-                            {"last_morning_sent_date": ""},
-                        )
+                            keyboard = _webapp_keyboard(cid, ulang)
+                            await bot.send_message(
+                                chat_id=cid,
+                                text=sanitize_bot_reply(text),
+                                reply_markup=keyboard,
+                            )
+                            pending_morning[cid] = {
+                                "task": "",
+                                "text": text,
+                                "awaiting_reminder": False,
+                            }
+                            asyncio.create_task(
+                                _check_and_send_milestone(
+                                    bot, cid, profile, model_chain
+                                )
+                            )
+                        except Exception as e:
+                            log.warning(
+                                "Morning message failed for %s: %s", cid, e
+                            )
+                            db_store.update_profile(
+                                cid,
+                                {
+                                    "last_morning_sent_date": "",
+                                    "last_daily_sent_date": "",
+                                },
+                            )
+                            profile["last_morning_sent_date"] = ""
+                            profile["last_daily_sent_date"] = ""
+                            user_profiles[key] = profile
+
+                if _time_in_window(evening_time, now_hm):
+                    claimed = db_store.claim_send_slot(
+                        cid, "last_evening_sent_date", today
+                    )
+                    if claimed:
+                        profile["last_evening_sent_date"] = today
                         user_profiles[key] = profile
 
-                if _time_in_window(evening_time, now_hm) and profile.get("last_evening_sent_date") != today:
-
-                    # SAVE FLAG FIRST — before any async operation
-                    profile["last_evening_sent_date"] = today
-                    user_profiles[key] = profile
-                    db_store.update_profile(cid, {"last_evening_sent_date": today})
-
-                    try:
-                        pending_evening[cid] = {"date": today, "replied": False}
-                        await _restore_history_from_db(cid, "evening message")
-                        async with typing_while(bot, cid):
-                            evening_text = await _evening_message_text(
-                                cid, profile, model_chain
+                        try:
+                            pending_evening[cid] = {
+                                "date": today,
+                                "replied": False,
+                            }
+                            await _restore_history_from_db(cid, "evening message")
+                            async with typing_while(bot, cid):
+                                evening_text = await _evening_message_text(
+                                    cid, profile, model_chain
+                                )
+                            keyboard = _webapp_keyboard(cid, ulang)
+                            await bot.send_message(
+                                chat_id=cid,
+                                text=sanitize_bot_reply(evening_text),
+                                reply_markup=keyboard,
                             )
-                        keyboard = _webapp_keyboard(cid, ulang)
-                        await bot.send_message(
-                            chat_id=cid,
-                            text=sanitize_bot_reply(evening_text),
-                            reply_markup=keyboard,
-                        )
-                    except Exception as e:
-                        log.warning("Evening message failed for %s: %s", cid, e)
-                        # Reset flag if send failed
-                        profile["last_evening_sent_date"] = ""
-                        db_store.update_profile(cid, {"last_evening_sent_date": ""})
-                        user_profiles[key] = profile
+                        except Exception as e:
+                            log.warning(
+                                "Evening message failed for %s: %s", cid, e
+                            )
+                            db_store.update_profile(
+                                cid, {"last_evening_sent_date": ""}
+                            )
+                            profile["last_evening_sent_date"] = ""
+                            user_profiles[key] = profile
 
                 cycle_start_raw = str(profile.get("cycle_start_date") or "").strip()
                 if cycle_start_raw:
@@ -3962,7 +4014,7 @@ async def _bootstrap_bot() -> None:
                                     )
 
                         if is_week_start and _time_in_window(
-                            evening_time, now_hm, window_minutes=10
+                            morning_time, now_hm, window_minutes=10
                         ):
                             new_week_sent_key = (
                                 f"new_week_sent_day_{days_since_start}"
@@ -4030,12 +4082,11 @@ async def _bootstrap_bot() -> None:
             if minutes_idle < 120:
                 continue
             try:
+                lang = str(st.get("lang") or st.get("language_code") or "en")
                 name = str(st.get("name") or "").strip()
-                greeting = f"{name}, ты там?" if name else "Ты там?"
-                await bot.send_message(
-                    chat_id=cid,
-                    text=f"{greeting} Осталось буквально пара вопросов 💚",
-                )
+                reminder = ob.s("onboarding_reminder", lang)
+                text = f"{name}, {reminder}" if name else reminder.capitalize()
+                await bot.send_message(chat_id=cid, text=text)
                 st["reminder_sent"] = True
             except Exception as e:
                 log.warning("onboarding_reminder failed cid=%s: %s", cid, e)
