@@ -20,10 +20,10 @@ from claude_client import generate as claude_generate
 from prompts import (
     CHANGE_WEEKLY_GOAL_SYSTEM,
     GOAL_DIALOG_SYSTEM,
-    GOAL_POLISH_PROMPT,
     NAME_EXTRACT_PROMPT,
     VISION_DIALOG_SYSTEM,
     WEEKLY_TACTICS_DIALOG_SYSTEM,
+    goal_polish_prompt_template,
 )
 from summaries import save_onboarding_summary
 
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "12week-change-goal-v1"
+BOT_BUILD = "profile-times-fix-v2"
 
 OB_RETURNING = 0
 OB_NAME = 1
@@ -89,14 +89,11 @@ OB_ASK_EVENING_TIME = OB_EVENING_TIME
 
 GREETING_NEW_RU = "Привет! 👋 Меня зовут Спейс. Как тебя зовут?"
 GREETING_NEW_EN = "Hey! 👋 I'm Space. What's your name?"
-GREETING_NEW = GREETING_NEW_EN  # default English
+GREETING_NEW = GREETING_NEW_EN
 
 
 def get_greeting_new(lang: str = "en") -> str:
-    lc = str(lang or "en").lower()
-    if lc.startswith("ru"):
-        return GREETING_NEW_RU
-    return GREETING_NEW_EN
+    return s("greeting", lang)
 
 
 def _is_ru(lang: str) -> bool:
@@ -116,17 +113,150 @@ def _ob_lang(st: dict | None = None, profile: dict | None = None) -> str:
 
 
 def _friend_word(lang: str) -> str:
-    return "подруга" if _is_ru(lang) else "friend"
+    return s("friend_default", lang)
+
+
+def _goal_type_label(goal_type: str, lang: str) -> str:
+    if _is_ru(lang):
+        return goal_type
+    if goal_type == GOAL_TYPE_12W:
+        return "12-week goal"
+    return "weekly goal"
+
+
+def _confirmation_text(goal: str, lang: str = "en") -> str:
+    g = (goal or "").strip()
+    return f"{s('wrote_down', lang)} {g}. {s('right', lang)}"
+
+
+def _weekly_confirmation_text(goal: str, lang: str = "en") -> str:
+    g = (goal or "").strip()
+    return f"{s('wrote_down', lang)} {g}. {s('right', lang)}"
+
+
+_EN_SYSTEM_PREFIX = (
+    "YOU MUST RESPOND IN ENGLISH ONLY. THIS IS NON-NEGOTIABLE. "
+    "DO NOT USE RUSSIAN UNDER ANY CIRCUMSTANCES.\n\n"
+)
+_EN_USER_OVERRIDE = (
+    "[SYSTEM OVERRIDE: Respond in English only. Never use Russian.]\n\n"
+)
+
+
+def _system_with_lang(system: str, lang: str) -> str:
+    lc = str(lang or "en").lower()
+    if lc.startswith("ru"):
+        return "IMPORTANT: User speaks Russian. Respond in Russian only.\n\n" + system
+    return _EN_SYSTEM_PREFIX + system
+
+
+def _user_content_with_lang(content: str, lang: str) -> str:
+    lc = str(lang or "en").lower()
+    if lc.startswith("ru"):
+        return content
+    return _EN_USER_OVERRIDE + content
+
+
+def _messages_with_lang(messages: list[dict], lang: str) -> list[dict]:
+    """Prepend EN override to the last user message in a Claude turn list."""
+    lc = str(lang or "en").lower()
+    if lc.startswith("ru"):
+        return messages
+    out = [dict(m) for m in messages]
+    for i in range(len(out) - 1, -1, -1):
+        if out[i].get("role") == "user" and out[i].get("content"):
+            out[i] = {
+                **out[i],
+                "content": _EN_USER_OVERRIDE + str(out[i]["content"]),
+            }
+            break
+    return out
 
 
 def _claude_lang_suffix(lang: str) -> str:
+    """Deprecated: use _system_with_lang."""
     if _is_ru(lang):
         return "\n\nIMPORTANT: User speaks Russian. Respond in Russian only."
     return ""
 
 
-_OB_RU: dict[str, str] = {
+STRINGS: dict[str, dict[str, str]] = {
+    "ru": {
+    "greeting": GREETING_NEW_RU,
     "greeting_new": GREETING_NEW_RU,
+    "nice_to_meet": "приятно познакомиться 💙",
+    "privacy": (
+        "Кстати — всё что ты пишешь здесь остаётся между нами. "
+        "Твои цели и наши разговоры не видит никто другой. 🔒"
+    ),
+    "dream_intro": (
+        "Прежде чем ставить цели — давай помечтаем.\n\n"
+        "Представь: прошло 3 месяца, и всё получилось именно так как ты хотела. "
+        "Как выглядит твой день? Что изменилось в твоей жизни?"
+    ),
+    "wrote_down": "Записала ✨",
+    "right": "Верно?",
+    "great": "Отлично 🎯",
+    "got_it": "Понятно 💙",
+    "okay": "Хорошо 💙",
+    "lets_go": "Погнали 💙",
+    "got_everything": "Всё запомнила ✨",
+    "morning_at": "Буду писать утром в",
+    "evening_at": "и вечером в",
+    "goal_12weeks": "Цель на 12 недель:",
+    "first_week": "Первая неделя:",
+    "writing_down": "Записываю:",
+    "correct": "Верно?",
+    "now_first_week": "Теперь первая неделя.",
+    "what_week": "Что хочешь сделать на этой неделе?",
+    "morning_question": (
+        "Когда тебе удобнее всего побыть наедине с собой — без детей, без работы, без суеты? 🌅\n\n"
+        "В это время я буду писать тебе чтобы сосредоточиться на твоей цели. "
+        "Лучше выбирать утро или первую половину дня."
+    ),
+    "evening_question": (
+        "И ещё — в какое время вечером мне спрашивать как прошёл день? 🌙"
+    ),
+    "open_miniapp": "Смотри как выглядит твой прогресс 👇",
+    "onboarding_done_btn": "✦ Открыть SpiceSpace",
+    "reminder_question": (
+        "Напомнить тебе про задачу днём? Напиши время — например, 14:00. "
+        "Или «нет» если не нужно."
+    ),
+    "reminder_set": "Напомню в",
+    "invalid_time": "Напиши время в формате ЧЧ:ММ — например, 14:00. Или «нет».",
+    "onboarding_reminder": "ты там? Осталось буквально пара вопросов 💙",
+    "week_locked": (
+        "Одна цель на 12 недель — это правило, не рекомендация. "
+        "Именно один фокус даёт результат."
+    ),
+    "confirm_12w": "Отлично 🎯 Цель на 12 недель зафиксирована.",
+    "dialog_user": "Пользователь",
+    "dialog_space": "Спейс",
+    "dialog_start": "Начало диалога",
+    "goal_proposed": "Получается твоя цель: {goal}. Так?",
+    "goal_detail_fallback": (
+        "Расскажи подробнее — что именно хочешь изменить за эти 12 недель?"
+    ),
+    "vision_detail_fallback": (
+        "Расскажи подробнее — что в этом дне для тебя самое важное?"
+    ),
+    "vision_ready": (
+        "Слышу тебя — картина уже вырисовывается 💚 "
+        "Окей, из всего этого — что самое важное реализовать за эти 12 недель?"
+    ),
+    "weekly_saved_short": "Записала — звучит конкретно.",
+    "weekly_ask_sentence": (
+        "Что именно хочешь сделать на этой неделе — одним предложением?"
+    ),
+    "name_extract_system": "Верни только имя, одно слово или имя целиком.",
+    "polish_goal_system": "Верни только отшлифованную цель, без кавычек и пояснений.",
+    "not_specified": "не указана",
+    "history_onboarding": (
+        "[SpiceSpace] Онбординг: {name}, цель 12 нед — {main}, "
+        "неделя 1 — {weekly}, утро {mt}, вечер {et}."
+    ),
+    "friend_default": "подруга",
     "greeting_returning": (
         "Привет, {name} 🙂 Ты уже со мной.\n\n"
         "Хочешь обновить профиль или просто поговорить?"
@@ -171,9 +301,9 @@ _OB_RU: dict[str, str] = {
         "Не совсем поняла. Напиши вечернее время как 21:00 или «в 9 вечера»."
     ),
     "change_weekly_opening": (
-        "Окей, давай переформулируем эту неделю.\n"
-        "Цель на 12 недель у нас: {main}\n"
-        "Что хочешь сделать на этой неделе чтобы двигаться к ней?"
+        "Окей, давай поменяем цель на эту неделю. "
+        "Текущая цель на 12 недель: {main_goal}\n\n"
+        "Что хочешь сделать на этой неделе вместо этого?"
     ),
     "change_12w_choice": (
         "Хочешь начать новый 12-недельный цикл с новой целью — "
@@ -213,10 +343,77 @@ _OB_RU: dict[str, str] = {
         "Контекст диалога сброшен. Можем начать с чистого листа. "
         "Чтобы пройти знакомство снова — /start."
     ),
-}
-
-_OB: dict[str, str] = {
+    },
+    "en": {
+    "greeting": GREETING_NEW_EN,
     "greeting_new": GREETING_NEW_EN,
+    "nice_to_meet": "nice to meet you 💙",
+    "privacy": (
+        "By the way — everything you write here stays between us. "
+        "Your goals and our conversations are visible only to you 🔒"
+    ),
+    "dream_intro": (
+        "Before we set goals — let's dream a little.\n\n"
+        "Imagine: 3 months have passed and everything worked out exactly as you wanted. "
+        "What does your day look like? What changed in your life?"
+    ),
+    "wrote_down": "Got it ✨",
+    "right": "Right?",
+    "great": "Great 🎯",
+    "got_it": "Got it 💙",
+    "okay": "Okay 💙",
+    "lets_go": "Let's go 💙",
+    "got_everything": "Got everything ✨",
+    "morning_at": "I'll message you mornings at",
+    "evening_at": "and evenings at",
+    "goal_12weeks": "12-week goal:",
+    "first_week": "First week:",
+    "writing_down": "Writing down:",
+    "correct": "Right?",
+    "now_first_week": "Now let's plan your first week.",
+    "what_week": "What do you want to accomplish this week?",
+    "morning_question": (
+        "When is the best time for you to focus on yourself — no kids, no work, no chaos? 🌅\n\n"
+        "This is when I'll message you to focus on your goal. "
+        "Morning or first half of the day works best."
+    ),
+    "evening_question": (
+        "And what time in the evening should I check in on how your day went? 🌙"
+    ),
+    "open_miniapp": "See how your progress looks 👇",
+    "onboarding_done_btn": "✦ Open SpiceSpace",
+    "reminder_question": (
+        "Want me to remind you about your task during the day? Write a time — "
+        "for example, 2:00 PM. Or 'no' if you don't need it."
+    ),
+    "reminder_set": "I'll remind you at",
+    "invalid_time": "Write the time in HH:MM format — for example, 14:00. Or 'no'.",
+    "onboarding_reminder": "you there? Just a couple more questions 💙",
+    "week_locked": (
+        "One goal for 12 weeks — that's the rule, not a suggestion. "
+        "One focus is what gets results."
+    ),
+    "confirm_12w": "Great 🎯 12-week goal is set.",
+    "dialog_user": "User",
+    "dialog_space": "Space",
+    "dialog_start": "Dialog start",
+    "goal_proposed": "So your goal is: {goal}. Right?",
+    "goal_detail_fallback": "Tell me more — what do you want to change in these 12 weeks?",
+    "vision_detail_fallback": "Tell me more — what matters most in that day for you?",
+    "vision_ready": (
+        "I hear you — the picture is taking shape 💚 "
+        "What matters most to make real in these 12 weeks?"
+    ),
+    "weekly_saved_short": "Saved — sounds specific.",
+    "weekly_ask_sentence": "What do you want to do this week — in one sentence?",
+    "name_extract_system": "Return only the name, one word or full name.",
+    "polish_goal_system": "Return only the polished goal, no quotes or explanations.",
+    "not_specified": "not specified",
+    "history_onboarding": (
+        "[SpiceSpace] Onboarding: {name}, 12-week goal — {main}, "
+        "week 1 — {weekly}, morning {mt}, evening {et}."
+    ),
+    "friend_default": "friend",
     "greeting_returning": (
         "Hey, {name} 🙂 You're already with me.\n\n"
         "Want to update your profile or just chat?"
@@ -262,9 +459,8 @@ _OB: dict[str, str] = {
         "I didn't quite get that. Try 21:00 or «9 pm» for evening time."
     ),
     "change_weekly_opening": (
-        "Okay, let's reframe this week.\n"
-        "Our 12-week goal: {main}\n"
-        "What do you want to do this week to move toward it?"
+        "Okay, let's change this week's goal. Your 12-week goal is: {main_goal}\n\n"
+        "What do you want to do this week instead?"
     ),
     "change_12w_choice": (
         "Do you want to start a new 12-week cycle with a new goal — "
@@ -304,11 +500,23 @@ _OB: dict[str, str] = {
         "Chat context cleared. We can start fresh. "
         "To go through setup again — /start."
     ),
+    },
 }
 
 
+def s(key: str, lang: str = "en", **kwargs: object) -> str:
+    """Get string in correct language."""
+    lang_key = "ru" if _is_ru(lang) else "en"
+    text = STRINGS[lang_key].get(key) or STRINGS["en"].get(key) or key
+    if kwargs:
+        return str(text).format(**kwargs)
+    return str(text)
+
+
 def open_spicespace_button_label(lang: str = "en", *, prefix: str = "") -> str:
-    label = ob_text("open_spicespace_btn", lang)
+    if prefix in ("✦", "✦ "):
+        return s("onboarding_done_btn", lang)
+    label = s("open_spicespace_btn", lang)
     return f"{prefix}{label}" if prefix else label
 
 
@@ -321,11 +529,7 @@ def mini_app_webapp_url(base: str, cid: int, lang: str = "en") -> str:
 
 
 def ob_text(key: str, lang: str = "en", **kwargs: object) -> str:
-    pack = _OB_RU if _is_ru(lang) else _OB
-    template = pack.get(key) or _OB.get(key, key)
-    if kwargs:
-        return template.format(**kwargs)
-    return template
+    return s(key, lang, **kwargs)
 
 
 def get_greeting(lang: str = "en") -> str:
@@ -437,7 +641,7 @@ def change_weekly_opening(profile: dict, lang: str = "en") -> str:
     main = str(
         profile.get("main_goal") or profile.get("final_goal") or ob_text("default_goal", lang)
     ).strip()
-    return ob_text("change_weekly_opening", lang, main=main)
+    return ob_text("change_weekly_opening", lang, main_goal=main)
 
 
 def change_12w_choice_prompt(lang: str = "en") -> str:
@@ -512,11 +716,11 @@ def _wants_adjust_reply(raw: str) -> bool:
 
 def greeting_after_name(name: str, lang: str = "en") -> str:
     n = (name or "").strip() or _friend_word(lang)
-    return ob_text("greeting_after_name", lang, name=n)
+    return f"{n}, {s('nice_to_meet', lang)}"
 
 
 def vision_question_message(lang: str = "en") -> str:
-    return ob_text("vision_question", lang)
+    return s("dream_intro", lang)
 
 
 def message_vision(name: str, lang: str = "en") -> str:
@@ -632,75 +836,72 @@ def _collect_vision_from_turns(turns: list[dict]) -> str:
     return "\n\n".join(parts)[:4000]
 
 
-def _fallback_vision_reply(turns: list[dict], lang: str = "ru") -> dict:
+def _fallback_vision_reply(turns: list[dict], lang: str = "en") -> dict:
     user_texts = [t["content"] for t in turns if t.get("role") == "user"]
     n = len(user_texts)
     if n >= 2:
-        if _is_ru(lang):
-            msg = (
-                "Слышу тебя — картина уже вырисовывается 💚 "
-                "Окей, из всего этого — что самое важное реализовать за эти 12 недель?"
-            )
-        else:
-            msg = (
-                "I hear you — the picture is taking shape 💚 "
-                "What matters most to make real in these 12 weeks?"
-            )
-        return {"message": msg, "ready_for_goal": True}
-    detail = (
-        "Tell me more — what matters most in that day for you?"
-        if not _is_ru(lang)
-        else "Расскажи подробнее — что в этом дне для тебя самое важное?"
-    )
-    return {"message": detail, "ready_for_goal": False}
+        return {"message": s("vision_ready", lang), "ready_for_goal": True}
+    return {
+        "message": s("vision_detail_fallback", lang),
+        "ready_for_goal": False,
+    }
 
 
-def _format_dialog_history(turns: list[dict], *, exclude_last: bool = False) -> str:
+def _format_dialog_history(
+    turns: list[dict], *, exclude_last: bool = False, lang: str = "en"
+) -> str:
     use_turns = turns[:-1] if exclude_last and turns else turns
     lines: list[str] = []
+    user_lbl = s("dialog_user", lang)
+    space_lbl = s("dialog_space", lang)
     for t in use_turns:
         if t.get("role") not in ("user", "assistant"):
             continue
         content = str(t.get("content", "")).strip()
         if not content:
             continue
-        label = "Пользователь" if t.get("role") == "user" else "Спейс"
+        label = user_lbl if t.get("role") == "user" else space_lbl
         lines.append(f"{label}: {content}")
-    return "\n".join(lines)[:4000] if lines else "Начало диалога"
+    return "\n".join(lines)[:4000] if lines else s("dialog_start", lang)
 
 
-def _fallback_goal_reply(turns: list[dict], lang: str = "ru") -> dict:
+def _fallback_goal_reply(turns: list[dict], lang: str = "en") -> dict:
     user_texts = [t["content"] for t in turns if t["role"] == "user"]
     last = (user_texts[-1] if user_texts else "").strip()
     if len(user_texts) >= 3 and len(last) >= 20:
-        if _is_ru(lang):
-            msg = f"Получается твоя цель: {last}. Так?"
-        else:
-            msg = f"So your goal is: {last}. Right?"
-        return {"message": msg, "ready": False, "goal": ""}
-    msg = (
-        ob_text("goal_fallback", lang)
-        if not _is_ru(lang)
-        else "Расскажи подробнее — что именно хочешь изменить за эти 12 недель?"
-    )
-    return {"message": msg, "ready": False, "goal": ""}
+        return {
+            "message": s("goal_proposed", lang, goal=last),
+            "ready": False,
+            "goal": "",
+        }
+    return {
+        "message": s("goal_detail_fallback", lang),
+        "ready": False,
+        "goal": "",
+    }
 
 
-async def _extract_name(user_message: str, model_names: list[str]) -> str:
+async def _extract_name(
+    user_message: str,
+    model_names: list[str],
+    *,
+    lang: str = "en",
+) -> str:
     raw = (user_message or "").strip()
     if not raw:
-        return "подруга"
+        return _friend_word(lang)
     prompt = NAME_EXTRACT_PROMPT.format(
         user_message=raw.replace('"', "'")[:500],
     )
+    name_system = s("name_extract_system", lang)
 
     def call() -> str:
         for mid in model_names:
             try:
                 text = claude_generate(
                     mid,
-                    [{"role": "user", "content": prompt}],
-                    system="Верни только имя, одно слово или имя целиком.",
+                    [{"role": "user", "content": _user_content_with_lang(prompt, lang)}],
+                    system=_system_with_lang(name_system, lang),
                     max_tokens=60,
                     cache_core=False,
                 ).strip()
@@ -713,7 +914,7 @@ async def _extract_name(user_message: str, model_names: list[str]) -> str:
         parts = [p for p in raw.split() if p.strip()]
         if parts:
             return parts[-1][:120]
-        return "подруга"
+        return _friend_word(lang)
 
     return await asyncio.to_thread(call)
 
@@ -738,8 +939,8 @@ async def _claude_vision_dialog(
             try:
                 text = claude_generate(
                     mid,
-                    messages,
-                    system=VISION_DIALOG_SYSTEM + _claude_lang_suffix(lang),
+                    _messages_with_lang(messages, lang),
+                    system=_system_with_lang(VISION_DIALOG_SYSTEM, lang),
                     max_tokens=400,
                     cache_core=False,
                 ).strip()
@@ -771,14 +972,16 @@ async def _claude_change_weekly_dialog(
         messages.append({"role": "user", "content": extra_user_hint})
 
     mg = main_goal or ("не указана" if _is_ru(lang) else "not specified")
-    system = CHANGE_WEEKLY_GOAL_SYSTEM.format(main_goal=mg) + _claude_lang_suffix(lang)
+    system = _system_with_lang(
+        CHANGE_WEEKLY_GOAL_SYSTEM.format(main_goal=mg), lang
+    )
 
     def call() -> dict:
         for mid in model_names:
             try:
                 text = claude_generate(
                     mid,
-                    messages,
+                    _messages_with_lang(messages, lang),
                     system=system,
                     max_tokens=400,
                     cache_core=False,
@@ -839,13 +1042,21 @@ async def _polish_goal(
     raw_goal: str,
     goal_type: str,
     model_names: list[str],
+    *,
+    lang: str = "en",
 ) -> str:
     raw = (raw_goal or "").strip()
     if not raw:
         return ""
-    prompt = GOAL_POLISH_PROMPT.format(
+    prompt = goal_polish_prompt_template(lang).format(
         raw_goal=raw.replace('"', "'")[:1500],
-        goal_type=goal_type,
+        goal_type=_goal_type_label(goal_type, lang),
+    )
+
+    polish_system = (
+        "Return only the polished goal text, no quotes or explanations."
+        if not _is_ru(lang)
+        else "Верни только отшлифованную цель, без кавычек и пояснений."
     )
 
     def call() -> str:
@@ -853,8 +1064,8 @@ async def _polish_goal(
             try:
                 text = claude_generate(
                     mid,
-                    [{"role": "user", "content": prompt}],
-                    system="Верни только отшлифованную цель, без кавычек и пояснений.",
+                    [{"role": "user", "content": _user_content_with_lang(prompt, lang)}],
+                    system=_system_with_lang(polish_system, lang),
                     max_tokens=220,
                     cache_core=False,
                 ).strip()
@@ -879,7 +1090,9 @@ async def _propose_goal_confirm(
 ) -> None:
     bot = msg.get_bot()
     async with typing_while(bot, msg.chat_id):
-        polished = await _polish_goal(raw, goal_type, model_names)
+        polished = await _polish_goal(
+            raw, goal_type, model_names, lang=_ob_lang(st)
+        )
     if not polished.strip():
         polished = (raw or "").strip()[:2000]
     st["goal_confirm"] = {
@@ -890,9 +1103,12 @@ async def _propose_goal_confirm(
         "goal_type": goal_type,
     }
     lang = _ob_lang(st)
-    await msg.reply_text(
-        ob_text("goal_saved_confirm", lang, polished=polished.strip())
-    )
+    polished_s = polished.strip()
+    if goal_type == GOAL_TYPE_WEEKLY:
+        confirm_msg = _weekly_confirmation_text(polished_s, lang)
+    else:
+        confirm_msg = _confirmation_text(polished_s, lang)
+    await msg.reply_text(confirm_msg)
 
 
 async def _finish_change_weekly(
@@ -1009,21 +1225,22 @@ async def _claude_goal_dialog(
     if extra_user_hint:
         messages.append({"role": "user", "content": extra_user_hint})
 
-    dialog_history = _format_dialog_history(goal_turns, exclude_last=True)
-    vision_label = (vision or "не указана").strip()[:2000]
-    if not _is_ru(lang):
-        vision_label = (vision or "not specified").strip()[:2000]
-    system = GOAL_DIALOG_SYSTEM.format(
-        vision=vision_label,
-        dialog_history=dialog_history,
-    ) + _claude_lang_suffix(lang)
+    dialog_history = _format_dialog_history(goal_turns, exclude_last=True, lang=lang)
+    vision_label = (vision or s("not_specified", lang)).strip()[:2000]
+    system = _system_with_lang(
+        GOAL_DIALOG_SYSTEM.format(
+            vision=vision_label,
+            dialog_history=dialog_history,
+        ),
+        lang,
+    )
 
     def call() -> dict:
         for mid in model_names:
             try:
                 text = claude_generate(
                     mid,
-                    messages,
+                    _messages_with_lang(messages, lang),
                     system=system,
                     max_tokens=400,
                     cache_core=False,
@@ -1108,22 +1325,25 @@ async def _claude_weekly_tactics_dialog(
     if extra_user_hint:
         messages.append({"role": "user", "content": extra_user_hint})
 
-    dialog_history = _format_dialog_history(weekly_turns, exclude_last=True)
-    if dialog_history in ("Начало диалога", "Dialog start"):
+    dialog_history = _format_dialog_history(weekly_turns, exclude_last=True, lang=lang)
+    if dialog_history == s("dialog_start", lang):
         dialog_history = ""
-    mg = (main_goal or ("не указана" if _is_ru(lang) else "not specified")).strip()[:2000]
-    system = WEEKLY_TACTICS_DIALOG_SYSTEM.format(
-        main_goal=mg,
-        user_message=(user_message or "").strip()[:2000] or "",
-        dialog_history=dialog_history,
-    ) + _claude_lang_suffix(lang)
+    mg = (main_goal or s("not_specified", lang)).strip()[:2000]
+    system = _system_with_lang(
+        WEEKLY_TACTICS_DIALOG_SYSTEM.format(
+            main_goal=mg,
+            user_message=(user_message or "").strip()[:2000] or "",
+            dialog_history=dialog_history,
+        ),
+        lang,
+    )
 
     def call() -> dict:
         for mid in model_names:
             try:
                 text = claude_generate(
                     mid,
-                    messages,
+                    _messages_with_lang(messages, lang),
                     system=system,
                     max_tokens=400,
                     cache_core=False,
@@ -1410,9 +1630,9 @@ def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
         "daily_time": morning,
         "timezone": str(st.get("timezone") or _default_timezone()),
         "daily_enabled": True,
-        "last_morning_sent_date": "",
-        "last_evening_sent_date": "",
-        "last_daily_sent_date": "",
+        "last_morning_sent_date": None,
+        "last_evening_sent_date": None,
+        "last_daily_sent_date": None,
         "has_kids": st.get("has_kids"),
         "raw_goal": str(st.get("main_goal", "")).strip()[:2000],
         "final_goal": str(st.get("main_goal", "")).strip()[:2000],
@@ -1510,13 +1730,21 @@ async def _complete_onboarding(
     et = profile.get("evening_time", "21:00")
     main_goal = str(profile.get("main_goal", ""))
     weekly_goal = str(profile.get("weekly_goal", ""))
+    lang = _ob_lang(st, profile)
 
     histories[cid] = [
         {
             "role": "user",
             "parts": [
-                f"[SpiceSpace] Онбординг: {name}, цель 12 нед — {main_goal}, "
-                f"неделя 1 — {weekly_goal}, утро {mt}, вечер {et}."
+                s(
+                    "history_onboarding",
+                    lang,
+                    name=name,
+                    main=main_goal,
+                    weekly=weekly_goal,
+                    mt=mt,
+                    et=et,
+                )
             ],
         }
     ]
@@ -1526,7 +1754,6 @@ async def _complete_onboarding(
     if callable(fn):
         progress_kb = fn()
 
-    lang = _ob_lang(st, profile)
     await msg.reply_text(
         ob_text(
             "onboarding_complete",
@@ -1556,11 +1783,21 @@ async def _complete_onboarding(
 ЗАПРЕЩЕНО: "Удачи!", "Увидимся", прощания, markdown."""
 
     def get_first_msg() -> str:
+        first_system = _system_with_lang(
+            "You are Space. Write one short Telegram message after onboarding.",
+            lang,
+        )
         for mid in model_names:
             try:
                 return claude_generate(
                     mid,
-                    [{"role": "user", "content": first_msg_prompt}],
+                    [
+                        {
+                            "role": "user",
+                            "content": _user_content_with_lang(first_msg_prompt, lang),
+                        }
+                    ],
+                    system=first_system,
                     max_tokens=150,
                     cache_core=False,
                 ).strip()
@@ -1585,7 +1822,7 @@ async def _complete_onboarding(
     )
     await context.bot.send_message(
         chat_id=cid,
-        text=ob_text("progress_open", lang),
+        text=s("open_miniapp", lang),
         reply_markup=keyboard,
     )
     await asyncio.sleep(1)
@@ -1768,7 +2005,9 @@ async def handle_onboarding_turn(
 
     if step == OB_NAME:
         async with typing_while(context.bot, cid):
-            name = (await _extract_name(raw, model_names)).strip()[:120] or _friend_word(lang)
+            name = (
+                await _extract_name(raw, model_names, lang=lang)
+            ).strip()[:120] or _friend_word(lang)
         st["name"] = name
         st["step"] = OB_VISION_DIALOG
         st["vision_turns"] = []

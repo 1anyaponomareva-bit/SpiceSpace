@@ -2802,16 +2802,58 @@ async def _try_handle_natural_reminder(
     return True
 
 
-def _time_in_window(target_hm: str, now_hm: str, window_minutes: int = 5) -> bool:
+def _normalize_profile_hm(raw: object, default: str) -> str:
+    parsed = _parse_daily_time(str(raw or "").strip())
+    return parsed or default
+
+
+def _time_in_window(target_hm: str, now_hm: str, window_minutes: int = 30) -> bool:
     """Returns True if now_hm is within window_minutes after target_hm."""
     try:
-        th, tm = map(int, target_hm.split(":"))
+        target = _normalize_profile_hm(target_hm, "00:00")
+        th, tm = map(int, target.split(":"))
         nh, nm = map(int, now_hm.split(":"))
         target_total = th * 60 + tm
         now_total = nh * 60 + nm
         return 0 <= (now_total - target_total) < window_minutes
     except Exception:
         return False
+
+
+def _daily_slot_sent_today(profile: dict, field: str, today: str) -> bool:
+    return str(profile.get(field) or "").strip() == today
+
+
+def _time_ready_for_daily_send(
+    target_hm: str,
+    now_hm: str,
+    *,
+    already_sent_today: bool,
+    window_minutes: int = 30,
+    catchup_minutes: int = 180,
+) -> bool:
+    """In the send window, or catch up within catchup_minutes if not sent today."""
+    if already_sent_today:
+        return False
+    if _time_in_window(target_hm, now_hm, window_minutes=window_minutes):
+        return True
+    try:
+        target = _normalize_profile_hm(target_hm, "00:00")
+        th, tm = map(int, target.split(":"))
+        nh, nm = map(int, now_hm.split(":"))
+        delta = (nh * 60 + nm) - (th * 60 + tm)
+        return 0 <= delta < catchup_minutes
+    except Exception:
+        return False
+
+
+def _profile_daily_enabled(profile: dict) -> bool:
+    v = profile.get("daily_enabled", True)
+    if v is False or v == 0:
+        return False
+    if isinstance(v, str) and v.strip().lower() in ("false", "0", "no", "off"):
+        return False
+    return True
 
 
 def _profile_has_daily_time(profile: dict | None) -> bool:
@@ -2952,14 +2994,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     subscribers.add(cid)
     tid = str(cid)
-    prof = db_store.get_profile(cid) or user_profiles.get(tid)
-    if isinstance(prof, dict):
-        prof["language_code"] = lang
-        db_store.update_profile(cid, {"language_code": lang})
-        user_profiles[tid] = prof
-    else:
-        prof = db_store.update_profile(cid, {"language_code": lang})
-        user_profiles[tid] = prof
+    prof = db_store.update_profile(
+        cid,
+        {"language_code": lang, "daily_enabled": True},
+    )
+    user_profiles[tid] = prof
+    db_store.save_subscriber(cid, True)
 
     if isinstance(prof, dict) and prof.get("name"):
         ob.start_returning_choice(onboarding, cid, lang)
@@ -3741,11 +3781,12 @@ def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> di
     p.setdefault("missed_tasks", [])
     p.setdefault("current_week", 1)
     p.setdefault("vision", p.get("vision") or "")
-    mt = p.get("morning_time") or p.get("daily_time")
+    mt = db_store.normalize_time_hhmm(p.get("daily_time") or p.get("morning_time"))
     if mt:
-        p.setdefault("morning_time", mt)
-        p.setdefault("daily_time", mt)
-    p.setdefault("evening_time", p.get("evening_time") or "21:00")
+        p["morning_time"] = mt
+        p["daily_time"] = mt  # Always keep in sync for Mini App + daily_check_job
+    et = db_store.normalize_time_hhmm(p.get("evening_time"))
+    p["evening_time"] = et or "21:00"
 
     tid = telegram_id or str(p.get("telegram_id") or "")
     today = _profile_local_date(p)
@@ -3820,11 +3861,19 @@ async def _bootstrap_bot() -> None:
 
     async def daily_check_job() -> None:
         try:
+            subscribers.update(db_store.load_subscribers())
+            if not subscribers:
+                log.warning("daily_check_job: no subscribers — nobody gets morning/evening")
+            log.info("daily_check_job: subscribers=%s", sorted(subscribers))
             for cid in list(subscribers):
                 key = str(cid)
                 profile = user_profiles.get(key)
                 if not isinstance(profile, dict):
-                    continue
+                    # Not in memory — try loading from Supabase
+                    profile = db_store.get_profile(key)
+                    if not isinstance(profile, dict):
+                        continue
+                    user_profiles[key] = profile
 
                 # Always reload fresh profile from DB to pick up time changes
                 fresh = db_store.get_profile(key)
@@ -3832,7 +3881,7 @@ async def _bootstrap_bot() -> None:
                     profile = fresh
                     user_profiles[key] = fresh
 
-                if not profile.get("daily_enabled", True):
+                if not _profile_daily_enabled(profile):
                     continue
                 tz_name = _profile_timezone_name(profile)
                 try:
@@ -3843,19 +3892,63 @@ async def _bootstrap_bot() -> None:
                 now_hm = now_local.strftime("%H:%M")
                 today = now_local.strftime("%Y-%m-%d")
 
-                morning_time = profile.get("morning_time") or profile.get("daily_time", "09:30")
-                evening_time = profile.get("evening_time") or "21:00"
+                morning_time = _normalize_profile_hm(
+                    profile.get("morning_time") or profile.get("daily_time"),
+                    "09:30",
+                )
+                evening_time = _normalize_profile_hm(
+                    profile.get("evening_time"), "21:00"
+                )
                 ulang = _user_lang(profile)
+                morning_sent = _daily_slot_sent_today(
+                    profile, "last_morning_sent_date", today
+                )
+                evening_sent = _daily_slot_sent_today(
+                    profile, "last_evening_sent_date", today
+                )
+                in_morning = _time_ready_for_daily_send(
+                    morning_time,
+                    now_hm,
+                    already_sent_today=morning_sent,
+                )
+                in_evening = _time_ready_for_daily_send(
+                    evening_time,
+                    now_hm,
+                    already_sent_today=evening_sent,
+                )
 
-                if _time_in_window(morning_time, now_hm):
+                if in_morning:
                     claimed = db_store.claim_send_slot(
                         cid, "last_morning_sent_date", today
                     )
+                    log.info(
+                        "daily_check morning cid=%s now=%s target=%s tz=%s "
+                        "already_sent=%s claimed=%s",
+                        cid,
+                        now_hm,
+                        morning_time,
+                        tz_name,
+                        morning_sent,
+                        claimed,
+                    )
+                    if not claimed and not morning_sent:
+                        log.warning(
+                            "daily_check morning cid=%s: slot blocked in DB "
+                            "(last_morning_sent_date may be stuck on %s)",
+                            cid,
+                            today,
+                        )
                     if claimed:
                         profile["last_morning_sent_date"] = today
                         profile["last_daily_sent_date"] = today
                         user_profiles[key] = profile
-                        db_store.update_profile(cid, {"last_daily_sent_date": today})
+                        db_store.update_profile(
+                            cid,
+                            {
+                                "last_morning_sent_date": today,
+                                "last_daily_sent_date": today,
+                            },
+                        )
 
                         try:
                             await _restore_history_from_db(cid, "morning message")
@@ -3889,18 +3982,35 @@ async def _bootstrap_bot() -> None:
                             db_store.update_profile(
                                 cid,
                                 {
-                                    "last_morning_sent_date": "",
-                                    "last_daily_sent_date": "",
+                                    "last_morning_sent_date": None,
+                                    "last_daily_sent_date": None,
                                 },
                             )
-                            profile["last_morning_sent_date"] = ""
-                            profile["last_daily_sent_date"] = ""
+                            profile["last_morning_sent_date"] = None
+                            profile["last_daily_sent_date"] = None
                             user_profiles[key] = profile
 
-                if _time_in_window(evening_time, now_hm):
+                if in_evening:
                     claimed = db_store.claim_send_slot(
                         cid, "last_evening_sent_date", today
                     )
+                    log.info(
+                        "daily_check evening cid=%s now=%s target=%s tz=%s "
+                        "already_sent=%s claimed=%s",
+                        cid,
+                        now_hm,
+                        evening_time,
+                        tz_name,
+                        evening_sent,
+                        claimed,
+                    )
+                    if not claimed and not evening_sent:
+                        log.warning(
+                            "daily_check evening cid=%s: slot blocked in DB "
+                            "(last_evening_sent_date may be stuck on %s)",
+                            cid,
+                            today,
+                        )
                     if claimed:
                         profile["last_evening_sent_date"] = today
                         user_profiles[key] = profile
@@ -3926,9 +4036,9 @@ async def _bootstrap_bot() -> None:
                                 "Evening message failed for %s: %s", cid, e
                             )
                             db_store.update_profile(
-                                cid, {"last_evening_sent_date": ""}
+                                cid, {"last_evening_sent_date": None}
                             )
-                            profile["last_evening_sent_date"] = ""
+                            profile["last_evening_sent_date"] = None
                             user_profiles[key] = profile
 
                 cycle_start_raw = str(profile.get("cycle_start_date") or "").strip()
@@ -4096,6 +4206,8 @@ async def _bootstrap_bot() -> None:
         IntervalTrigger(minutes=1, timezone=tz),
         id="daily_check",
         replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
     scheduler.add_job(
         task_reminder_job,
@@ -4169,6 +4281,23 @@ async def _lifespan(_app: FastAPI):
 
 # Глобальный ASGI-объект, который ищет Railway / uvicorn: `uvicorn main:app`
 app = FastAPI(title="SpiceSpace Bot API", version="1.0.0", lifespan=_lifespan)
+
+
+@app.middleware("http")
+async def _no_cache_middleware(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+    elif path.startswith("/webapp/") and (
+        path.endswith(".js")
+        or path.endswith(".html")
+        or path.endswith(".css")
+    ):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=sorted(_allowed_origins()),
@@ -4451,21 +4580,26 @@ async def patch_profile_times_endpoint(
     if payload.morning_time is None and payload.evening_time is None:
         raise HTTPException(status_code=400, detail="at least one time is required")
 
-    if payload.morning_time is not None:
-        parsed = _parse_daily_time(payload.morning_time.strip())
-        if not parsed:
-            raise HTTPException(status_code=400, detail="invalid morning_time")
-        profile["morning_time"] = parsed
-        profile["daily_time"] = parsed
+    profile, err = db_store.patch_profile_times(
+        int(tid),
+        morning_time=payload.morning_time.strip() if payload.morning_time else None,
+        evening_time=payload.evening_time.strip() if payload.evening_time else None,
+    )
+    if err == "invalid_morning_time":
+        raise HTTPException(status_code=400, detail="invalid morning_time")
+    if err == "invalid_evening_time":
+        raise HTTPException(status_code=400, detail="invalid evening_time")
+    if err or not isinstance(profile, dict):
+        log.error("api/profile/times save_failed uid=%s err=%s", tid, err)
+        raise HTTPException(status_code=503, detail="save_failed")
 
-    if payload.evening_time is not None:
-        parsed = _parse_daily_time(payload.evening_time.strip())
-        if not parsed:
-            raise HTTPException(status_code=400, detail="invalid evening_time")
-        profile["evening_time"] = parsed
-
-    db_store.upsert_profile(int(tid), profile)
     user_profiles[tid] = profile
+    log.info(
+        "api/profile/times saved uid=%s morning=%s evening=%s",
+        tid,
+        profile.get("morning_time") or profile.get("daily_time"),
+        profile.get("evening_time"),
+    )
     return {"ok": True, "profile": _enrich_profile_for_api(profile, tid)}
 
 

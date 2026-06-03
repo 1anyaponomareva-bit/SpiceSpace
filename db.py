@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,35 @@ _base_url = ""
 _service_key = ""
 _use_supabase = False
 _UNSET = object()
+_supabase_profile_columns: set[str] | None = None
+
+# Fallback when schema introspection fails (no language_code / json blobs).
+_SUPABASE_PROFILE_COLUMNS_FALLBACK = frozenset(
+    {
+        "user_id",
+        "name",
+        "morning_routine",
+        "has_kids",
+        "works",
+        "main_goal",
+        "vision",
+        "daily_time",
+        "evening_time",
+        "timezone",
+        "daily_enabled",
+        "last_daily_sent_date",
+        "last_morning_sent_date",
+        "last_evening_sent_date",
+        "streak",
+        "current_week",
+        "weekly_goal",
+        "weekly_score",
+        "time_per_day",
+        "cycle_start_date",
+        "last_weekly_recap_date",
+        "morning_time",
+    }
+)
 
 
 def init_db() -> bool:
@@ -35,7 +65,142 @@ def init_db() -> bool:
     _service_key = key
     _use_supabase = True
     log.info("Supabase REST подключён")
+    refresh_supabase_profile_columns()
     return True
+
+
+def normalize_time_hhmm(raw: object) -> str | None:
+    """Normalize DB/UI time to HH:MM (handles 09:30:00)."""
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    m = re.match(r"^(\d{1,2}):(\d{2})", s)
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    if h > 23 or mi > 59:
+        return None
+    return f"{h:02d}:{mi:02d}"
+
+
+def sync_profile_times(profile: dict) -> dict:
+    """Keep morning_time and daily_time identical (daily_time is canonical in DB)."""
+    daily = normalize_time_hhmm(profile.get("daily_time"))
+    morning = normalize_time_hhmm(profile.get("morning_time"))
+    canonical = daily or morning or "09:30"
+    profile["daily_time"] = canonical
+    profile["morning_time"] = canonical
+    evening = normalize_time_hhmm(profile.get("evening_time")) or "21:00"
+    profile["evening_time"] = evening
+    return profile
+
+
+def refresh_supabase_profile_columns() -> set[str]:
+    """Load user_profiles column names from Supabase (one sample row)."""
+    global _supabase_profile_columns
+    if not _use_supabase:
+        _supabase_profile_columns = set()
+        return _supabase_profile_columns
+    rows = _request("GET", "user_profiles?select=*&limit=1") or []
+    if rows and isinstance(rows[0], dict):
+        _supabase_profile_columns = set(rows[0].keys())
+        log.info(
+            "Supabase user_profiles columns: %s",
+            ", ".join(sorted(_supabase_profile_columns)),
+        )
+    else:
+        _supabase_profile_columns = set(_SUPABASE_PROFILE_COLUMNS_FALLBACK)
+        log.warning(
+            "Could not introspect user_profiles columns — using fallback set"
+        )
+    return _supabase_profile_columns
+
+
+def _filter_row_for_supabase(row: dict) -> dict:
+    cols = _supabase_profile_columns or refresh_supabase_profile_columns()
+    allowed = cols if cols else _SUPABASE_PROFILE_COLUMNS_FALLBACK
+    out: dict = {}
+    for key, value in row.items():
+        if key not in allowed:
+            continue
+        if isinstance(value, (dict, list)) and key not in allowed:
+            continue
+        out[key] = value
+    return out
+
+
+def _supabase_profile_exists(key: str) -> bool:
+    rows = (
+        _request(
+            "GET",
+            f"user_profiles?user_id=eq.{key}&select=user_id&limit=1",
+        )
+        or []
+    )
+    return bool(rows and isinstance(rows[0], dict))
+
+
+def _write_profile_to_supabase(key: str, row: dict) -> bool:
+    """PATCH existing row or INSERT minimal row; only sends columns present in DB."""
+    patch_body = _filter_row_for_supabase({k: v for k, v in row.items() if k != "user_id"})
+    if not patch_body:
+        return False
+
+    if _supabase_profile_exists(key):
+        result = _request(
+            "PATCH",
+            f"user_profiles?user_id=eq.{key}",
+            json=patch_body,
+            headers={**_headers(), "Prefer": "return=representation"},
+        )
+        if result:
+            return True
+        # Retry without dict/list fields (milestones_shown, cycle_flags, …)
+        scalar_body = {
+            k: v
+            for k, v in patch_body.items()
+            if not isinstance(v, (dict, list))
+        }
+        if scalar_body and scalar_body != patch_body:
+            result = _request(
+                "PATCH",
+                f"user_profiles?user_id=eq.{key}",
+                json=scalar_body,
+                headers={**_headers(), "Prefer": "return=representation"},
+            )
+            if result:
+                return True
+
+    insert_row = dict(patch_body)
+    insert_row["user_id"] = int(key)
+    result = _request(
+        "POST",
+        "user_profiles",
+        json=insert_row,
+        headers={**_headers(), "Prefer": "return=representation"},
+    )
+    if result:
+        return True
+
+    scalar_insert = {
+        k: v for k, v in insert_row.items() if not isinstance(v, (dict, list))
+    }
+    if scalar_insert != insert_row:
+        result = _request(
+            "POST",
+            "user_profiles",
+            json=scalar_insert,
+            headers={**_headers(), "Prefer": "return=representation"},
+        )
+        if result:
+            return True
+
+    log.error(
+        "Supabase profile write failed uid=%s keys=%s",
+        key,
+        sorted(patch_body.keys()),
+    )
+    return False
 
 
 def _headers() -> dict[str, str]:
@@ -109,10 +274,12 @@ def get_profile(user_id: int | str) -> dict | None:
         if rows and isinstance(rows[0], dict):
             row = dict(rows[0])
             row.pop("user_id", None)
-            return _row_to_profile(row)
+            return sync_profile_times(_row_to_profile(row))
     profiles = _load_json(USER_PROFILES_PATH, {})
     p = profiles.get(key) if isinstance(profiles, dict) else None
-    return p if isinstance(p, dict) else None
+    if isinstance(p, dict):
+        return sync_profile_times(p)
+    return None
 
 
 def delete_profile(user_id: int | str) -> None:
@@ -144,10 +311,136 @@ def delete_profile(user_id: int | str) -> None:
 def update_profile(user_id: int | str, fields: dict) -> dict:
     """Merge fields into existing profile and persist."""
     key = str(user_id)
-    profile = dict(get_profile(user_id) or {})
+    profile = sync_profile_times(dict(get_profile(user_id) or {}))
     profile.update(fields)
-    upsert_profile(user_id, profile)
-    return profile
+    sync_profile_times(profile)
+    ok = upsert_profile(user_id, profile)
+    fresh = get_profile(user_id)
+    merged = fresh if isinstance(fresh, dict) else profile
+    if _use_supabase and not ok:
+        log.error("update_profile Supabase write failed uid=%s fields=%s", key, list(fields))
+    return merged
+
+
+def patch_profile_times(
+    user_id: int | str,
+    *,
+    morning_time: str | None = None,
+    evening_time: str | None = None,
+) -> tuple[dict | None, str | None]:
+    """Persist morning/evening times. Returns (profile, error_code)."""
+    key = str(user_id)
+    morning = normalize_time_hhmm(morning_time) if morning_time is not None else None
+    evening = normalize_time_hhmm(evening_time) if evening_time is not None else None
+    if morning_time is not None and not morning:
+        return None, "invalid_morning_time"
+    if evening_time is not None and not evening:
+        return None, "invalid_evening_time"
+    if morning is None and evening is None:
+        return None, "no_times"
+
+    profile = sync_profile_times(dict(get_profile(user_id) or {}))
+    if morning:
+        profile["morning_time"] = morning
+        profile["daily_time"] = morning
+    if evening:
+        profile["evening_time"] = evening
+    sync_profile_times(profile)
+
+    if not _use_supabase:
+        upsert_profile(user_id, profile)
+        return profile, None
+
+    cols = _supabase_profile_columns or refresh_supabase_profile_columns()
+    body: dict[str, str] = {}
+    if morning:
+        body["daily_time"] = morning
+        if "morning_time" in cols:
+            body["morning_time"] = morning
+    if evening:
+        body["evening_time"] = evening
+
+    result = _request(
+        "PATCH",
+        f"user_profiles?user_id=eq.{key}",
+        json=body,
+        headers={**_headers(), "Prefer": "return=representation"},
+    )
+    if not result and not _supabase_profile_exists(key):
+        insert_body = dict(body)
+        insert_body["user_id"] = int(key)
+        if "name" in cols and not profile.get("name"):
+            insert_body["name"] = "Friend"
+        result = _request(
+            "POST",
+            "user_profiles",
+            json=_filter_row_for_supabase(insert_body),
+            headers={**_headers(), "Prefer": "return=representation"},
+        )
+
+    if not result:
+        log.error("patch_profile_times failed uid=%s body=%s", key, body)
+        return None, "save_failed"
+
+    fresh = get_profile(user_id)
+    out = sync_profile_times(fresh if isinstance(fresh, dict) else profile)
+    profiles = _load_json(USER_PROFILES_PATH, {})
+    if not isinstance(profiles, dict):
+        profiles = {}
+    profiles[key] = out
+    _save_json(USER_PROFILES_PATH, profiles)
+    log.info(
+        "patch_profile_times ok uid=%s daily=%s evening=%s",
+        key,
+        out.get("daily_time"),
+        out.get("evening_time"),
+    )
+    return out, None
+
+
+def claim_send_slot(user_id: int | str, field: str, value: str) -> bool:
+    """Check if slot is already claimed, then claim it."""
+    key = str(user_id)
+    if not _use_supabase:
+        return True
+    rows = _request(
+        "GET", f"user_profiles?user_id=eq.{key}&select={field}&limit=1"
+    ) or []
+    log.info(
+        "claim_send_slot uid=%s field=%s value=%s rows=%s",
+        key,
+        field,
+        value,
+        rows,
+    )
+    if not rows or not isinstance(rows[0], dict):
+        log.info("claim_send_slot uid=%s — no profile, returning True", key)
+        return True
+    current = str(rows[0].get(field) or "").strip()
+    log.info(
+        "claim_send_slot uid=%s current=%s value=%s match=%s",
+        key,
+        current,
+        value,
+        current == value,
+    )
+    if current == value:
+        return False
+    result = _request(
+        "PATCH",
+        f"user_profiles?user_id=eq.{key}",
+        json={field: value},
+        headers={**_headers(), "Prefer": "return=minimal"},
+    )
+    if result is None:
+        log.error(
+            "claim_send_slot PATCH failed uid=%s field=%s value=%s",
+            key,
+            field,
+            value,
+        )
+        return False
+    return True
 
 
 def milestone_already_shown(profile: dict, days: int) -> bool:
@@ -255,37 +548,61 @@ def _apply_milestones_shown_to_profile(p: dict) -> None:
             p[f"milestone_shown_{day}"] = True
 
 
-def upsert_profile(user_id: int | str, profile: dict) -> None:
+def upsert_profile(user_id: int | str, profile: dict) -> bool:
+    """Persist profile. Returns False if Supabase write failed."""
     key = str(user_id)
+    profile = sync_profile_times(dict(profile))
     row = _profile_to_row(profile)
     row["user_id"] = int(key)
+    ok = True
 
     if _use_supabase:
-        _request(
-            "POST",
-            "user_profiles?on_conflict=user_id",
-            json=row,
-            headers={**_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"},
-        )
+        ok = _write_profile_to_supabase(key, row)
 
     profiles = _load_json(USER_PROFILES_PATH, {})
     if not isinstance(profiles, dict):
         profiles = {}
     profiles[key] = profile
     _save_json(USER_PROFILES_PATH, profiles)
+    return ok
+
+
+def _profile_daily_enabled(profile: dict) -> bool:
+    """Treat null / missing as enabled; only explicit false disables sends."""
+    v = profile.get("daily_enabled", True)
+    if v is False or v == 0:
+        return False
+    if isinstance(v, str) and v.strip().lower() in ("false", "0", "no", "off"):
+        return False
+    return True
 
 
 def load_subscribers() -> set[int]:
+    ids: set[int] = set()
     if _use_supabase:
-        rows = _request("GET", "user_profiles?daily_enabled=eq.true&select=user_id") or []
-        ids = {int(r["user_id"]) for r in rows if isinstance(r, dict) and r.get("user_id")}
+        rows = (
+            _request("GET", "user_profiles?select=user_id,daily_enabled") or []
+        )
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("user_id"):
+                continue
+            if not _profile_daily_enabled(row):
+                continue
+            try:
+                ids.add(int(row["user_id"]))
+            except (TypeError, ValueError):
+                pass
         if ids:
+            log.info("load_subscribers from Supabase: %s users", len(ids))
             return ids
     data = _load_json(SUBSCRIBERS_PATH, [])
     try:
-        return {int(x) for x in data}
+        ids = {int(x) for x in data}
     except (TypeError, ValueError):
-        return set()
+        ids = set()
+    if ids:
+        log.info("load_subscribers from JSON: %s users", len(ids))
+    return ids
 
 
 def save_subscriber(user_id: int, enabled: bool) -> None:
@@ -474,11 +791,12 @@ def list_daily_summaries(user_id: int | str) -> list[dict]:
 
 
 def _profile_to_row(p: dict) -> dict:
-    morning = p.get("morning_time") or p.get("daily_time") or "09:30"
+    p = sync_profile_times(dict(p))
+    morning = p.get("daily_time") or p.get("morning_time") or "09:30"
     evening = p.get("evening_time") or "21:00"
     last_m = p.get("last_morning_sent_date") or p.get("last_daily_sent_date") or None
     last_e = p.get("last_evening_sent_date") or None
-    return {
+    row = {
         "name": p.get("name"),
         "morning_routine": p.get("morning_routine"),
         "has_kids": p.get("has_kids"),
@@ -502,8 +820,11 @@ def _profile_to_row(p: dict) -> dict:
         "milestones_shown": _milestones_shown_for_row(p),
         "last_weekly_recap_date": p.get("last_weekly_recap_date") or None,
         "cycle_flags": _cycle_flags_for_row(p),
-        "language_code": str(p.get("language_code") or "en")[:16],
     }
+    cols = _supabase_profile_columns or _SUPABASE_PROFILE_COLUMNS_FALLBACK
+    if "language_code" in cols:
+        row["language_code"] = str(p.get("language_code") or "en")[:16]
+    return row
 
 
 def _row_to_profile(row: dict) -> dict:
@@ -516,11 +837,7 @@ def _row_to_profile(row: dict) -> dict:
     if p.get("last_weekly_recap_date"):
         p["last_weekly_recap_date"] = str(p["last_weekly_recap_date"])[:10]
         p[f"weekly_sent_{p['last_weekly_recap_date']}"] = True
-    if not p.get("morning_time") and p.get("daily_time"):
-        p["morning_time"] = p["daily_time"]
-    if not p.get("evening_time"):
-        p["evening_time"] = "21:00"
-    p.setdefault("daily_time", p.get("morning_time", "09:30"))
+    sync_profile_times(p)
     p.setdefault("raw_goal", p.get("main_goal", ""))
     p.setdefault("final_goal", p.get("main_goal", ""))
     p.setdefault("goal_type", "qualitative")

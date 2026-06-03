@@ -22,6 +22,37 @@
   let tasks = [];
   let calendarData = null;
   let activeTab = 'home';
+  /** User-visible times on home screen (survives stale API reloads). */
+  let displayTimesCache = null;
+
+  function timesStorageKey() {
+    const uid = tg?.initDataUnsafe?.user?.id || DEMO_TG || '0';
+    return `spicespace_display_times_v1_${uid}`;
+  }
+
+  function loadDisplayTimesFromStorage() {
+    try {
+      const raw = localStorage.getItem(timesStorageKey());
+      if (!raw) return null;
+      const o = JSON.parse(raw);
+      const morning = formatTimeHHMM(o.morning, null);
+      const evening = formatTimeHHMM(o.evening, null);
+      if (morning && evening) return { morning, evening };
+    } catch (_) {}
+    return null;
+  }
+
+  function saveDisplayTimesToStorage(morning, evening) {
+    const morningHm = formatTimeHHMM(morning, null);
+    const eveningHm = formatTimeHHMM(evening, null);
+    if (!morningHm || !eveningHm) return;
+    try {
+      localStorage.setItem(
+        timesStorageKey(),
+        JSON.stringify({ morning: morningHm, evening: eveningHm }),
+      );
+    } catch (_) {}
+  }
 
   function withDemoQuery(path) {
     if (!DEMO_TG || tg?.initData) return path;
@@ -179,15 +210,23 @@
     const eveningLbl = document.querySelectorAll('label.edit-times-sheet__field')[1];
     if (morningLbl) {
       const inp = morningLbl.querySelector('input');
+      const savedVal = inp?.value;
       morningLbl.textContent = '';
       morningLbl.append(t('morning_field'));
-      if (inp) morningLbl.appendChild(inp);
+      if (inp) {
+        if (savedVal) inp.value = savedVal;
+        morningLbl.appendChild(inp);
+      }
     }
     if (eveningLbl) {
       const inp = eveningLbl.querySelector('input');
+      const savedVal = inp?.value;
       eveningLbl.textContent = '';
       eveningLbl.append(t('evening_field'));
-      if (inp) eveningLbl.appendChild(inp);
+      if (inp) {
+        if (savedVal) inp.value = savedVal;
+        eveningLbl.appendChild(inp);
+      }
     }
     setText('#edit-times-cancel', 'cancel');
     setText('#edit-times-save', 'save');
@@ -255,11 +294,80 @@
   }
 
   function profileMorningTime(prof) {
-    return formatTimeHHMM(prof?.morning_time || prof?.daily_time, '09:00');
+    // daily_time is canonical in Supabase; morning_time may be stale.
+    return formatTimeHHMM(prof?.daily_time || prof?.morning_time, '09:00');
   }
 
   function profileEveningTime(prof) {
     return formatTimeHHMM(prof?.evening_time, '21:00');
+  }
+
+  function applyTimesToProfile(prof, morning, evening) {
+    const base = { ...(prof || {}) };
+    if (morning) {
+      const mt = formatTimeHHMM(morning, null);
+      if (mt) {
+        base.morning_time = mt;
+        base.daily_time = mt;
+      }
+    }
+    if (evening) {
+      const et = formatTimeHHMM(evening, null);
+      if (et) base.evening_time = et;
+    }
+    return base;
+  }
+
+  function syncDisplayTimesCache(morning, evening) {
+    const m = formatTimeHHMM(morning, null);
+    const e = formatTimeHHMM(evening, null);
+    if (!displayTimesCache) {
+      displayTimesCache = { morning: '09:00', evening: '21:00' };
+    }
+    if (m) displayTimesCache.morning = m;
+    if (e) displayTimesCache.evening = e;
+    saveDisplayTimesToStorage(displayTimesCache.morning, displayTimesCache.evening);
+    return displayTimesCache;
+  }
+
+  function getDisplayTimes(prof) {
+    if (displayTimesCache?.morning && displayTimesCache?.evening) {
+      return { ...displayTimesCache };
+    }
+    const stored = loadDisplayTimesFromStorage();
+    if (stored) {
+      syncDisplayTimesCache(stored.morning, stored.evening);
+      return { ...displayTimesCache };
+    }
+    const p = prof || profile;
+    return {
+      morning: profileMorningTime(p),
+      evening: profileEveningTime(p),
+    };
+  }
+
+  /** Paint home-screen 🌅/🌙 times (localStorage + cache beat stale API). */
+  function paintMainScreenTimes(morning, evening) {
+    const stored = loadDisplayTimesFromStorage();
+    const cache = syncDisplayTimesCache(
+      morning ?? stored?.morning ?? displayTimesCache?.morning,
+      evening ?? stored?.evening ?? displayTimesCache?.evening,
+    );
+    const m = cache.morning;
+    const e = cache.evening;
+    document.querySelectorAll(
+      '#morning-time-val, .time-value--morning, .times-card .time-item:first-child .time-value',
+    ).forEach((el) => {
+      el.textContent = m;
+      el.setAttribute('data-hm', m);
+    });
+    document.querySelectorAll(
+      '#evening-time-val, .time-value--evening, .times-card .time-item:nth-child(3) .time-value',
+    ).forEach((el) => {
+      el.textContent = e;
+      el.setAttribute('data-hm', e);
+    });
+    return cache;
   }
 
   function initTelegram() {
@@ -641,17 +749,23 @@
   }
 
   function renderTimes(prof) {
-    const morningEl = document.getElementById('morning-time-val');
-    const eveningEl = document.getElementById('evening-time-val');
-    if (morningEl) {
-      morningEl.textContent = formatTimeForDisplay(
-        prof?.morning_time || prof?.daily_time,
-        '09:00',
+    const p = prof || profile;
+    if (!p && !displayTimesCache) return;
+    if (!displayTimesCache && p) {
+      syncDisplayTimesCache(
+        profileMorningTime(p),
+        profileEveningTime(p),
       );
     }
-    if (eveningEl) {
-      eveningEl.textContent = formatTimeForDisplay(prof?.evening_time, '21:00');
-    }
+    const dt = getDisplayTimes(p);
+    paintMainScreenTimes(dt.morning, dt.evening);
+  }
+
+  function renderProfile(prof) {
+    if (!prof) return;
+    profile = prof;
+    const user = tg?.initDataUnsafe?.user || null;
+    renderAll(user);
   }
 
   function renderAll(user) {
@@ -663,6 +777,8 @@
     renderTasks(profile, tasks);
     renderStreak(profile);
     renderTimes(profile);
+    const dt = getDisplayTimes(profile);
+    paintMainScreenTimes(dt.morning, dt.evening);
     document.getElementById('today-date').textContent = formatTodayTag();
   }
 
@@ -741,11 +857,46 @@
   }
 
   async function fetchProfile() {
-    const resp = await apiFetch('/api/profile');
+    const resp = await apiFetch(`/api/profile?_t=${Date.now()}`);
     if (resp.status === 401 || resp.status === 404) return { ok: false, status: resp.status };
     if (!resp.ok) return { ok: false, status: resp.status };
     const data = await resp.json();
     return { ok: true, profile: data.profile || data, user: data.user || null };
+  }
+
+  /**
+   * Fresh profile from API (cache-bust).
+   * @param {{ skipRender?: boolean }} opts — skipRender: only update `profile`, do not repaint UI
+   */
+  async function loadProfile(opts = {}) {
+    try {
+      const result = await fetchProfile();
+      if (!result.ok || !result.profile) return result;
+
+      profile = result.profile;
+      const stored = loadDisplayTimesFromStorage();
+      if (stored) {
+        profile = applyTimesToProfile(profile, stored.morning, stored.evening);
+        syncDisplayTimesCache(stored.morning, stored.evening);
+      } else {
+        syncDisplayTimesCache(
+          profileMorningTime(profile),
+          profileEveningTime(profile),
+        );
+      }
+
+      if (!opts.skipRender) {
+        const user = result.user || tg?.initDataUnsafe?.user || null;
+        renderProfile(profile);
+      } else {
+        const dt = getDisplayTimes(profile);
+        paintMainScreenTimes(dt.morning, dt.evening);
+      }
+      return result;
+    } catch (e) {
+      console.error('loadProfile failed:', e);
+      return { ok: false, profile: null, user: null, status: 0 };
+    }
   }
 
   async function fetchTasks() {
@@ -764,13 +915,15 @@
       });
       if (!resp.ok) return;
       const data = await resp.json();
+      const keep = getDisplayTimes(profile);
       if (data.profile) {
-        profile = data.profile;
+        profile = applyTimesToProfile(data.profile, keep.morning, keep.evening);
       } else if (profile) {
         if (data.streak != null) profile.streak = data.streak;
         if (data.display_streak != null) profile.display_streak = data.display_streak;
       }
       renderStreak(profile);
+      paintMainScreenTimes(keep.morning, keep.evening);
     } catch (_) {}
   }
 
@@ -852,42 +1005,64 @@
   }
 
   async function saveEditTimes() {
-    const morning = document.getElementById('et-morning')?.value || '';
-    const evening = document.getElementById('et-evening')?.value || '';
+    const morningRaw = document.getElementById('et-morning')?.value || '';
+    const eveningRaw = document.getElementById('et-evening')?.value || '';
+    const morning = formatTimeHHMM(morningRaw, '');
+    const evening = formatTimeHHMM(eveningRaw, '');
     if (!morning || !evening) return;
 
     const saveBtn = document.getElementById('edit-times-save');
     if (saveBtn) saveBtn.disabled = true;
 
-    const resp = await apiFetch('/api/profile/times', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ morning_time: morning, evening_time: evening }),
-    });
+    try {
+      const resp = await apiFetch('/api/profile/times', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ morning_time: morning, evening_time: evening }),
+      });
+      if (!resp.ok) {
+        alert(t('save_failed') || 'Could not save. Try again.');
+        return;
+      }
 
-    if (saveBtn) saveBtn.disabled = false;
-    if (!resp.ok) return;
+      const data = await resp.json();
+      profile = applyTimesToProfile(data.profile || profile || {}, morning, evening);
+      syncDisplayTimesCache(morning, evening);
+      saveDisplayTimesToStorage(morning, evening);
+      paintMainScreenTimes(morning, evening);
 
-    const data = await resp.json();
-    if (data.profile) profile = data.profile;
-    else if (profile) {
-      profile.morning_time = morning;
-      profile.daily_time = morning;
-      profile.evening_time = evening;
+      const reload = await loadProfile({ skipRender: true });
+      if (reload.ok && reload.profile) {
+        profile = applyTimesToProfile(reload.profile, morning, evening);
+      }
+      paintMainScreenTimes(morning, evening);
+
+      closeEditTimesSheet();
+      requestAnimationFrame(() => paintMainScreenTimes(morning, evening));
+      setTimeout(() => paintMainScreenTimes(morning, evening), 120);
+      hapticSuccess();
+    } catch (e) {
+      console.error('Failed to save times:', e);
+      alert(t('save_failed') || 'Could not save. Try again.');
+    } finally {
+      if (saveBtn) saveBtn.disabled = false;
     }
-
-    renderTimes(profile);
-    closeEditTimesSheet();
-    hapticSuccess();
   }
 
-  function openEditTimesSheet() {
+  async function openEditTimesSheet() {
     const sheet = document.getElementById('edit-times-sheet');
     const morningInput = document.getElementById('et-morning');
     const eveningInput = document.getElementById('et-evening');
     if (!sheet || !morningInput || !eveningInput) return;
-    morningInput.value = profileMorningTime(profile);
-    eveningInput.value = profileEveningTime(profile);
+
+    if (BACKEND_URL && !isNoInitData()) {
+      await loadProfile({ skipRender: true });
+    }
+
+    const dt = getDisplayTimes(profile);
+    morningInput.value = dt.morning;
+    eveningInput.value = dt.evening;
+    paintMainScreenTimes(dt.morning, dt.evening);
     sheet.hidden = false;
     haptic('light');
   }
@@ -962,7 +1137,7 @@
       return;
     }
 
-    const result = await fetchProfile();
+    const result = await loadProfile();
     if (!result.ok) {
       if (result.status === 404 && (tg?.initData || DEMO_TG)) {
         showEmptyState();
@@ -972,7 +1147,6 @@
       return;
     }
 
-    profile = result.profile;
     applyLanguageFromProfile(profile);
     hideSyncBanner();
     showMain();
@@ -983,10 +1157,25 @@
     await markStreakOnOpen();
     tasks = await fetchTasks();
     calendarData = await fetchCalendar();
-    renderAll(result.user || tgUser);
     syncTimezone();
     syncLanguageCode();
     document.querySelector('.settings-block')?.classList.add('loaded');
+
+    const homeTimes = getDisplayTimes(profile);
+    paintMainScreenTimes(homeTimes.morning, homeTimes.evening);
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible' || !profile || !BACKEND_URL) return;
+      const keep = getDisplayTimes(profile);
+      loadProfile({ skipRender: true })
+        .then((r) => {
+          if (r.ok && r.profile) {
+            profile = applyTimesToProfile(r.profile, keep.morning, keep.evening);
+          }
+          paintMainScreenTimes(keep.morning, keep.evening);
+        })
+        .catch(() => paintMainScreenTimes(keep.morning, keep.evening));
+    });
   }
 
   if (document.readyState === 'loading') {
