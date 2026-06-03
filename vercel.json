@@ -6,6 +6,11 @@
   "outputDirectory": "miniapp",
   "cleanUrls": true,
   "trailingSlash": false,
+  "rewrites": [
+    { "source": "/webapp", "destination": "/" },
+    { "source": "/webapp/", "destination": "/" },
+    { "source": "/webapp/:path*", "destination": "/:path*" }
+  ],
   "headers": [
     {
       "source": "/(.*)",
