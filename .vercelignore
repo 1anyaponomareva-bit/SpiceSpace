@@ -1,4 +1,4 @@
-Dockerfile
+deploy/
 .dockerignore
 railway.toml
 railway.json
