@@ -973,34 +973,14 @@
     try {
       const result = await fetchProfile();
       if (!result.ok || !result.profile) return result;
-
       profile = result.profile;
-      try {
-        const stored = loadDisplayTimesFromStorage();
-        if (stored) {
-          profile = applyTimesToProfile(profile, stored.morning, stored.evening);
-          syncDisplayTimesCache(stored.morning, stored.evening);
-        } else {
-          syncDisplayTimesCache(
-            profileMorningTime(profile),
-            profileEveningTime(profile),
-          );
-        }
-      } catch (e) {
-        console.warn('localStorage not available:', e);
-      }
-
       if (!opts.skipRender) {
-        const user = result.user || tg?.initDataUnsafe?.user || null;
         renderProfile(profile);
-      } else {
-        const dt = getDisplayTimes(profile);
-        paintMainScreenTimes(dt.morning, dt.evening);
       }
       return result;
     } catch (e) {
       console.error('loadProfile failed:', e);
-      return { ok: false, profile: null, user: null, status: 0 };
+      return { ok: false, profile: null, status: 0 };
     }
   }
 
@@ -1232,21 +1212,17 @@
     bindEditTimes();
 
     const tgUser = tg?.initDataUnsafe?.user || null;
-    const telegramId = BACKEND_TELEGRAM_ID;
-
-    if (!tg?.initData && !telegramId) {
-      startDemoMode(null);
-      return;
-    }
 
     if (!BACKEND_URL) {
-      startDemoMode(tgUser);
+      document.getElementById('screen-home').hidden = false;
       return;
     }
 
     const result = await loadProfile();
-    if (!result.ok || !profile) {
-      startDemoMode(tgUser);
+
+    if (!result.ok) {
+      showSyncBanner();
+      showMain();
       return;
     }
 
@@ -1264,22 +1240,6 @@
     syncTimezone();
     syncLanguageCode();
     document.querySelector('.settings-block')?.classList.add('loaded');
-
-    const homeTimes = getDisplayTimes(profile);
-    paintMainScreenTimes(homeTimes.morning, homeTimes.evening);
-
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState !== 'visible' || !profile || !BACKEND_URL) return;
-      const keep = getDisplayTimes(profile);
-      loadProfile({ skipRender: true })
-        .then((r) => {
-          if (r.ok && r.profile) {
-            profile = applyTimesToProfile(r.profile, keep.morning, keep.evening);
-          }
-          paintMainScreenTimes(keep.morning, keep.evening);
-        })
-        .catch(() => paintMainScreenTimes(keep.morning, keep.evening));
-    });
   }
 
   if (document.readyState === 'loading') {
