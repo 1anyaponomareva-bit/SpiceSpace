@@ -63,6 +63,8 @@ const translations = {
     bot_stopped: 'Бот остановлен. Напиши /start чтобы возобновить.',
     demo_name: 'Привет! 👋',
     demo_goal: 'Открой через бота чтобы увидеть свои цели',
+    err_auth: 'Не удалось подключиться к серверу. Проверь TELEGRAM_BOT_TOKEN на Railway и открой Mini App снова из бота.',
+    err_load: 'Не удалось загрузить данные. Проверь интернет и открой Mini App из кнопки в боте.',
   },
   en: {
     greeting_morning: 'Good morning,',
@@ -128,6 +130,8 @@ const translations = {
     bot_stopped: 'Bot stopped. Send /start to resume.',
     demo_name: 'Hi! 👋',
     demo_goal: 'Open via the bot to see your goals',
+    err_auth: 'Could not connect to the server. Check TELEGRAM_BOT_TOKEN on Railway and reopen the Mini App from the bot.',
+    err_load: 'Could not load your data. Check your connection and open the Mini App from the bot button.',
   },
 };
 
