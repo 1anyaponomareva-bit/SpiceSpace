@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SpiceSpace Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #1A1A1A;
+      --panel: #242424;
+      --text: #F2F2F2;
+      --muted: #9EA0A6;
+      --accent: #D4F26B;
+      --border: #323232;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 24px;
+    }
+    h1 { margin: 0 0 16px; font-size: 28px; }
+    .muted { color: var(--muted); }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+    }
+    .card .label { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+    .card .value { color: var(--accent); font-size: 28px; font-weight: 800; }
+    .table-wrap {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 760px;
+    }
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      font-size: 14px;
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 600; }
+    tr:last-child td { border-bottom: 0; }
+    .goal {
+      max-width: 320px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .status { font-weight: 600; }
+    .ok { color: #9AE66E; }
+    .warn { color: #FFD56A; }
+    .bad { color: #FF7E7E; }
+  </style>
+</head>
+<body>
+  <h1>SpiceSpace Admin</h1>
+  <p class="muted" id="meta">Loading...</p>
+  <div id="denied" style="display:none;">Access denied</div>
+  <div id="app" style="display:none;">
+    <div class="cards" id="cards"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Goal</th>
+            <th>Streak 🔥</th>
+            <th>Week</th>
+            <th>Last active</th>
+            <th>Ответил 💬</th>
+            <th>Сообщений сегодня</th>
+            <th>Всего сообщений</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="users-body"></tbody>
+      </table>
+    </div>
+  </div>
+  <script>
+    (() => {
+      const ADMIN_TELEGRAM_ID = "8412438788";
+      const params = new URLSearchParams(window.location.search);
+      const adminId = params.get("admin_id") || "";
+      const denied = document.getElementById("denied");
+      const app = document.getElementById("app");
+      const cards = document.getElementById("cards");
+      const body = document.getElementById("users-body");
+      const meta = document.getElementById("meta");
+
+      if (String(adminId) !== ADMIN_TELEGRAM_ID) {
+        denied.style.display = "block";
+        meta.textContent = "Unauthorized";
+        return;
+      }
+
+      function statusCell(u) {
+        if (u.active_today) return '<span class="status ok">🟢 active today</span>';
+        if (u.active_week) return '<span class="status warn">🟡 this week</span>';
+        return '<span class="status bad">🔴 churned</span>';
+      }
+
+      function renderStats(stats) {
+        const items = [
+          ["Total users", stats.total || 0],
+          ["Onboarded", stats.onboarded || 0],
+          ["Active today", stats.active_today || 0],
+          ["Ответили сегодня 💬", stats.replied_today || 0],
+          ["Active this week", stats.active_week || 0],
+          ["Churned (3+ days)", stats.churned || 0],
+          ["Streak 3+ days", stats.streak_3plus || 0],
+        ];
+        cards.innerHTML = items.map(([label, value]) =>
+          `<div class="card"><div class="label">${label}</div><div class="value">${value}</div></div>`
+        ).join("");
+      }
+
+      function renderUsers(users) {
+        body.innerHTML = (users || []).map((u) => `
+          <tr>
+            <td>${String(u.name || "—")}</td>
+            <td class="goal" title="${String(u.main_goal || "")}">${String(u.main_goal || "—")}</td>
+            <td>${Number(u.streak || 0)}</td>
+            <td>${Number(u.current_week || 1)}</td>
+            <td>${String(u.last_active || "—")}</td>
+            <td>${u.replied_today ? "✅" : "—"}</td>
+            <td>${u.messages_today || "—"}</td>
+            <td>${u.messages_total || "—"}</td>
+            <td>${statusCell(u)}</td>
+          </tr>
+        `).join("");
+      }
+
+      async function loadStats() {
+        try {
+          const resp = await fetch(`/api/admin/stats?admin_id=${encodeURIComponent(adminId)}`, { cache: "no-store" });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const data = await resp.json();
+          renderStats(data.stats || {});
+          renderUsers(data.users || []);
+          app.style.display = "block";
+          denied.style.display = "none";
+          meta.textContent = `Updated: ${new Date().toLocaleString()}`;
+        } catch (e) {
+          meta.textContent = `Failed to load stats: ${e.message || e}`;
+        }
+      }
+
+      loadStats();
+      setInterval(loadStats, 60000);
+    })();
+  </script>
+</body>
+</html>

@@ -1,32 +1,61 @@
 (() => {
   'use strict';
 
-  const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
-
-  const BRAND = {
-    cream: '#FAF7F2',
-    spice: '#E8500A',
-    charcoal: '#1A1A1A',
-  };
+  const tg = window.Telegram?.WebApp ?? null;
 
   const BACKEND_META = (
     document.querySelector('meta[name="spicespace-backend"]')?.content || ''
   ).trim();
-  const BACKEND_URL = (
-    BACKEND_META || window.location.origin || ''
-  ).replace(/\/+$/, '');
+  const BACKEND_URL = (BACKEND_META || window.location.origin || '').replace(/\/+$/, '');
   const BOT_USERNAME = (
-    document.querySelector('meta[name="spicespace-bot-username"]')?.content || ''
+    document.querySelector('meta[name="spicespace-bot-username"]')?.content || 'SpiceSpacebot'
   ).replace(/^@/, '');
 
   const DEMO_TG = new URLSearchParams(window.location.search).get('telegram_id') || '';
 
-  let lastProfile = null;
-  let tasksCache = [];
-  let planWeekOffset = 0;
+  const MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+  const MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const WEEKDAYS_SHORT = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+  const WEEKDAYS_EN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  let profile = null;
+  let tasks = [];
+  let calendarData = null;
+  let activeTab = 'home';
+  /** User-visible times on home screen (survives stale API reloads). */
+  let displayTimesCache = null;
+
+  function timesStorageKey() {
+    const uid = tg?.initDataUnsafe?.user?.id || DEMO_TG || '0';
+    return `spicespace_display_times_v1_${uid}`;
+  }
+
+  function loadDisplayTimesFromStorage() {
+    try {
+      const raw = localStorage.getItem(timesStorageKey());
+      if (!raw) return null;
+      const o = JSON.parse(raw);
+      const morning = formatTimeHHMM(o.morning, null);
+      const evening = formatTimeHHMM(o.evening, null);
+      if (morning && evening) return { morning, evening };
+    } catch (_) {}
+    return null;
+  }
+
+  function saveDisplayTimesToStorage(morning, evening) {
+    const morningHm = formatTimeHHMM(morning, null);
+    const eveningHm = formatTimeHHMM(evening, null);
+    if (!morningHm || !eveningHm) return;
+    try {
+      localStorage.setItem(
+        timesStorageKey(),
+        JSON.stringify({ morning: morningHm, evening: eveningHm }),
+      );
+    } catch (_) {}
+  }
 
   function withDemoQuery(path) {
-    if (!DEMO_TG || (tg && tg.initData)) return path;
+    if (!DEMO_TG || tg?.initData) return path;
     const sep = path.includes('?') ? '&' : '?';
     return `${path}${sep}telegram_id=${encodeURIComponent(DEMO_TG)}`;
   }
@@ -35,12 +64,19 @@
     if (!BACKEND_URL) {
       return { ok: false, status: 0, json: async () => ({}) };
     }
-    const url = `${BACKEND_URL}${withDemoQuery(path)}`;
     const headers = { ...(opts.headers || {}) };
-    if (tg && tg.initData && !headers.Authorization) {
+    if (tg?.initData && !headers.Authorization) {
       headers.Authorization = `tma ${tg.initData}`;
     }
-    return fetch(url, { ...opts, headers, cache: 'no-store' });
+    return fetch(`${BACKEND_URL}${withDemoQuery(path)}`, { ...opts, headers, cache: 'no-store' });
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
   }
 
   function localISODate(d = new Date()) {
@@ -50,773 +86,1096 @@
     return `${y}-${m}-${da}`;
   }
 
-  function dowKeyFromLocalDate(d) {
-    const w = d.getDay();
-    return ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][w];
-  }
-
   function parseISODate(iso) {
     const [y, m, d] = iso.split('-').map(Number);
     return new Date(y, m - 1, d);
   }
 
-  function addDaysISO(iso, n) {
-    const dt = parseISODate(iso);
-    dt.setDate(dt.getDate() + n);
-    return localISODate(dt);
+  function dowKeyFromDate(d) {
+    return ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][d.getDay()];
   }
 
-  function taskAppliesOnDate(task, iso) {
-    if (task.done || task.status !== 'active') return false;
+  function mondayIndex(d = new Date()) {
+    return (d.getDay() + 6) % 7;
+  }
+
+  function formatTodayTag() {
+    const d = new Date();
+    const lang = window.userLang || 'en';
+    if (lang === 'en') {
+      return `${WEEKDAYS_EN[d.getDay()]} ${d.getDate()} ${MONTHS_EN[d.getMonth()]}`;
+    }
+    return `${WEEKDAYS_SHORT[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
+  }
+
+  function pluralizeDays(n) {
+    const lang = window.userLang || 'en';
+    if (lang === 'en') {
+      return Math.abs(n) === 1 ? t('streak_day_one') : t('streak_days');
+    }
+    const a = Math.abs(n) % 100;
+    const b = a % 10;
+    if (a > 10 && a < 20) return t('streak_days');
+    if (b > 1 && b < 5) return t('streak_day_few');
+    if (b === 1) return t('streak_day_one');
+    return t('streak_days');
+  }
+
+  function weekBadgeText(week) {
+    return `${t('week_label')} ${week} ${t('of_12')}`;
+  }
+
+  function applyGreeting() {
+    const el = document.getElementById('greeting');
+    if (!el) return;
+    const h = new Date().getHours();
+    let g = t('greeting_morning');
+    if (h >= 12 && h < 18) g = t('greeting_day');
+    else if (h >= 18 && h < 23) g = t('greeting_evening');
+    else if (h >= 23 || h < 5) g = t('greeting_night');
+    el.textContent = g;
+  }
+
+  function pickName(user, prof) {
+    if (prof?.name) return String(prof.name).trim();
+    const n = (user?.first_name || user?.username || '').trim();
+    return n || t('friend_default');
+  }
+
+  function applyStaticI18n() {
+    document.documentElement.lang = window.userLang || 'en';
+
+    const setText = (sel, key) => {
+      const el = document.querySelector(sel);
+      if (el) el.textContent = t(key);
+    };
+
+    setText('#sync-banner .sync-banner__text', 'sync_banner_text');
+    setText('#sync-banner-open', 'sync_open');
+    setText('#empty-state .empty-state__title', 'no_goal_title');
+    setText('#empty-state .empty-state__text', 'no_goal_text');
+    setText('#empty-open-bot', 'go_to_bot');
+
+    const setLabelWithSvg = (selector, key) => {
+      const el = document.querySelector(selector);
+      if (!el) return;
+      const svg = el.querySelector('svg');
+      el.textContent = '';
+      if (svg) el.appendChild(svg);
+      el.append(` ${t(key)}`);
+    };
+
+    setLabelWithSvg('.month-card .card-label', 'goal_12weeks');
+    setText('.week-card .card-label', 'goal_week');
+    setLabelWithSvg('.today-card .card-label', 'tasks_today');
+    setText('.streak-card .card-label', 'streak_label');
+    setText('.time-item:first-child .time-label', 'morning_time');
+    setText('.time-item:nth-child(3) .time-label', 'evening_time');
+
+    const editTimesBtn = document.getElementById('edit-times-btn');
+    if (editTimesBtn) editTimesBtn.textContent = `✏️ ${t('change_btn')}`;
+
+    const editNameBtn = document.getElementById('edit-name-btn');
+    if (editNameBtn) editNameBtn.setAttribute('aria-label', t('edit_name'));
+
+    setText('#btn-reset', 'settings_reset');
+    setText('#btn-subscription', 'settings_subscription');
+    setText('#btn-stop', 'settings_stop');
+
+    setText('.calendar-title', 'weeks_12');
+    const legends = document.querySelectorAll('.calendar-legend .legend-item');
+    const legendKeys = ['done_label', 'partial_label', 'no_label', 'no_data_label', 'future_label'];
+    legends.forEach((el, i) => {
+      if (legendKeys[i]) {
+        const dot = el.querySelector('.legend-dot');
+        el.textContent = '';
+        if (dot) el.appendChild(dot);
+        el.append(` ${t(legendKeys[i])}`);
+      }
+    });
+
+    const tabHome = document.querySelector('.tab-bar__btn[data-tab="home"]');
+    const tabCal = document.querySelector('.tab-bar__btn[data-tab="calendar"]');
+    if (tabHome) tabHome.textContent = `🏠 ${t('tab_home')}`;
+    if (tabCal) tabCal.textContent = `📅 ${t('tab_progress')}`;
+
+    setText('#edit-name-heading', 'edit_name_title');
+    const nameInput = document.getElementById('edit-name-input');
+    if (nameInput) nameInput.placeholder = t('name_placeholder');
+    setText('#edit-name-cancel', 'cancel');
+    setText('#edit-name-save', 'save');
+
+    setText('#edit-times-heading', 'times_sheet_title');
+    const morningLbl = document.querySelector('label.edit-times-sheet__field');
+    const eveningLbl = document.querySelectorAll('label.edit-times-sheet__field')[1];
+    if (morningLbl) {
+      const inp = morningLbl.querySelector('input');
+      const savedVal = inp?.value;
+      morningLbl.textContent = '';
+      morningLbl.append(t('morning_field'));
+      if (inp) {
+        if (savedVal) inp.value = savedVal;
+        morningLbl.appendChild(inp);
+      }
+    }
+    if (eveningLbl) {
+      const inp = eveningLbl.querySelector('input');
+      const savedVal = inp?.value;
+      eveningLbl.textContent = '';
+      eveningLbl.append(t('evening_field'));
+      if (inp) {
+        if (savedVal) inp.value = savedVal;
+        eveningLbl.appendChild(inp);
+      }
+    }
+    setText('#edit-times-cancel', 'cancel');
+    setText('#edit-times-save', 'save');
+  }
+
+  function applyLanguageFromProfile(prof) {
+    const urlLang = new URLSearchParams(window.location.search).get('lang');
+    if (urlLang === 'ru' || urlLang === 'en') {
+      window.userLang = urlLang;
+    } else {
+      const lc = String(prof?.language_code || tg?.initDataUnsafe?.user?.language_code || '').toLowerCase();
+      window.userLang = lc.startsWith('ru') ? 'ru' : 'en';
+    }
+    document.documentElement.lang = window.userLang;
+    applyStaticI18n();
+  }
+
+  function syncLanguageCode() {
+    const lang = window.userLang || 'en';
+    apiFetch('/api/profile/language', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ language_code: lang }),
+    }).catch(() => {});
+  }
+
+  function haptic(type = 'light') {
+    try { tg?.HapticFeedback?.impactOccurred?.(type); } catch (_) {}
+  }
+
+  function hapticSuccess() {
+    try { tg?.HapticFeedback?.notificationOccurred?.('success'); } catch (_) {}
+  }
+
+  function setCanEditName(enabled) {
+    const btn = document.getElementById('edit-name-btn');
+    if (btn) btn.hidden = !enabled;
+  }
+
+  function setCanEditTimes(enabled) {
+    const btn = document.getElementById('edit-times-btn');
+    if (btn) btn.hidden = !enabled;
+  }
+
+  function formatTimeHHMM(raw, fallback) {
+    const s = String(raw || '').trim();
+    const m = s.match(/^(\d{1,2}):(\d{2})/);
+    if (!m) return fallback;
+    return `${String(Number(m[1])).padStart(2, '0')}:${m[2]}`;
+  }
+
+  function formatTime(hhmm) {
+    if (!hhmm) return '';
+    const parts = String(hhmm).trim().match(/^(\d{1,2}):(\d{2})/);
+    if (!parts) return String(hhmm);
+    const h = Number(parts[1]);
+    const m = Number(parts[2]);
+    const period = h >= 12 ? 'PM' : 'AM';
+    const hour = h % 12 || 12;
+    return `${hour}:${String(m).padStart(2, '0')} ${period}`;
+  }
+
+  function formatTimeForDisplay(hhmm, fallback) {
+    return formatTime(formatTimeHHMM(hhmm, fallback));
+  }
+
+  function profileMorningTime(prof) {
+    // daily_time is canonical in Supabase; morning_time may be stale.
+    return formatTimeHHMM(prof?.daily_time || prof?.morning_time, '09:00');
+  }
+
+  function profileEveningTime(prof) {
+    return formatTimeHHMM(prof?.evening_time, '21:00');
+  }
+
+  function applyTimesToProfile(prof, morning, evening) {
+    const base = { ...(prof || {}) };
+    if (morning) {
+      const mt = formatTimeHHMM(morning, null);
+      if (mt) {
+        base.morning_time = mt;
+        base.daily_time = mt;
+      }
+    }
+    if (evening) {
+      const et = formatTimeHHMM(evening, null);
+      if (et) base.evening_time = et;
+    }
+    return base;
+  }
+
+  function syncDisplayTimesCache(morning, evening) {
+    const m = formatTimeHHMM(morning, null);
+    const e = formatTimeHHMM(evening, null);
+    if (!displayTimesCache) {
+      displayTimesCache = { morning: '09:00', evening: '21:00' };
+    }
+    if (m) displayTimesCache.morning = m;
+    if (e) displayTimesCache.evening = e;
+    saveDisplayTimesToStorage(displayTimesCache.morning, displayTimesCache.evening);
+    return displayTimesCache;
+  }
+
+  function getDisplayTimes(prof) {
+    if (displayTimesCache?.morning && displayTimesCache?.evening) {
+      return { ...displayTimesCache };
+    }
+    const stored = loadDisplayTimesFromStorage();
+    if (stored) {
+      syncDisplayTimesCache(stored.morning, stored.evening);
+      return { ...displayTimesCache };
+    }
+    const p = prof || profile;
+    return {
+      morning: profileMorningTime(p),
+      evening: profileEveningTime(p),
+    };
+  }
+
+  /** Paint home-screen 🌅/🌙 times (localStorage + cache beat stale API). */
+  function paintMainScreenTimes(morning, evening) {
+    const stored = loadDisplayTimesFromStorage();
+    const cache = syncDisplayTimesCache(
+      morning ?? stored?.morning ?? displayTimesCache?.morning,
+      evening ?? stored?.evening ?? displayTimesCache?.evening,
+    );
+    const m = cache.morning;
+    const e = cache.evening;
+    document.querySelectorAll(
+      '#morning-time-val, .time-value--morning, .times-card .time-item:first-child .time-value',
+    ).forEach((el) => {
+      el.textContent = m;
+      el.setAttribute('data-hm', m);
+    });
+    document.querySelectorAll(
+      '#evening-time-val, .time-value--evening, .times-card .time-item:nth-child(3) .time-value',
+    ).forEach((el) => {
+      el.textContent = e;
+      el.setAttribute('data-hm', e);
+    });
+    return cache;
+  }
+
+  function initTelegram() {
+    if (!tg) return;
+    document.body.classList.add('tg-app');
+    try { tg.ready(); } catch (_) {}
+    try { tg.expand(); } catch (_) {}
+    try { tg.disableVerticalSwipes?.(); } catch (_) {}
+    try {
+      tg.setHeaderColor?.('#F5F4F0');
+      tg.setBackgroundColor?.('#F5F4F0');
+    } catch (_) {}
+    const h = tg.viewportStableHeight || tg.viewportHeight;
+    if (h && Number.isFinite(h)) {
+      document.documentElement.style.setProperty('--tg-app-height', `${h}px`);
+    }
+  }
+
+  function buildDemoProfile() {
+    return {
+      name: t('demo_name'),
+      main_goal: t('demo_goal'),
+      weekly_goal: '',
+      streak: 0,
+      display_streak: 0,
+      current_week: 1,
+      weekly_score: 0,
+      morning_time: '09:00',
+      evening_time: '21:00',
+    };
+  }
+
+  function openBotChat() {
+    const link = `https://t.me/${BOT_USERNAME}?start=webapp`;
+    if (tg?.openTelegramLink) {
+      try { tg.openTelegramLink(link); return; } catch (_) {}
+    }
+    window.open(link, '_blank');
+  }
+
+  function showSyncBanner() {
+    const el = document.getElementById('sync-banner');
+    if (el) el.hidden = false;
+  }
+
+  function hideSyncBanner() {
+    const el = document.getElementById('sync-banner');
+    if (el) el.hidden = true;
+  }
+
+  function showMain() {
+    document.getElementById('empty-state').hidden = true;
+    const home = document.getElementById('screen-home');
+    if (home) {
+      home.hidden = false;
+      home.classList.add('screen--active');
+    }
+    const tabBar = document.getElementById('tab-bar');
+    if (tabBar) tabBar.hidden = false;
+  }
+
+  function showEmptyState() {
+    document.getElementById('empty-state').hidden = false;
+    const home = document.getElementById('screen-home');
+    if (home) {
+      home.hidden = true;
+      home.classList.remove('screen--active');
+    }
+    const tabBar = document.getElementById('tab-bar');
+    if (tabBar) tabBar.hidden = true;
+    hideSyncBanner();
+    document.getElementById('settings-block')?.classList.add('loaded');
+  }
+
+  function switchTab(tab) {
+    activeTab = tab;
+    const home = document.getElementById('screen-home');
+    const cal = document.getElementById('screen-calendar');
+    document.querySelectorAll('.tab-bar__btn').forEach((btn) => {
+      const on = btn.getAttribute('data-tab') === tab;
+      btn.classList.toggle('tab-bar__btn--active', on);
+      btn.setAttribute('aria-current', on ? 'page' : 'false');
+    });
+    if (home) {
+      home.classList.toggle('screen--active', tab === 'home');
+      home.hidden = tab !== 'home';
+    }
+    if (cal) {
+      cal.classList.toggle('screen--active', tab === 'calendar');
+      cal.hidden = tab !== 'calendar';
+    }
+    if (tab === 'calendar') renderCalendar();
+    haptic('light');
+  }
+
+  function todayTaskCompletionStatus(prof) {
+    const tc = prof?.task_completed;
+    if (tc === 'true') return 'done';
+    if (tc === 'false') return 'missed';
+    return 'pending';
+  }
+
+  function getDayStatus(day) {
+    if (day.task_completed === 'true') return 'done';
+    if (day.task_completed === 'false') return 'missed';
+    if (day.task_completed === 'partial') return 'partial';
+    if (day.is_today) return 'today';
+    if (day.is_future) return 'future';
+    return 'no-data';
+  }
+
+  function isTaskCompletedStrict(prof) {
+    return todayTaskCompletionStatus(prof) === 'done';
+  }
+
+  function renderCalendar() {
+    const host = document.getElementById('calendar-grid');
+    const badge = document.getElementById('calendar-week-badge');
+    const dowHost = document.querySelector('.calendar-dow');
+    if (dowHost) {
+      const labels = ['1', '2', '3', '4', '5', '6', '7'];
+      dowHost.innerHTML = `<span></span>${labels.map((d) => `<span>${d}</span>`).join('')}`;
+    }
+    if (!host || !calendarData) return;
+
+    const cw = Number(calendarData.current_week || profile?.current_week || 1);
+    if (badge) badge.textContent = weekBadgeText(cw);
+
+    const days = Array.isArray(calendarData.days) ? calendarData.days : [];
+    const rows = [];
+    for (let w = 0; w < 12; w++) {
+      const slice = days.slice(w * 7, w * 7 + 7);
+      const cells = slice.map((d) => {
+        const status = getDayStatus(d);
+        return (
+          `<div class="calendar-cell">` +
+          `<div class="day-dot ${status}" title="${escapeHtml(d.date || '')}"></div>` +
+          `</div>`
+        );
+      }).join('');
+      rows.push(
+        `<div class="calendar-row${w + 1 === cw ? ' calendar-row--current' : ''}">` +
+        `<span class="calendar-row-label">${t('week_short')} ${w + 1}</span>${cells}</div>`
+      );
+    }
+    host.innerHTML = rows.join('');
+  }
+
+  async function fetchCalendar() {
+    const resp = await apiFetch('/api/calendar');
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data;
+  }
+
+  function isNoInitData() {
+    return !tg?.initData && !DEMO_TG;
+  }
+
+
+  function startDemoMode(user) {
+    profile = buildDemoProfile();
+    tasks = [];
+    setCanEditName(false);
+    setCanEditTimes(false);
+    showSyncBanner();
+    showMain();
+    renderAll(user);
+    document.querySelector('.settings-block')?.classList.add('loaded');
+  }
+
+  function todayTaskFallback() {
+    return `${t('task_pending')} 🌅`;
+  }
+
+  function normalizeGoalText(text) {
+    return String(text || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
+  function taskEqualsWeekly(task, weekly) {
+    const a = normalizeGoalText(task);
+    const b = normalizeGoalText(weekly);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (a.length >= 12 && b.length >= 12 && (a.includes(b) || b.includes(a))) return true;
+    return false;
+  }
+
+  function isValidTask(task) {
+    if (!task) return false;
+    if (task.length > 150) return false;
+    const invalidStarts = ['Мне кажется', 'Я думаю', 'Привет', 'Слушай', 'Кстати'];
+    if (invalidStarts.some((s) => task.startsWith(s))) return false;
+    if (task.includes('?') && task.length < 30) return false;
+    const low = task.toLowerCase();
+    if (
+      /^привет[,\s!👋]/.test(low)
+      || low.includes('доброе утро')
+      || low.includes('давай начн')
+      || low.includes('продуктивн')
+      || (low.match(/\?/g) || []).length >= 2
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  function displayTodayTask(prof) {
+    const raw = (prof.today_task || '').trim();
+    if (!isValidTask(raw)) return '';
+    if (taskEqualsWeekly(raw, prof.weekly_goal)) return '';
+    return raw;
+  }
+
+  function weeklyGoalText(prof) {
+    const wg = (prof.weekly_goal || '').trim();
+    if (wg) return wg;
+    const method = (prof.method || '').trim();
+    if (method) return method;
+    const main = (prof.main_goal || prof.final_goal || '').trim();
+    if (main.length > 100) return `${main.slice(0, 97)}…`;
+    return main || t('weekly_fallback');
+  }
+
+  function effectiveStreak(prof) {
+    return Math.max(0, Number(prof.display_streak ?? prof.streak ?? 0));
+  }
+
+  function taskAppliesToday(task, todayIso) {
+    if (task.status && task.status !== 'active') return false;
     const r = task.repeat || 'none';
     if (r === 'daily') return true;
     if (r === 'weekly') {
       const days = Array.isArray(task.days_of_week) ? task.days_of_week : [];
-      const key = dowKeyFromLocalDate(parseISODate(iso));
-      return days.includes(key);
+      return days.includes(dowKeyFromDate(parseISODate(todayIso)));
     }
-    return (task.date || '') === iso;
+    return (task.date || '') === todayIso;
   }
 
-  function taskMissed(task, todayIso) {
-    if ((task.repeat || 'none') !== 'none' || task.done) return false;
-    const td = task.date || '';
-    return td < todayIso;
-  }
-
-  async function loadTasks() {
-    tasksCache = [];
-    if (!BACKEND_URL) return;
-    if (!(tg && tg.initData) && !DEMO_TG) return;
-    const resp = await apiFetch('/api/tasks');
-    if (!resp.ok) return;
-    const data = await resp.json();
-    tasksCache = Array.isArray(data.tasks) ? data.tasks : [];
-  }
-
-  function renderPlanToday() {
-    const host = document.getElementById('plan-today-list');
-    if (!host) return;
+  function todayTasksList(prof, list) {
     const todayIso = localISODate();
-    const list = tasksCache.filter((t) => taskAppliesOnDate(t, todayIso));
-    if (!list.length) {
-      host.innerHTML = '<div class="plan-empty">Сегодня пока без задач — добавь первую ✨</div>';
+    const out = list
+      .filter((t) => taskAppliesToday(t, todayIso))
+      .sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
+
+    const focus = displayTodayTask(prof);
+    if (!focus) return out;
+
+    const dup = out.some((t) => {
+      const title = (t.title || '').trim().toLowerCase();
+      return title && (title === focus.toLowerCase() || focus.toLowerCase().includes(title));
+    });
+    if (!dup) {
+      const focusStatus = todayTaskCompletionStatus(prof);
+      out.unshift({
+        id: '__today_focus__',
+        title: focus,
+        done: focusStatus === 'done',
+        missed: focusStatus === 'missed',
+        status: focusStatus,
+        virtual: true,
+      });
+    }
+    return out;
+  }
+
+  function renderHeader(user, prof) {
+    document.getElementById('user-name').textContent = pickName(user, prof);
+    const levelBadge = document.getElementById('level-badge');
+    if (levelBadge) {
+      const level = prof?.level || { name: t('level_spark'), emoji: '·', key: 'spark' };
+      levelBadge.textContent = `${level.emoji || '·'} ${levelName(level)}`;
+    }
+    const avatar = document.getElementById('avatar');
+    const photo = user?.photo_url || tg?.initDataUnsafe?.user?.photo_url;
+    if (avatar && photo) {
+      avatar.style.backgroundImage = `url("${String(photo).replace(/"/g, '%22')}")`;
+    }
+  }
+
+  function renderMonthGoal(prof) {
+    const text = (prof.main_goal || prof.final_goal || prof.raw_goal || '—').trim();
+    document.getElementById('month-goal').textContent = text;
+  }
+
+  function renderWeekCard(prof) {
+    const week = Number(prof.current_week || 1);
+    const pct = Math.max(0, Math.min(100, Number(prof.weekly_score || 0)));
+
+    document.getElementById('week-badge').textContent = weekBadgeText(week);
+    document.getElementById('week-goal').textContent = weeklyGoalText(prof);
+    document.getElementById('week-pct').textContent = `${pct}%`;
+
+    const fill = document.getElementById('week-fill');
+    if (fill) {
+      fill.style.width = '0%';
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          fill.style.width = `${pct}%`;
+        });
+      });
+    }
+  }
+
+  function renderTasks(prof, list) {
+    const host = document.getElementById('task-list');
+    const todayItems = todayTasksList(prof, list);
+
+    if (!todayItems.length) {
+      const emptyMsg = displayTodayTask(prof)
+        ? t('tasks_empty_discuss')
+        : todayTaskFallback();
+      host.innerHTML = `<p class="task-empty">${escapeHtml(emptyMsg)}</p>`;
       return;
     }
-    list.sort((a, b) => String(a.time).localeCompare(String(b.time)));
-    host.innerHTML = list.map((t) => {
-      const st = t.done ? 'done' : taskMissed(t, todayIso) ? 'missed' : '';
-      const meta = t.done ? 'сделано' : t.repeat === 'daily' ? 'каждый день' : t.repeat === 'weekly' ? 'по дням' : 'разово';
+
+    host.innerHTML = todayItems.map((t) => {
+      const done = Boolean(t.done);
+      const missed = Boolean(t.missed);
+      const isFocus = t.id === '__today_focus__';
+      const id = escapeHtml(t.id);
+      const timeLabel = t.time ? formatTimeForDisplay(t.time, '') : '';
+      const timeHtml = timeLabel
+        ? `<span class="task-time">${escapeHtml(timeLabel)}</span>`
+        : '';
+      const checkDisabled = done || missed || isFocus;
+      const checkLabel = done
+        ? t('task_done_aria')
+        : missed
+          ? t('task_missed_aria')
+          : isFocus
+            ? t('task_focus_aria')
+            : t('task_mark_aria');
+      const textStyle = missed ? ' style="text-decoration:line-through;opacity:0.7"' : '';
       return `
-        <div class="plan-task-row ${st}" data-task-id="${escapeHtml(t.id)}">
-          <div class="plan-task-time">${escapeHtml(t.time || '')}</div>
-          <div class="plan-task-body">
-            <div class="plan-task-title">${escapeHtml(t.title || '')}</div>
-            <div class="plan-task-meta">${escapeHtml(meta)}</div>
-          </div>
-          <div class="plan-task-actions">
-            <button type="button" class="pt-btn" data-act="done" data-id="${escapeHtml(t.id)}" ${t.done ? 'disabled' : ''}>Сделано</button>
-            <button type="button" class="pt-btn secondary" data-act="postpone" data-id="${escapeHtml(t.id)}">Перенести</button>
-          </div>
+        <div class="task-row">
+          <button type="button" class="task-check${done ? ' done' : ''}${missed ? ' missed' : ''}" data-id="${id}" ${checkDisabled ? 'disabled' : ''} aria-label="${escapeHtml(checkLabel)}">${done ? '✓' : missed ? '✗' : ''}</button>
+          ${timeHtml}
+          <span class="task-text${done ? ' done' : ''}${missed ? ' missed' : ''}"${textStyle}>${escapeHtml(t.title || '')}</span>
         </div>`;
     }).join('');
   }
 
-  function mondayOfDisplayedWeek() {
-    const base = new Date();
-    base.setDate(base.getDate() + planWeekOffset * 7);
-    const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
-    const wd = d.getDay();
-    const diff = wd === 0 ? -6 : 1 - wd;
-    d.setDate(d.getDate() + diff);
-    return d;
-  }
+  function renderStreakCircles(prof) {
+    const streak = effectiveStreak(prof);
+    const container = document.querySelector('.streak-circles');
+    if (!container) return;
 
-  function renderPlanWeek() {
-    const row = document.getElementById('plan-days-row');
-    const title = document.getElementById('plan-week-title');
-    if (!row) return;
-    const mon = mondayOfDisplayedWeek();
-    const labels = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-    const todayIso = localISODate();
-    const parts = [];
+    container.innerHTML = '';
+
     for (let i = 0; i < 7; i++) {
-      const d = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i);
-      const iso = localISODate(d);
-      const num = d.getDate();
-      const dayTasks = tasksCache.filter((t) => taskAppliesOnDate(t, iso));
-      const anyDone = dayTasks.some((x) => x.done);
-      const anyMiss = dayTasks.some((x) => taskMissed(x, todayIso));
-      const anyActive = dayTasks.some((x) => !x.done);
-      let cls = 'day-circle';
-      if (iso === todayIso) cls += ' today';
-      if (anyDone) cls += ' done';
-      else if (anyMiss) cls += ' missed';
-      else if (anyActive) cls += ' partial';
-      let dotCls = 'day-dot';
-      if (anyDone) dotCls += ' done';
-      if (iso === todayIso) dotCls += ' today';
-      parts.push(`<div class="day-item" data-day="${iso}">
-        <div class="day-label">${labels[i]}</div>
-        <div class="${cls}">${num}</div>
-        <div class="${dotCls}"></div>
-      </div>`);
-    }
-    row.innerHTML = parts.join('');
-    if (title) {
-      const end = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6);
-      title.textContent = `${mon.getDate()}.${String(mon.getMonth() + 1).padStart(2, '0')} — ${end.getDate()}.${String(end.getMonth() + 1).padStart(2, '0')}`;
+      const wrap = document.createElement('div');
+      wrap.className = 'streak-day-wrap';
+
+      if (i < streak) {
+        const isToday = i === streak - 1;
+        wrap.innerHTML = `
+          <div class="streak-day active${isToday ? ' is-today' : ''}">
+            <img src="./spicespace-logo.jpg" alt="" class="streak-logo-icon"/>
+          </div>
+        `;
+      } else {
+        wrap.innerHTML = '<div class="streak-day empty"></div>';
+      }
+
+      container.appendChild(wrap);
     }
   }
 
-  async function refreshPlanUI() {
-    await loadTasks();
-    renderPlanToday();
-    renderPlanWeek();
+  function renderStreak(prof) {
+    const streak = effectiveStreak(prof);
+    const countEl = document.getElementById('streak-count');
+    if (countEl) {
+      countEl.textContent = streak > 0
+        ? `${streak} ${pluralizeDays(streak)} 🔥`
+        : t('streak_start');
+    }
+    renderStreakCircles(prof);
   }
 
-  const SIGNAL_LABELS = {
-    energy: 'Больше энергии утром',
-    anxiety: 'Меньше тревоги',
-    sleep: 'Лучше сон',
-    stability: 'Больше стабильности в делах',
-    joy: 'Больше удовольствия от дня',
-  };
+  function renderTimes(prof) {
+    const p = prof || profile;
+    if (!p && !displayTimesCache) return;
+    if (!displayTimesCache && p) {
+      syncDisplayTimesCache(
+        profileMorningTime(p),
+        profileEveningTime(p),
+      );
+    }
+    const dt = getDisplayTimes(p);
+    paintMainScreenTimes(dt.morning, dt.evening);
+  }
 
-  const SIGNAL_ICONS = {
-    energy: '⚡',
-    anxiety: '🌿',
-    sleep: '🌙',
-    stability: '⚖️',
-    joy: '🌞',
-  };
+  function renderProfile(prof) {
+    if (!prof) return;
+    profile = prof;
+    const user = tg?.initDataUnsafe?.user || null;
+    renderAll(user);
+  }
 
-  function initTelegram() {
-    if (!tg) return null;
-    document.body.classList.add('tg-app');
-    try { tg.ready(); } catch (_) {}
-    try { tg.expand(); } catch (_) {}
-    try { tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch (_) {}
+  function renderAll(user) {
+    if (!profile) return;
+    applyGreeting();
+    renderHeader(user, profile);
+    renderMonthGoal(profile);
+    renderWeekCard(profile);
+    renderTasks(profile, tasks);
+    renderStreak(profile);
+    renderTimes(profile);
+    const dt = getDisplayTimes(profile);
+    paintMainScreenTimes(dt.morning, dt.evening);
+    document.getElementById('today-date').textContent = formatTodayTag();
+  }
+
+  function syncTimezone() {
     try {
-      if (typeof tg.setHeaderColor === 'function') tg.setHeaderColor(BRAND.cream);
-      if (typeof tg.setBackgroundColor === 'function') tg.setBackgroundColor(BRAND.cream);
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (!tz) return;
+      apiFetch('/api/profile/timezone', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ timezone: tz }),
+      }).catch(() => {});
     } catch (_) {}
-
-    syncViewportHeight();
-    if (typeof tg.onEvent === 'function') {
-      tg.onEvent('viewportChanged', syncViewportHeight);
-    }
-    return tg;
   }
 
-  function syncViewportHeight() {
-    if (!tg) return;
-    const h = tg.viewportStableHeight || tg.viewportHeight;
-    if (h && Number.isFinite(h)) {
-      document.documentElement.style.setProperty('--tg-app-height', h + 'px');
-    }
-  }
-
-  function pickDisplayName(user, profile) {
-    if (profile && profile.name) return String(profile.name).trim();
-    if (!user) return 'Анна';
-    const name = (user.first_name || user.username || '').toString().trim();
-    if (!name) return 'Друг';
-    return name.length > 18 ? name.slice(0, 18).trim() + '…' : name;
-  }
-
-  function cssEscapeUrl(url) {
-    return String(url).replace(/"/g, '%22');
-  }
-
-  function applyDynamicGreeting() {
-    const el = document.getElementById('greeting');
-    if (!el) return;
-    const h = new Date().getHours();
-    let g = 'Доброе утро,';
-    if (h >= 12 && h < 18) g = 'Добрый день,';
-    else if (h >= 18 && h < 23) g = 'Добрый вечер,';
-    else if (h >= 23 || h < 5) g = 'Доброй ночи,';
-    el.textContent = g;
-  }
-
-  function startStatusClock() {
-    const el = document.getElementById('status-time');
-    if (!el) return;
-    const tick = () => {
-      const d = new Date();
-      const hh = String(d.getHours()).padStart(2, '0');
-      const mm = String(d.getMinutes()).padStart(2, '0');
-      el.textContent = `${hh}:${mm}`;
-    };
-    tick();
-    setInterval(tick, 30 * 1000);
-  }
-
-  function haptic(type) {
+  async function checkMilestone() {
     try {
-      if (!tg || !tg.HapticFeedback) return;
-      if (type === 'select') tg.HapticFeedback.selectionChanged();
-      else if (type === 'success') tg.HapticFeedback.notificationOccurred('success');
-      else tg.HapticFeedback.impactOccurred('light');
+      const resp = await apiFetch('/api/milestone');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data?.milestone) {
+        showMilestoneCard(data.milestone);
+      }
     } catch (_) {}
+  }
+
+  function showMilestoneCard(milestone) {
+    document.querySelector('.milestone-overlay')?.remove();
+
+    const completedDays = Number(milestone.days) || 0;
+    const totalDots = 12;
+    const dotsHTML = Array.from({ length: totalDots }, (_, i) => {
+      if (i < completedDays - 1) return '<div class="dot filled"></div>';
+      if (i === completedDays - 1) return '<div class="dot current"></div>';
+      return '<div class="dot"></div>';
+    }).join('');
+
+    const overlay = document.createElement('div');
+    overlay.className = 'milestone-overlay';
+    overlay.innerHTML = `
+      <div class="milestone-card">
+        <div class="handle"></div>
+        <div class="star-wrap">
+          <div class="star">✦</div>
+        </div>
+        <div class="days-row">
+          <span class="days-number">${escapeHtml(String(completedDays))}</span>
+          <span class="days-label">${escapeHtml(t('streak_days'))}</span>
+        </div>
+        <div class="subtitle">${escapeHtml(t('milestone_subtitle'))}</div>
+        <div class="message">
+          <p>${escapeHtml(milestone.message || '')}</p>
+        </div>
+        <div class="dots-row">${dotsHTML}</div>
+        <button type="button" class="btn-milestone">${escapeHtml(t('milestone_btn'))}</button>
+      </div>
+    `;
+    overlay.querySelector('.btn-milestone')?.addEventListener('click', () => overlay.remove());
+    document.body.appendChild(overlay);
+    setTimeout(() => launchConfetti(), 400);
+  }
+
+  function launchConfetti() {
+    const colors = ['#D4F26B', '#ffffff', '#2a2a2a'];
+    for (let i = 0; i < 60; i++) {
+      setTimeout(() => {
+        const c = document.createElement('div');
+        c.className = 'confetti-piece';
+        c.style.left = Math.random() * 100 + 'vw';
+        c.style.background = colors[Math.floor(Math.random() * colors.length)];
+        c.style.animationDuration = (0.9 + Math.random() * 0.8) + 's';
+        document.body.appendChild(c);
+        setTimeout(() => c.remove(), 2000);
+      }, i * 20);
+    }
   }
 
   async function fetchProfile() {
-    if (!BACKEND_URL) return { profile: null, user: null, status: 'no-backend' };
-    if (!(tg && tg.initData) && !DEMO_TG) return { profile: null, user: null, status: 'no-init-data' };
+    const resp = await apiFetch(`/api/profile?_t=${Date.now()}`);
+    if (resp.status === 401 || resp.status === 404) return { ok: false, status: resp.status };
+    if (!resp.ok) return { ok: false, status: resp.status };
+    const data = await resp.json();
+    return { ok: true, profile: data.profile || data, user: data.user || null };
+  }
+
+  /**
+   * Fresh profile from API (cache-bust).
+   * @param {{ skipRender?: boolean }} opts — skipRender: only update `profile`, do not repaint UI
+   */
+  async function loadProfile(opts = {}) {
     try {
-      const resp = await apiFetch('/api/profile');
-      if (resp.status === 401) {
-        return { profile: null, user: null, status: 'unauthorized' };
-      }
-      if (!resp.ok) {
-        return { profile: null, user: null, status: 'error' };
-      }
-      const data = await resp.json();
-      const profile = data.profile || data;
-      const hasGoal = profile && (
-        profile.main_goal || profile.raw_goal || profile.final_goal
-      );
-      return {
-        profile: hasGoal ? profile : null,
-        user: data.user || null,
-        status: hasGoal ? 'ok' : 'empty',
-      };
-    } catch (e) {
-      console.warn('fetchProfile failed', e);
-      return { profile: null, user: null, status: 'error' };
-    }
-  }
+      const result = await fetchProfile();
+      if (!result.ok || !result.profile) return result;
 
-  function applyIdentity(user, profile) {
-    const nameEl = document.getElementById('user-name');
-    if (nameEl) {
-      const name = pickDisplayName(user, profile);
-      nameEl.textContent = `${name} ✦`;
-    }
-
-    const avatarEl = document.getElementById('avatar');
-    const tgUser = tg && tg.initDataUnsafe ? tg.initDataUnsafe.user : null;
-    const photo = (user && user.photo_url) || (tgUser && tgUser.photo_url);
-    if (avatarEl && photo) {
-      avatarEl.style.backgroundImage = `url("${cssEscapeUrl(photo)}")`;
-      avatarEl.textContent = '';
-    }
-  }
-
-  function renderEmpty() {
-    document.body.classList.add('mode-empty');
-    const empty = document.getElementById('empty-state');
-    const main = document.getElementById('main-content');
-    if (empty) empty.hidden = false;
-    if (main) main.hidden = true;
-  }
-
-  function renderProfile(profile) {
-    document.body.classList.remove('mode-empty');
-    lastProfile = profile;
-    const empty = document.getElementById('empty-state');
-    const main = document.getElementById('main-content');
-    if (empty) empty.hidden = true;
-    if (main) main.hidden = false;
-
-    const goalType = (profile.goal_type || 'measurable').toLowerCase();
-    document.body.classList.toggle('mode-measurable', goalType === 'measurable');
-    document.body.classList.toggle('mode-qualitative', goalType === 'qualitative');
-
-    renderStreak(profile);
-    renderToday(profile);
-    renderBotMessage(profile);
-    renderGoalsSection(profile);
-  }
-
-  function renderStreak(profile) {
-    const streak = Number(profile.streak || 0);
-    const num = document.getElementById('streak-number');
-    if (num) num.textContent = String(streak);
-
-    const sub = document.getElementById('streak-sub');
-    if (sub) {
-      if (streak <= 0) sub.textContent = 'начинаем серию';
-      else if (streak === 1) sub.textContent = 'первый день в движении';
-      else sub.textContent = 'дней подряд в движении';
-    }
-
-    const dots = document.getElementById('streak-dots');
-    if (!dots) return;
-    const total = 7;
-    const todayIdx = Math.min(streak, total - 1);
-    const html = [];
-    for (let i = 0; i < total; i++) {
-      let cls = 'dot';
-      if (i < streak) cls += ' done';
-      else if (i === todayIdx && streak < total) cls += ' today';
-      html.push(`<div class="${cls}"></div>`);
-    }
-    dots.innerHTML = html.join('');
-  }
-
-  function renderToday(profile) {
-    const goalType = (profile.goal_type || 'measurable').toLowerCase();
-    const label = document.getElementById('today-label');
-    const time = document.getElementById('today-time');
-    const desc = document.getElementById('today-desc');
-    if (!label || !time || !desc) return;
-
-    if (goalType === 'qualitative') {
-      label.textContent = 'Сегодня в фокусе';
-      time.textContent = '🌿 Состояние, а не цифра';
-      const focus = (profile.raw_goal || profile.final_goal || 'твоё состояние').trim();
-      desc.textContent = focus.length > 80 ? focus.slice(0, 80) + '…' : focus;
-    } else {
-      label.textContent = 'Сегодня в фокусе';
-      const fg = (profile.final_goal || profile.raw_goal || 'твоя цель').trim();
-      time.textContent = '🎯 Один маленький шаг';
-      desc.textContent = fg.length > 80 ? fg.slice(0, 80) + '…' : fg;
-    }
-  }
-
-  function renderBotMessage(profile) {
-    const text = document.getElementById('bot-text');
-    const time = document.getElementById('bot-time');
-    if (!text) return;
-    const name = (profile.name || '').trim();
-    const goalType = (profile.goal_type || 'measurable').toLowerCase();
-    const streak = Number(profile.streak || 0);
-    const greeting = name ? `${name}, ` : '';
-
-    if (goalType === 'qualitative') {
-      text.textContent = streak > 0
-        ? `${greeting}ты уже ${streak} ${pluralize(streak, ['день', 'дня', 'дней'])} подряд держишься рядом со своим состоянием. Так и идём — мягко.`
-        : `${greeting}сегодня — один маленький шаг ближе к состоянию, которое ты хочешь. Без давления.`;
-    } else {
-      text.textContent = streak > 0
-        ? `${greeting}ты уже ${streak} ${pluralize(streak, ['день', 'дня', 'дней'])} не сливаешься. Это не случайность. Это ты. 🔥`
-        : `${greeting}у тебя есть цель. Сегодня нужен один маленький шаг — и серия начнётся.`;
-    }
-
-    if (time) {
-      const d = new Date();
-      time.textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-    }
-  }
-
-  function pluralize(n, forms) {
-    const a = Math.abs(n) % 100;
-    const b = a % 10;
-    if (a > 10 && a < 20) return forms[2];
-    if (b > 1 && b < 5) return forms[1];
-    if (b === 1) return forms[0];
-    return forms[2];
-  }
-
-  function renderGoalsSection(profile) {
-    const section = document.getElementById('goals-section-title');
-    const list = document.getElementById('goals-list');
-    if (!section || !list) return;
-
-    const goalType = (profile.goal_type || 'measurable').toLowerCase();
-    const week = Number(profile.current_week || 1);
-
-    if (goalType === 'qualitative') {
-      section.textContent = `Отслеживаем · Неделя ${week}`;
-      list.innerHTML = '';
-      const signals = Array.isArray(profile.goal_signals) ? profile.goal_signals : [];
-      if (!signals.length) {
-        list.appendChild(makeGoalCard({
-          icon: '🌿',
-          iconClass: 'spirit',
-          name: profile.raw_goal || 'твоё состояние',
-          fillClass: 'spirit',
-          percent: profile.weekly_score || 0,
-          meta: 'Признаки появятся позже',
-          done: false,
-        }));
-        return;
-      }
-      signals.forEach((sig) => {
-        list.appendChild(makeGoalCard({
-          icon: SIGNAL_ICONS[sig] || '🌿',
-          iconClass: 'spirit',
-          name: SIGNAL_LABELS[sig] || sig,
-          fillClass: 'spirit',
-          percent: profile.weekly_score || 0,
-          meta: 'отслеживаем',
-          done: false,
-        }));
-      });
-      return;
-    }
-
-    section.textContent = `Моя цель · Неделя ${week}`;
-    list.innerHTML = '';
-    const finalGoal = (profile.final_goal || profile.raw_goal || 'твоя цель').trim();
-    const percent = Math.max(0, Math.min(100, Number(profile.weekly_score || 0)));
-    const completed = Array.isArray(profile.completed_tasks) ? profile.completed_tasks.length : 0;
-    const meta = completed > 0
-      ? `${completed} ${pluralize(completed, ['задача', 'задачи', 'задач'])} сделана`
-      : 'двигаемся первыми шагами';
-    list.appendChild(makeGoalCard({
-      icon: '🎯',
-      iconClass: 'body',
-      name: finalGoal,
-      fillClass: 'body',
-      percent,
-      meta,
-      done: percent >= 100,
-    }));
-  }
-
-  function makeGoalCard(opts) {
-    const { icon, iconClass, name, fillClass, percent, meta, done } = opts;
-    const card = document.createElement('div');
-    card.className = 'goal-card' + (done ? ' active' : '');
-    card.innerHTML = `
-      <div class="goal-icon ${iconClass}">${escapeHtml(icon)}</div>
-      <div class="goal-info">
-        <div class="goal-name">${escapeHtml(name)}</div>
-        <div class="progress-bar"><div class="progress-fill ${fillClass}" style="width:${percent}%"></div></div>
-        <div class="goal-meta">
-          <span class="goal-percent">${percent ? percent + '% выполнено' : 'старт'}</span>
-          <span class="goal-days">${escapeHtml(meta)}</span>
-        </div>
-      </div>
-      <div class="goal-check ${done ? 'done' : ''}">${done ? '✓' : ''}</div>
-    `;
-    return card;
-  }
-
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
-  function bindGoals() {
-    document.getElementById('goals-list')?.addEventListener('click', (e) => {
-      const card = e.target.closest('.goal-card');
-      if (!card || card.classList.contains('skeleton')) return;
-      const check = card.querySelector('.goal-check');
-      if (!check) return;
-      if (check.classList.contains('done')) {
-        check.classList.remove('done');
-        check.textContent = '';
-        card.classList.remove('active');
+      profile = result.profile;
+      const stored = loadDisplayTimesFromStorage();
+      if (stored) {
+        profile = applyTimesToProfile(profile, stored.morning, stored.evening);
+        syncDisplayTimesCache(stored.morning, stored.evening);
       } else {
-        check.classList.add('done');
-        check.textContent = '✓';
-        card.classList.add('active');
-        haptic('success');
+        syncDisplayTimesCache(
+          profileMorningTime(profile),
+          profileEveningTime(profile),
+        );
       }
-    });
+
+      if (!opts.skipRender) {
+        const user = result.user || tg?.initDataUnsafe?.user || null;
+        renderProfile(profile);
+      } else {
+        const dt = getDisplayTimes(profile);
+        paintMainScreenTimes(dt.morning, dt.evening);
+      }
+      return result;
+    } catch (e) {
+      console.error('loadProfile failed:', e);
+      return { ok: false, profile: null, user: null, status: 0 };
+    }
   }
 
-  function bindTodayActions() {
-    const card = document.getElementById('today-card');
-    if (!card) return;
-    card.querySelectorAll('[data-action]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const action = btn.getAttribute('data-action');
-        if (action === 'mark-done') {
-          card.classList.add('done');
-          btn.textContent = '✓ Готово!';
-          haptic('success');
-        } else if (action === 'postpone') {
-          haptic('select');
-        }
-      });
-    });
+  async function fetchTasks() {
+    const resp = await apiFetch('/api/tasks');
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return Array.isArray(data.tasks) ? data.tasks : [];
   }
 
-  function bindBottomNav() {
-    const items = document.querySelectorAll('.nav-item');
-    const panelHome = document.getElementById('panel-home');
-    const panelPlan = document.getElementById('panel-plan');
-    const scrollArea = document.querySelector('.scroll-area');
-
-    const showPanel = (name) => {
-      if (panelHome) {
-        const hideHome = name === 'plan';
-        panelHome.hidden = hideHome;
-        panelHome.classList.toggle('tab-panel--visible', !hideHome);
-      }
-      if (panelPlan) {
-        panelPlan.hidden = name !== 'plan';
-        panelPlan.classList.toggle('tab-panel--visible', name === 'plan');
-      }
-      if (scrollArea) scrollArea.scrollTop = 0;
-    };
-
-    items.forEach((item) => {
-      item.addEventListener('click', () => {
-        items.forEach((i) => i.classList.remove('active'));
-        item.classList.add('active');
-        haptic('select');
-        const tab = item.getAttribute('data-tab') || 'home';
-        if (tab === 'bot') {
-          const link = BOT_USERNAME ? `https://t.me/${BOT_USERNAME}` : '';
-          if (link && tg && typeof tg.openTelegramLink === 'function') {
-            try { tg.openTelegramLink(link); } catch (_) {}
-          } else if (link) window.open(link, '_blank');
-          return;
-        }
-        if (tab === 'goals') {
-          showPanel('goals');
-          document.getElementById('goals-section-title')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          return;
-        }
-        if (tab === 'plan') {
-          showPanel('plan');
-          refreshPlanUI();
-          return;
-        }
-        showPanel('home');
-      });
-    });
-  }
-
-  function bindPlanInteractions() {
-    document.getElementById('plan-week-nav')?.addEventListener('click', (e) => {
-      const b = e.target.closest('button[data-plan-nav]');
-      if (!b) return;
-      const d = Number(b.getAttribute('data-plan-nav') || 0);
-      planWeekOffset += d;
-      renderPlanWeek();
-      haptic('select');
-    });
-
-    document.getElementById('plan-today-list')?.addEventListener('click', async (e) => {
-      const btn = e.target.closest('button[data-act]');
-      if (!btn) return;
-      const id = btn.getAttribute('data-id');
-      const act = btn.getAttribute('data-act');
-      if (!id) return;
-      const task = tasksCache.find((x) => x.id === id);
-      if (act === 'done') {
-        const resp = await apiFetch(`/api/tasks/${encodeURIComponent(id)}/done`, { method: 'POST' });
-        if (resp.ok) {
-          haptic('success');
-          await refreshPlanUI();
-        }
-        return;
-      }
-      if (act === 'postpone' && task) {
-        const patch = (task.repeat || 'none') === 'none'
-          ? { date: addDaysISO(task.date || localISODate(), 1) }
-          : { snooze_until: localISODate() };
-        const resp = await apiFetch(`/api/tasks/${encodeURIComponent(id)}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(patch),
-        });
-        if (resp.ok) {
-          haptic('select');
-          await refreshPlanUI();
-        }
-      }
-    });
-  }
-
-  function readSheetForm() {
-    const title = (document.getElementById('tf-title')?.value || '').trim();
-    const date = document.getElementById('tf-date')?.value || '';
-    const timeRaw = document.getElementById('tf-time')?.value || '';
-    const tp = timeRaw.split(':');
-    const time = tp.length >= 2
-      ? `${String(Number(tp[0] || 0)).padStart(2, '0')}:${String(tp[1] || '00').padStart(2, '0').slice(0, 2)}`
-      : '';
-    const repeatEl = document.querySelector('#tf-repeat .seg-btn.active');
-    const repeat = repeatEl?.getAttribute('data-repeat') || 'none';
-    const remindEl = document.querySelector('#tf-remind .seg-btn.active');
-    const remind = Number(remindEl?.getAttribute('data-remind') || 0);
-    const dow = [];
-    document.querySelectorAll('#tf-dow .dow-btn.active').forEach((b) => {
-      const k = b.getAttribute('data-dow');
-      if (k) dow.push(k);
-    });
-    const tz = (lastProfile && lastProfile.timezone) ? String(lastProfile.timezone) : 'Asia/Ho_Chi_Minh';
-    return { title, date, time, repeat, remind_before_minutes: remind, days_of_week: dow, timezone: tz };
-  }
-
-  function openTaskSheet() {
-    const sh = document.getElementById('task-sheet');
-    if (!sh) return;
-    document.getElementById('tf-title').value = '';
-    document.getElementById('tf-date').value = localISODate();
-    document.getElementById('tf-time').value = '14:00';
-    document.querySelectorAll('#tf-repeat .seg-btn').forEach((b) => b.classList.remove('active'));
-    document.querySelector('#tf-repeat .seg-btn[data-repeat="none"]')?.classList.add('active');
-    document.querySelectorAll('#tf-remind .seg-btn').forEach((b) => b.classList.remove('active'));
-    document.querySelector('#tf-remind .seg-btn[data-remind="0"]')?.classList.add('active');
-    document.querySelectorAll('#tf-dow .dow-btn').forEach((b) => b.classList.remove('active'));
-    document.getElementById('tf-dow-wrap').hidden = true;
-    sh.hidden = false;
-  }
-
-  function closeTaskSheet() {
-    const sh = document.getElementById('task-sheet');
-    if (sh) sh.hidden = true;
-  }
-
-  function bindTaskSheet() {
-    document.getElementById('btn-add-task')?.addEventListener('click', () => {
-      haptic('select');
-      openTaskSheet();
-    });
-    document.getElementById('task-sheet-backdrop')?.addEventListener('click', closeTaskSheet);
-    document.getElementById('task-sheet-cancel')?.addEventListener('click', closeTaskSheet);
-
-    document.getElementById('tf-repeat')?.addEventListener('click', (e) => {
-      const b = e.target.closest('.seg-btn[data-repeat]');
-      if (!b) return;
-      document.querySelectorAll('#tf-repeat .seg-btn').forEach((x) => x.classList.remove('active'));
-      b.classList.add('active');
-      const r = b.getAttribute('data-repeat');
-      document.getElementById('tf-dow-wrap').hidden = r !== 'weekly';
-    });
-
-    document.getElementById('tf-remind')?.addEventListener('click', (e) => {
-      const b = e.target.closest('.seg-btn[data-remind]');
-      if (!b) return;
-      document.querySelectorAll('#tf-remind .seg-btn').forEach((x) => x.classList.remove('active'));
-      b.classList.add('active');
-    });
-
-    document.getElementById('tf-dow')?.addEventListener('click', (e) => {
-      const b = e.target.closest('.dow-btn[data-dow]');
-      if (!b) return;
-      b.classList.toggle('active');
-      haptic('select');
-    });
-
-    document.getElementById('task-sheet-save')?.addEventListener('click', async () => {
-      const f = readSheetForm();
-      if (!f.title) {
-        haptic('select');
-        return;
-      }
-      if (f.repeat === 'weekly' && !f.days_of_week.length) {
-        haptic('select');
-        return;
-      }
-      const body = {
-        title: f.title,
-        description: '',
-        date: f.date,
-        time: f.time,
-        repeat: f.repeat,
-        days_of_week: f.days_of_week,
-        remind_before_minutes: f.remind_before_minutes,
-        timezone: f.timezone,
-      };
-      const resp = await apiFetch('/api/tasks', {
+  async function markStreakOnOpen() {
+    try {
+      const resp = await apiFetch('/api/mark-day', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ streak_only: true }),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const keep = getDisplayTimes(profile);
+      if (data.profile) {
+        profile = applyTimesToProfile(data.profile, keep.morning, keep.evening);
+      } else if (profile) {
+        if (data.streak != null) profile.streak = data.streak;
+        if (data.display_streak != null) profile.display_streak = data.display_streak;
+      }
+      renderStreak(profile);
+      paintMainScreenTimes(keep.morning, keep.evening);
+    } catch (_) {}
+  }
+
+  async function markDay(taskCompleted = 'true') {
+    const paths = ['/api/profile/mark-day', '/api/mark-day'];
+    for (const path of paths) {
+      const resp = await apiFetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_completed: taskCompleted }),
       });
       if (resp.ok) {
-        haptic('success');
-        closeTaskSheet();
-        await refreshPlanUI();
+        const data = await resp.json();
+        if (data.profile) return data.profile;
       }
+      if (resp.status !== 404) break;
+    }
+    return null;
+  }
+
+  async function completeTask(id) {
+    if (id === '__today_focus__') {
+      return;
+    }
+    const resp = await apiFetch(`/api/tasks/${encodeURIComponent(id)}/done`, { method: 'POST' });
+    if (resp.ok) tasks = await fetchTasks();
+  }
+
+  async function saveEditName() {
+    const input = document.getElementById('edit-name-input');
+    const newName = (input?.value || '').trim().slice(0, 50);
+    if (!newName) return;
+
+    const saveBtn = document.getElementById('edit-name-save');
+    if (saveBtn) saveBtn.disabled = true;
+
+    const resp = await apiFetch('/api/profile', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
+    });
+
+    if (saveBtn) saveBtn.disabled = false;
+    if (!resp.ok) return;
+
+    const data = await resp.json();
+    if (data.profile) profile = data.profile;
+    else if (profile) profile.name = newName;
+
+    document.getElementById('user-name').textContent = newName;
+    closeEditNameSheet();
+    hapticSuccess();
+  }
+
+  function openEditNameSheet() {
+    const sheet = document.getElementById('edit-name-sheet');
+    const input = document.getElementById('edit-name-input');
+    if (!sheet || !input) return;
+    const current = (profile?.name || document.getElementById('user-name')?.textContent || '').trim();
+    input.value = current === '—' ? '' : current;
+    sheet.hidden = false;
+    setTimeout(() => input.focus(), 50);
+    haptic('light');
+  }
+
+  function closeEditNameSheet() {
+    const sheet = document.getElementById('edit-name-sheet');
+    if (sheet) sheet.hidden = true;
+  }
+
+  function bindEditName() {
+    document.getElementById('edit-name-btn')?.addEventListener('click', openEditNameSheet);
+    document.getElementById('edit-name-backdrop')?.addEventListener('click', closeEditNameSheet);
+    document.getElementById('edit-name-cancel')?.addEventListener('click', closeEditNameSheet);
+    document.getElementById('edit-name-save')?.addEventListener('click', saveEditName);
+    document.getElementById('edit-name-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') saveEditName();
     });
   }
 
-  function bindEmptyState() {
-    const btn = document.getElementById('open-bot-btn');
-    if (!btn) return;
-    btn.addEventListener('click', () => {
-      if (btn.dataset.busy === '1') return;
-      btn.dataset.busy = '1';
-      haptic('success');
+  async function saveEditTimes() {
+    const morningRaw = document.getElementById('et-morning')?.value || '';
+    const eveningRaw = document.getElementById('et-evening')?.value || '';
+    const morning = formatTimeHHMM(morningRaw, '');
+    const evening = formatTimeHHMM(eveningRaw, '');
+    if (!morning || !evening) return;
 
-      const originalText = btn.textContent;
-      btn.textContent = 'Открываю чат…';
+    const saveBtn = document.getElementById('edit-times-save');
+    if (saveBtn) saveBtn.disabled = true;
+
+    try {
+      const resp = await apiFetch('/api/profile/times', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ morning_time: morning, evening_time: evening }),
+      });
+      if (!resp.ok) {
+        alert(t('save_failed') || 'Could not save. Try again.');
+        return;
+      }
+
+      const data = await resp.json();
+      profile = applyTimesToProfile(data.profile || profile || {}, morning, evening);
+      syncDisplayTimesCache(morning, evening);
+      saveDisplayTimesToStorage(morning, evening);
+      paintMainScreenTimes(morning, evening);
+
+      const reload = await loadProfile({ skipRender: true });
+      if (reload.ok && reload.profile) {
+        profile = applyTimesToProfile(reload.profile, morning, evening);
+      }
+      paintMainScreenTimes(morning, evening);
+
+      closeEditTimesSheet();
+      requestAnimationFrame(() => paintMainScreenTimes(morning, evening));
+      setTimeout(() => paintMainScreenTimes(morning, evening), 120);
+      hapticSuccess();
+    } catch (e) {
+      console.error('Failed to save times:', e);
+      alert(t('save_failed') || 'Could not save. Try again.');
+    } finally {
+      if (saveBtn) saveBtn.disabled = false;
+    }
+  }
+
+  async function openEditTimesSheet() {
+    const sheet = document.getElementById('edit-times-sheet');
+    const morningInput = document.getElementById('et-morning');
+    const eveningInput = document.getElementById('et-evening');
+    if (!sheet || !morningInput || !eveningInput) return;
+
+    if (BACKEND_URL && !isNoInitData()) {
+      await loadProfile({ skipRender: true });
+    }
+
+    const dt = getDisplayTimes(profile);
+    morningInput.value = dt.morning;
+    eveningInput.value = dt.evening;
+    paintMainScreenTimes(dt.morning, dt.evening);
+    sheet.hidden = false;
+    haptic('light');
+  }
+
+  function closeEditTimesSheet() {
+    const sheet = document.getElementById('edit-times-sheet');
+    if (sheet) sheet.hidden = true;
+  }
+
+  function bindEditTimes() {
+    document.getElementById('edit-times-btn')?.addEventListener('click', openEditTimesSheet);
+    document.getElementById('edit-times-backdrop')?.addEventListener('click', closeEditTimesSheet);
+    document.getElementById('edit-times-cancel')?.addEventListener('click', closeEditTimesSheet);
+    document.getElementById('edit-times-save')?.addEventListener('click', saveEditTimes);
+  }
+
+  function bindEvents() {
+    document.getElementById('sync-banner-open')?.addEventListener('click', openBotChat);
+    document.getElementById('empty-open-bot')?.addEventListener('click', openBotChat);
+
+    document.querySelectorAll('.tab-bar__btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const tab = btn.getAttribute('data-tab');
+        if (tab) switchTab(tab);
+      });
+    });
+
+    document.getElementById('task-list')?.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.task-check');
+      if (!btn || btn.disabled) return;
+      const id = btn.getAttribute('data-id');
+      if (!id) return;
       btn.disabled = true;
+      await completeTask(id);
+      renderTasks(profile, tasks);
+      renderStreak(profile);
+    });
 
-      // Deep-link с параметром ?start=onboarding автоматически отправит
-      // боту команду /start onboarding — пользователю не надо вводить руками.
-      const link = BOT_USERNAME
-        ? `https://t.me/${BOT_USERNAME}?start=onboarding`
-        : '';
+    document.getElementById('btn-reset')?.addEventListener('click', async () => {
+      if (!confirm(t('confirm_reset'))) return;
+      await apiFetch('/api/profile/reset', { method: 'POST' });
+      if (tg) tg.close();
+    });
 
-      const opened = (() => {
-        if (link && tg && typeof tg.openTelegramLink === 'function') {
-          try { tg.openTelegramLink(link); return true; } catch (_) {}
-        }
-        if (link) {
-          try { window.open(link, '_blank'); return true; } catch (_) {}
-        }
-        return false;
-      })();
+    document.getElementById('btn-subscription')?.addEventListener('click', () => {
+      alert(t('subscription_soon'));
+    });
 
-      // Закрываем Mini App, чтобы пользователь увидел чат с ботом
-      // и пришедшее сообщение от /start. В большинстве клиентов
-      // openTelegramLink уже закрывает Mini App, но подстрахуемся.
-      setTimeout(() => {
-        if (tg && typeof tg.close === 'function') {
-          try { tg.close(); return; } catch (_) {}
-        }
-        // Если по какой-то причине ничего не сработало —
-        // возвращаем кнопку в исходное состояние.
-        btn.textContent = originalText;
-        btn.disabled = false;
-        btn.dataset.busy = '';
-      }, opened ? 250 : 0);
+    document.getElementById('btn-stop')?.addEventListener('click', async () => {
+      await apiFetch('/api/profile/stop', { method: 'POST' });
+      alert(t('bot_stopped'));
+      if (tg) tg.close();
     });
   }
 
   async function start() {
+    applyStaticI18n();
     initTelegram();
-    applyDynamicGreeting();
-    startStatusClock();
-    bindGoals();
-    bindTodayActions();
-    bindBottomNav();
-    bindPlanInteractions();
-    bindTaskSheet();
-    bindEmptyState();
+    bindEvents();
+    bindEditName();
+    bindEditTimes();
 
-    const tgUser = tg && tg.initDataUnsafe ? tg.initDataUnsafe.user : null;
-    applyIdentity(tgUser, null);
+    const tgUser = tg?.initDataUnsafe?.user || null;
 
-    const { profile, user, status } = await fetchProfile();
-
-    if (status === 'no-backend' || (status === 'no-init-data' && !DEMO_TG)) {
-      applyIdentity(tgUser, null);
-      renderProfile(buildDemoProfile(tgUser));
+    if (isNoInitData()) {
+      startDemoMode(tgUser);
       return;
     }
 
-    if (!profile) {
-      applyIdentity(user || tgUser, null);
-      renderEmpty();
+    if (!BACKEND_URL) {
+      startDemoMode(tgUser);
       return;
     }
 
-    applyIdentity(user || tgUser, profile);
-    renderProfile(profile);
-    refreshPlanUI();
-  }
+    const result = await loadProfile();
+    if (!result.ok) {
+      if (result.status === 404 && (tg?.initData || DEMO_TG)) {
+        showEmptyState();
+        return;
+      }
+      startDemoMode(tgUser);
+      return;
+    }
 
-  function buildDemoProfile(tgUser) {
-    return {
-      name: (tgUser && tgUser.first_name) || 'Анна',
-      goal_type: 'measurable',
-      raw_goal: 'демо-режим',
-      final_goal: 'демо-режим (без backend)',
-      streak: 0,
-      weekly_score: 0,
-      current_week: 1,
-      goal_signals: [],
-      completed_tasks: [],
-      timezone: 'Asia/Ho_Chi_Minh',
-    };
+    applyLanguageFromProfile(profile);
+    hideSyncBanner();
+    showMain();
+    setCanEditName(true);
+    setCanEditTimes(true);
+    await checkMilestone();
+
+    await markStreakOnOpen();
+    tasks = await fetchTasks();
+    calendarData = await fetchCalendar();
+    syncTimezone();
+    syncLanguageCode();
+    document.querySelector('.settings-block')?.classList.add('loaded');
+
+    const homeTimes = getDisplayTimes(profile);
+    paintMainScreenTimes(homeTimes.morning, homeTimes.evening);
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible' || !profile || !BACKEND_URL) return;
+      const keep = getDisplayTimes(profile);
+      loadProfile({ skipRender: true })
+        .then((r) => {
+          if (r.ok && r.profile) {
+            profile = applyTimesToProfile(r.profile, keep.morning, keep.evening);
+          }
+          paintMainScreenTimes(keep.morning, keep.evening);
+        })
+        .catch(() => paintMainScreenTimes(keep.morning, keep.evening));
+    });
   }
 
   if (document.readyState === 'loading') {
