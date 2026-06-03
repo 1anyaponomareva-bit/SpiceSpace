@@ -84,7 +84,10 @@
     }
     let url = `${BACKEND_URL}${path.startsWith('/') ? path : `/${path}`}`;
     url = appendTelegramIdQuery(url);
-    return fetch(url, { ...opts, headers, cache: 'no-store' });
+    alert('fetching: ' + url);
+    const response = await fetch(url, { ...opts, headers, cache: 'no-store' });
+    alert('fetch done: ok=' + response.ok + ' status=' + response.status);
+    return response;
   }
 
   function escapeHtml(s) {
