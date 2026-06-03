@@ -529,10 +529,24 @@ def open_spicespace_button_label(lang: str = "en", *, prefix: str = "") -> str:
     return f"{prefix}{label}" if prefix else label
 
 
+def _mini_app_root_needs_webapp_suffix(root: str) -> bool:
+    """Railway serves static UI at /webapp; Vercel deploy uses site root."""
+    r = (root or "").strip().rstrip("/").lower()
+    if not r or r.endswith("/webapp"):
+        return False
+    if "vercel.app" in r:
+        return False
+    if ".railway.app" in r or "localhost" in r or "127.0.0.1" in r:
+        return True
+    return False
+
+
 def mini_app_webapp_url(base: str, cid: int, lang: str = "en") -> str:
     root = str(base or "").strip().rstrip("/")
-    if not root.endswith("/webapp"):
-        root = f"{root}/webapp" if root else "https://spicespace-production.up.railway.app/webapp"
+    if not root:
+        root = "https://spice-space.vercel.app"
+    elif _mini_app_root_needs_webapp_suffix(root):
+        root = f"{root}/webapp"
     lang_q = "ru" if _is_ru(lang) else "en"
     return f"{root}/?telegram_id={cid}&lang={lang_q}"
 
