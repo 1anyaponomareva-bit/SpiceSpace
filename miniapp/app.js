@@ -400,8 +400,16 @@
     };
   }
 
-  function openBotChat() {
-    const link = `https://t.me/${BOT_USERNAME}?start=webapp`;
+  function profileHasGoals(prof) {
+    const g = String(
+      prof?.main_goal || prof?.final_goal || prof?.raw_goal || '',
+    ).trim();
+    return Boolean(g);
+  }
+
+  function openBotChat(startPayload) {
+    const payload = (startPayload || 'webapp').replace(/^\//, '');
+    const link = `https://t.me/${BOT_USERNAME}?start=${encodeURIComponent(payload)}`;
     if (tg?.openTelegramLink) {
       try { tg.openTelegramLink(link); return; } catch (_) {}
     }
@@ -429,6 +437,16 @@
     }
     const tabBar = document.getElementById('tab-bar');
     if (tabBar) tabBar.hidden = false;
+  }
+
+  function showIncompleteProfileState() {
+    const title = document.querySelector('#empty-state .empty-state__title');
+    const text = document.querySelector('#empty-state .empty-state__text');
+    const btn = document.getElementById('empty-open-bot');
+    if (title) title.textContent = t('incomplete_title');
+    if (text) text.textContent = t('incomplete_text');
+    if (btn) btn.textContent = t('incomplete_btn');
+    showEmptyState();
   }
 
   function showEmptyState() {
@@ -1108,8 +1126,8 @@
   }
 
   function bindEvents() {
-    document.getElementById('sync-banner-open')?.addEventListener('click', openBotChat);
-    document.getElementById('empty-open-bot')?.addEventListener('click', openBotChat);
+    document.getElementById('sync-banner-open')?.addEventListener('click', () => openBotChat('webapp'));
+    document.getElementById('empty-open-bot')?.addEventListener('click', () => openBotChat('reonboard'));
 
     document.querySelectorAll('.tab-bar__btn').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -1176,6 +1194,11 @@
         return;
       }
       startDemoMode(tgUser);
+      return;
+    }
+
+    if (!profileHasGoals(profile)) {
+      showIncompleteProfileState();
       return;
     }
 
