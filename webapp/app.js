@@ -1219,18 +1219,9 @@
       return;
     }
 
-    if (result.ok) {
-      console.log('[SpiceSpace] Profile loaded main_goal:', JSON.stringify(profile?.main_goal));
-      console.log('[SpiceSpace] Profile final_goal:', JSON.stringify(profile?.final_goal));
-      console.log('[SpiceSpace] Profile raw_goal:', JSON.stringify(profile?.raw_goal));
-      console.log('[SpiceSpace] profileHasGoals:', profileHasGoals(profile));
-      console.log('[SpiceSpace] BACKEND_URL:', BACKEND_URL, 'initData:', Boolean(tg?.initData), 'tid:', BACKEND_TELEGRAM_ID);
-    }
-
-    // DEBUG: временно отключено — вернуть после проверки
-    if (false && !profileHasGoals(profile)) {
-      showIncompleteProfileState();
-      return;
+    if (!profileHasGoals(profile)) {
+      console.warn('No goals found but showing main screen anyway:', profile?.main_goal);
+      // Don't block — show main screen with empty goals
     }
 
     applyLanguageFromProfile(profile);
@@ -1242,6 +1233,7 @@
 
     await markStreakOnOpen();
     tasks = await fetchTasks();
+    renderTasks(profile, tasks);
     calendarData = await fetchCalendar();
     syncTimezone();
     syncLanguageCode();
