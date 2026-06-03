@@ -925,6 +925,14 @@
     }
   }
 
+  async function profileFromResponse(resp) {
+    const text = await resp.text();
+    alert('raw text: ' + text.substring(0, 100));
+    const data = JSON.parse(text);
+    alert('data keys: ' + Object.keys(data).join(',') + ' main_goal=' + (data?.profile?.main_goal || data?.main_goal || 'NONE'));
+    return { ok: true, profile: data.profile || data, user: data.user || null };
+  }
+
   async function fetchProfile() {
     try {
       const resp = await apiFetch(`/api/profile?_t=${Date.now()}`);
@@ -936,9 +944,7 @@
             { cache: 'no-store' },
           );
           if (directResp.ok) {
-            const data = await directResp.json();
-            alert('data keys: ' + Object.keys(data).join(',') + ' main_goal=' + (data?.profile?.main_goal || data?.main_goal || 'NONE'));
-            return { ok: true, profile: data.profile || data, user: data.user || null };
+            return await profileFromResponse(directResp);
           }
           return { ok: false, status: directResp.status };
         }
@@ -946,8 +952,7 @@
       }
       if (resp.status === 401 || resp.status === 404) return { ok: false, status: resp.status };
       if (!resp.ok) return { ok: false, status: resp.status };
-      const data = await resp.json();
-      return { ok: true, profile: data.profile || data, user: data.user || null };
+      return await profileFromResponse(resp);
     } catch (e) {
       alert('fetchProfile error: ' + e.message + ' ' + e.name);
       console.error('fetchProfile error:', e);
@@ -959,8 +964,7 @@
             { cache: 'no-store' },
           );
           if (directResp.ok) {
-            const data = await directResp.json();
-            return { ok: true, profile: data.profile || data, user: data.user || null };
+            return await profileFromResponse(directResp);
           }
         } catch (_) {}
       }
