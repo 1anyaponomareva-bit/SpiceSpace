@@ -1222,6 +1222,7 @@
     applyStaticI18n();
     initTelegram();
     BACKEND_TELEGRAM_ID = getTelegramId();
+    alert('BACKEND_URL=' + BACKEND_URL + ' tid=' + BACKEND_TELEGRAM_ID);
     bindEvents();
     bindEditName();
     bindEditTimes();
