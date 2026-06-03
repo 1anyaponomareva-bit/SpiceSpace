@@ -50,7 +50,9 @@
       const morning = formatTimeHHMM(o.morning, null);
       const evening = formatTimeHHMM(o.evening, null);
       if (morning && evening) return { morning, evening };
-    } catch (_) {}
+    } catch (e) {
+      console.warn('loadDisplayTimesFromStorage:', e);
+    }
     return null;
   }
 
@@ -63,7 +65,9 @@
         timesStorageKey(),
         JSON.stringify({ morning: morningHm, evening: eveningHm }),
       );
-    } catch (_) {}
+    } catch (e) {
+      console.warn('saveDisplayTimesToStorage:', e);
+    }
   }
 
   function appendTelegramIdQuery(url) {
@@ -342,7 +346,11 @@
     }
     if (m) displayTimesCache.morning = m;
     if (e) displayTimesCache.evening = e;
-    saveDisplayTimesToStorage(displayTimesCache.morning, displayTimesCache.evening);
+    try {
+      saveDisplayTimesToStorage(displayTimesCache.morning, displayTimesCache.evening);
+    } catch (e) {
+      console.warn('syncDisplayTimesCache localStorage:', e);
+    }
     return displayTimesCache;
   }
 
@@ -975,15 +983,19 @@
       if (!result.ok || !result.profile) return result;
 
       profile = result.profile;
-      const stored = loadDisplayTimesFromStorage();
-      if (stored) {
-        profile = applyTimesToProfile(profile, stored.morning, stored.evening);
-        syncDisplayTimesCache(stored.morning, stored.evening);
-      } else {
-        syncDisplayTimesCache(
-          profileMorningTime(profile),
-          profileEveningTime(profile),
-        );
+      try {
+        const stored = loadDisplayTimesFromStorage();
+        if (stored) {
+          profile = applyTimesToProfile(profile, stored.morning, stored.evening);
+          syncDisplayTimesCache(stored.morning, stored.evening);
+        } else {
+          syncDisplayTimesCache(
+            profileMorningTime(profile),
+            profileEveningTime(profile),
+          );
+        }
+      } catch (e) {
+        console.warn('localStorage not available:', e);
       }
 
       if (!opts.skipRender) {
