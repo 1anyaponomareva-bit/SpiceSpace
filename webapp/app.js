@@ -84,10 +84,7 @@
     }
     let url = `${BACKEND_URL}${path.startsWith('/') ? path : `/${path}`}`;
     url = appendTelegramIdQuery(url);
-    alert('fetching: ' + url);
-    const response = await fetch(url, { ...opts, headers, cache: 'no-store' });
-    alert('fetch done: ok=' + response.ok + ' status=' + response.status);
-    return response;
+    return fetch(url, { ...opts, headers, cache: 'no-store' });
   }
 
   function escapeHtml(s) {
@@ -926,10 +923,7 @@
   }
 
   async function profileFromResponse(resp) {
-    const text = await resp.text();
-    alert('raw text: ' + text.substring(0, 100));
-    const data = JSON.parse(text);
-    alert('data keys: ' + Object.keys(data).join(',') + ' main_goal=' + (data?.profile?.main_goal || data?.main_goal || 'NONE'));
+    const data = await resp.json();
     return { ok: true, profile: data.profile || data, user: data.user || null };
   }
 
@@ -954,7 +948,6 @@
       if (!resp.ok) return { ok: false, status: resp.status };
       return await profileFromResponse(resp);
     } catch (e) {
-      alert('fetchProfile error: ' + e.message + ' ' + e.name);
       console.error('fetchProfile error:', e);
       const tid = BACKEND_TELEGRAM_ID || getTelegramId();
       if (tid && BACKEND_URL) {
@@ -1230,7 +1223,6 @@
     applyStaticI18n();
     initTelegram();
     BACKEND_TELEGRAM_ID = getTelegramId();
-    alert('BACKEND_URL=' + BACKEND_URL + ' tid=' + BACKEND_TELEGRAM_ID);
     bindEvents();
     bindEditName();
     bindEditTimes();
@@ -1249,27 +1241,9 @@
     }
 
     const result = await loadProfile();
-    alert('ok=' + result.ok + ' status=' + result.status + ' goal=' + (profile?.main_goal || 'EMPTY'));
-    console.log('result.ok:', result.ok);
-    console.log('result.status:', result.status);
-    console.log('profile:', JSON.stringify(profile));
-    console.log('main_goal:', profile?.main_goal);
-    if (!result.ok) {
-      if (result.status === 404 && canLoadProfile()) {
-        showEmptyState();
-        return;
-      }
-      if (canLoadProfile()) {
-        startLoadErrorMode(tgUser, result.status);
-        return;
-      }
+    if (!result.ok || !profile) {
       startDemoMode(tgUser);
       return;
-    }
-
-    if (!profileHasGoals(profile)) {
-      console.warn('No goals found but showing main screen anyway:', profile?.main_goal);
-      // Don't block — show main screen with empty goals
     }
 
     applyLanguageFromProfile(profile);
@@ -1278,11 +1252,11 @@
     setCanEditName(true);
     setCanEditTimes(true);
     await checkMilestone();
-
     await markStreakOnOpen();
     tasks = await fetchTasks();
     renderTasks(profile, tasks);
     calendarData = await fetchCalendar();
+    renderAll(tgUser);
     syncTimezone();
     syncLanguageCode();
     document.querySelector('.settings-block')?.classList.add('loaded');
