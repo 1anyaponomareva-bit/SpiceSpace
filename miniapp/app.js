@@ -937,6 +937,7 @@
           );
           if (directResp.ok) {
             const data = await directResp.json();
+            alert('data keys: ' + Object.keys(data).join(',') + ' main_goal=' + (data?.profile?.main_goal || data?.main_goal || 'NONE'));
             return { ok: true, profile: data.profile || data, user: data.user || null };
           }
           return { ok: false, status: directResp.status };
