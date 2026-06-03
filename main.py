@@ -1561,6 +1561,18 @@ def _auth_telegram_id(request: Request, telegram_id: str | None) -> str:
     raise HTTPException(status_code=400, detail="telegram_id is required")
 
 
+def _profile_has_goals(prof: dict | None) -> bool:
+    if not isinstance(prof, dict):
+        return False
+    goal = str(
+        prof.get("main_goal")
+        or prof.get("final_goal")
+        or prof.get("raw_goal")
+        or ""
+    ).strip()
+    return bool(goal)
+
+
 def _resolve_user_profile(tid: str) -> dict | None:
     """Профиль всегда из БД (Supabase/JSON), затем синхронизация в RAM-кэш."""
     profile = db_store.get_profile(tid)
@@ -3007,7 +3019,23 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_profiles[tid] = prof
     db_store.save_subscriber(cid, True)
 
+    start_arg = (context.args[0] if context.args else "").strip().lower()
+    if start_arg in ("reonboard", "setup", "goals", "заново"):
+        name = ""
+        if isinstance(prof, dict):
+            name = str(prof.get("name", "")).strip()
+        if not name and update.effective_user:
+            name = str(update.effective_user.first_name or "").strip()
+        ob.start_reonboarding(onboarding, cid, name, lang)
+        await _bot_reply(update.message, ob.message_vision(name, lang))
+        return
+
     if isinstance(prof, dict) and prof.get("name"):
+        if not _profile_has_goals(prof):
+            name = str(prof.get("name", "")).strip()
+            ob.start_reonboarding(onboarding, cid, name, lang)
+            await _bot_reply(update.message, ob.message_vision(name, lang))
+            return
         ob.start_returning_choice(onboarding, cid, lang)
         await _bot_reply(
             update.message,
@@ -3060,10 +3088,40 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     onboarding.pop(cid, None)
     prof = user_profiles.get(str(cid)) or db_store.get_profile(cid)
     lang = _user_lang(prof if isinstance(prof, dict) else None, update)
+
+    if context.args and context.args[0].strip().lower() in (
+        "full",
+        "profile",
+        "all",
+        "полный",
+    ):
+        tid = str(cid)
+        db_store.delete_profile(tid)
+        _purge_user_runtime(cid)
+        ob.start_new_onboarding(onboarding, cid, lang)
+        await _bot_reply(update.message, ob.get_greeting_new(lang))
+        return
+
     await _bot_reply(
         update.message,
         ob.ob_text("cmd_reset_msg", lang),
     )
+
+
+async def cmd_reonboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Заново настроить цели (профиль в Supabase можно не удалять)."""
+    if not update.effective_chat or not update.message:
+        return
+    cid = update.effective_chat.id
+    prof = user_profiles.get(str(cid)) or db_store.get_profile(cid)
+    lang = _user_lang(prof if isinstance(prof, dict) else None, update)
+    name = ""
+    if isinstance(prof, dict):
+        name = str(prof.get("name", "")).strip()
+    if not name and update.effective_user:
+        name = str(update.effective_user.first_name or "").strip()
+    ob.start_reonboarding(onboarding, cid, name, lang)
+    await _bot_reply(update.message, ob.message_vision(name, lang))
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3837,6 +3895,8 @@ def _register_telegram_handlers(app_: Application) -> None:
     app_.add_handler(CommandHandler("app", app_command))
     app_.add_handler(CommandHandler("stop", cmd_stop))
     app_.add_handler(CommandHandler("reset", cmd_reset))
+    app_.add_handler(CommandHandler("reonboard", cmd_reonboard))
+    app_.add_handler(CommandHandler("setup", cmd_reonboard))
     app_.add_handler(MessageHandler(filters.VOICE, on_voice))
     app_.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app_.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))

@@ -290,7 +290,12 @@ STRINGS: dict[str, dict[str, str]] = {
     "first_msg_fallback": "Кому первому отправишь бота на тест? 💚",
     "returning_just_chat": "Хорошо, я здесь. Напиши что у тебя на душе.",
     "returning_hint": (
-        "Напиши «обновить профиль» или «поговорить» — так я пойму, что тебе нужно."
+        "Напиши «заново» или «обновить цели» — перенастроим цели. "
+        "Или «поговорить» — просто поболтаем."
+    ),
+    "profile_incomplete_reonboard": (
+        "{name}, в базе есть имя, но цели не подтянулись в приложение. "
+        "Давай заново пройдём настройку целей — отвечай на вопросы ниже 👇"
     ),
     "goal_rewrite_12w": "Окей, напиши 12-недельную цель своими словами — как хочешь чтобы звучало.",
     "goal_rewrite_weekly": "Окей, напиши цель на эту неделю своими словами — как хочешь чтобы звучало.",
@@ -448,7 +453,11 @@ STRINGS: dict[str, dict[str, str]] = {
     "first_msg_fallback": "Who will you send the bot to first for testing? 💚",
     "returning_just_chat": "Okay, I'm here. Tell me what's on your mind.",
     "returning_hint": (
-        "Type «update profile» or «just chat» — so I know what you need."
+        "Type «start over» or «update goals» to reconfigure. Or «just chat» to talk."
+    ),
+    "profile_incomplete_reonboard": (
+        "{name}, I have your name but goals didn't load in the app. "
+        "Let's set up your goals again — answer below 👇"
     ),
     "goal_rewrite_12w": "Okay — rewrite your 12-week goal in your own words.",
     "goal_rewrite_weekly": "Okay — rewrite this week's goal in your own words.",
@@ -1595,6 +1604,13 @@ def looks_like_restart_onboarding(raw: str) -> bool:
             "перезап",
             "изменить профиль",
             "новый профиль",
+            "цели",
+            "цель",
+            "настроить",
+            "онбординг",
+            "restart",
+            "setup",
+            "goals",
         )
     )
 

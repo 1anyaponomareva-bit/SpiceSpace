@@ -838,8 +838,13 @@ def _row_to_profile(row: dict) -> dict:
         p["last_weekly_recap_date"] = str(p["last_weekly_recap_date"])[:10]
         p[f"weekly_sent_{p['last_weekly_recap_date']}"] = True
     sync_profile_times(p)
-    p.setdefault("raw_goal", p.get("main_goal", ""))
-    p.setdefault("final_goal", p.get("main_goal", ""))
+    merged_goal = str(
+        p.get("main_goal") or p.get("final_goal") or p.get("raw_goal") or ""
+    ).strip()
+    if merged_goal:
+        p["main_goal"] = merged_goal
+    p.setdefault("raw_goal", p.get("main_goal") or p.get("raw_goal") or "")
+    p.setdefault("final_goal", p.get("main_goal") or p.get("final_goal") or "")
     p.setdefault("goal_type", "qualitative")
     p.setdefault("goal_signals", [])
     p.setdefault("streak", 0)
