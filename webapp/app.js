@@ -1206,6 +1206,10 @@
     }
 
     const result = await loadProfile();
+    console.log('result.ok:', result.ok);
+    console.log('result.status:', result.status);
+    console.log('profile:', JSON.stringify(profile));
+    console.log('main_goal:', profile?.main_goal);
     if (!result.ok) {
       if (result.status === 404 && canLoadProfile()) {
         showEmptyState();
