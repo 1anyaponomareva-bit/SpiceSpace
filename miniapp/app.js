@@ -974,8 +974,19 @@
       const result = await fetchProfile();
       if (!result.ok || !result.profile) return result;
       profile = result.profile;
+      try {
+        const stored = loadDisplayTimesFromStorage();
+        if (stored) {
+          profile = applyTimesToProfile(profile, stored.morning, stored.evening);
+        }
+        syncDisplayTimesCache(profileMorningTime(profile), profileEveningTime(profile));
+      } catch (e) {
+        syncDisplayTimesCache(profileMorningTime(profile), profileEveningTime(profile));
+      }
       if (!opts.skipRender) {
         renderProfile(profile);
+      } else {
+        paintMainScreenTimes(profileMorningTime(profile), profileEveningTime(profile));
       }
       return result;
     } catch (e) {
@@ -1235,8 +1246,11 @@
     await markStreakOnOpen();
     tasks = await fetchTasks();
     renderTasks(profile, tasks);
-    calendarData = await fetchCalendar();
     renderAll(tgUser);
+    renderTimes(profile);
+    setCanEditTimes(true);
+    calendarData = await fetchCalendar();
+    if (typeof renderCalendar === 'function') renderCalendar();
     syncTimezone();
     syncLanguageCode();
     document.querySelector('.settings-block')?.classList.add('loaded');
