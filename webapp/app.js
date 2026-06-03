@@ -408,8 +408,10 @@
     window.open(link, '_blank');
   }
 
-  function showSyncBanner() {
+  function showSyncBanner(messageKey) {
     const el = document.getElementById('sync-banner');
+    const textEl = el?.querySelector('.sync-banner__text');
+    if (textEl && messageKey) textEl.textContent = t(messageKey);
     if (el) el.hidden = false;
   }
 
@@ -533,7 +535,33 @@
     tasks = [];
     setCanEditName(false);
     setCanEditTimes(false);
-    showSyncBanner();
+    showSyncBanner('sync_banner_text');
+    showMain();
+    renderAll(user);
+    document.querySelector('.settings-block')?.classList.add('loaded');
+  }
+
+  /** API недоступен, но пользователь открыл из Telegram — не подменяем демо-целями. */
+  function startLoadErrorMode(user, status) {
+    profile = {
+      name: pickName(user, null),
+      main_goal: '',
+      weekly_goal: '',
+      streak: 0,
+      display_streak: 0,
+      current_week: 1,
+      weekly_score: 0,
+      morning_time: '09:00',
+      evening_time: '21:00',
+    };
+    tasks = [];
+    setCanEditName(false);
+    setCanEditTimes(false);
+    if (status === 401 || status === 503) {
+      showSyncBanner('err_auth');
+    } else {
+      showSyncBanner('err_load');
+    }
     showMain();
     renderAll(user);
     document.querySelector('.settings-block')?.classList.add('loaded');
@@ -1141,6 +1169,10 @@
     if (!result.ok) {
       if (result.status === 404 && (tg?.initData || DEMO_TG)) {
         showEmptyState();
+        return;
+      }
+      if (tg?.initData || DEMO_TG) {
+        startLoadErrorMode(tgUser, result.status);
         return;
       }
       startDemoMode(tgUser);

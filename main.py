@@ -1547,6 +1547,12 @@ def _auth_telegram_id(request: Request, telegram_id: str | None) -> str:
     if init_data:
         user_obj = _validate_init_data(init_data)
         if not user_obj:
+            if not os.getenv("TELEGRAM_BOT_TOKEN", "").strip():
+                log.error("api auth 401: TELEGRAM_BOT_TOKEN не задан на сервере")
+                raise HTTPException(
+                    status_code=503,
+                    detail="server misconfigured: TELEGRAM_BOT_TOKEN missing",
+                )
             raise HTTPException(status_code=401, detail="invalid init data")
         return str(user_obj["id"])
     tid = (telegram_id or "").strip()
@@ -3366,11 +3372,14 @@ def _mini_app_url() -> str:
 
 
 def _allowed_origins() -> set[str]:
-    raw = os.getenv(
-        "MINIAPP_ORIGINS",
-        "https://spice-space.vercel.app,http://localhost:5173,http://localhost:3000",
+    default = (
+        "https://spice-space.vercel.app,"
+        "http://localhost:5173,"
+        "http://localhost:3000"
     )
+    raw = (os.getenv("MINIAPP_ORIGINS") or default).strip() or default
     origins = {x.strip() for x in raw.split(",") if x.strip()}
+    origins.add("https://spice-space.vercel.app")
     base = _public_base_url()
     if base:
         origins.add(base)
@@ -4301,6 +4310,8 @@ async def _no_cache_middleware(request: Request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=sorted(_allowed_origins()),
+    # Preview/production Vercel URLs (*.vercel.app) — иначе браузер блокирует API → демо в Mini App
+    allow_origin_regex=r"^https://[a-z0-9][a-z0-9.-]*\.vercel\.app$",
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
