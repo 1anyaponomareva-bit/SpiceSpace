@@ -923,11 +923,44 @@
   }
 
   async function fetchProfile() {
-    const resp = await apiFetch(`/api/profile?_t=${Date.now()}`);
-    if (resp.status === 401 || resp.status === 404) return { ok: false, status: resp.status };
-    if (!resp.ok) return { ok: false, status: resp.status };
-    const data = await resp.json();
-    return { ok: true, profile: data.profile || data, user: data.user || null };
+    try {
+      const resp = await apiFetch(`/api/profile?_t=${Date.now()}`);
+      if (!resp || resp.status === 0) {
+        const tid = BACKEND_TELEGRAM_ID || getTelegramId();
+        if (tid && BACKEND_URL) {
+          const directResp = await fetch(
+            `${BACKEND_URL}/api/profile?telegram_id=${encodeURIComponent(tid)}&_t=${Date.now()}`,
+            { cache: 'no-store' },
+          );
+          if (directResp.ok) {
+            const data = await directResp.json();
+            return { ok: true, profile: data.profile || data, user: data.user || null };
+          }
+          return { ok: false, status: directResp.status };
+        }
+        return { ok: false, status: 0 };
+      }
+      if (resp.status === 401 || resp.status === 404) return { ok: false, status: resp.status };
+      if (!resp.ok) return { ok: false, status: resp.status };
+      const data = await resp.json();
+      return { ok: true, profile: data.profile || data, user: data.user || null };
+    } catch (e) {
+      console.error('fetchProfile error:', e);
+      const tid = BACKEND_TELEGRAM_ID || getTelegramId();
+      if (tid && BACKEND_URL) {
+        try {
+          const directResp = await fetch(
+            `${BACKEND_URL}/api/profile?telegram_id=${encodeURIComponent(tid)}&_t=${Date.now()}`,
+            { cache: 'no-store' },
+          );
+          if (directResp.ok) {
+            const data = await directResp.json();
+            return { ok: true, profile: data.profile || data, user: data.user || null };
+          }
+        } catch (_) {}
+      }
+      return { ok: false, status: 0 };
+    }
   }
 
   /**
