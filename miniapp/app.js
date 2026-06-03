@@ -945,6 +945,7 @@
       const data = await resp.json();
       return { ok: true, profile: data.profile || data, user: data.user || null };
     } catch (e) {
+      alert('fetchProfile error: ' + e.message + ' ' + e.name);
       console.error('fetchProfile error:', e);
       const tid = BACKEND_TELEGRAM_ID || getTelegramId();
       if (tid && BACKEND_URL) {
