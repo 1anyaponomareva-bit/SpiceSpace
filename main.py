@@ -4367,14 +4367,13 @@ async def _no_cache_middleware(request: Request, call_next):
     return response
 
 
+# allow_credentials must be False when allow_origins is ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=sorted(_allowed_origins()),
-    # Preview/production Vercel URLs (*.vercel.app) — иначе браузер блокирует API → демо в Mini App
-    allow_origin_regex=r"^https://[a-z0-9][a-z0-9.-]*\.vercel\.app$",
+    allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 if (WEBAPP_DIR / "index.html").is_file():
