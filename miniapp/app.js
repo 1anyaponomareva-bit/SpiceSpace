@@ -11,7 +11,8 @@
     document.querySelector('meta[name="spicespace-bot-username"]')?.content || 'SpiceSpacebot'
   ).replace(/^@/, '');
 
-  const DEMO_TG = new URLSearchParams(window.location.search).get('telegram_id') || '';
+  /** Fallback user id when initData string is empty (URL param or initDataUnsafe). */
+  let BACKEND_TELEGRAM_ID = null;
 
   const MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
   const MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -25,8 +26,19 @@
   /** User-visible times on home screen (survives stale API reloads). */
   let displayTimesCache = null;
 
+  function getTelegramId() {
+    const fromUrl = new URLSearchParams(window.location.search).get('telegram_id');
+    if (fromUrl) {
+      const tid = String(fromUrl).trim();
+      if (/^\d+$/.test(tid)) return tid;
+    }
+    const user = tg?.initDataUnsafe?.user;
+    if (user?.id) return String(user.id);
+    return null;
+  }
+
   function timesStorageKey() {
-    const uid = tg?.initDataUnsafe?.user?.id || DEMO_TG || '0';
+    const uid = tg?.initDataUnsafe?.user?.id || BACKEND_TELEGRAM_ID || getTelegramId() || '0';
     return `spicespace_display_times_v1_${uid}`;
   }
 
@@ -54,10 +66,12 @@
     } catch (_) {}
   }
 
-  function withDemoQuery(path) {
-    if (!DEMO_TG || tg?.initData) return path;
-    const sep = path.includes('?') ? '&' : '?';
-    return `${path}${sep}telegram_id=${encodeURIComponent(DEMO_TG)}`;
+  function appendTelegramIdQuery(url) {
+    if (tg?.initData || url.includes('telegram_id=')) return url;
+    const tid = BACKEND_TELEGRAM_ID || getTelegramId();
+    if (!tid) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}telegram_id=${encodeURIComponent(tid)}`;
   }
 
   async function apiFetch(path, opts = {}) {
@@ -68,7 +82,9 @@
     if (tg?.initData && !headers.Authorization) {
       headers.Authorization = `tma ${tg.initData}`;
     }
-    return fetch(`${BACKEND_URL}${withDemoQuery(path)}`, { ...opts, headers, cache: 'no-store' });
+    let url = `${BACKEND_URL}${path.startsWith('/') ? path : `/${path}`}`;
+    url = appendTelegramIdQuery(url);
+    return fetch(url, { ...opts, headers, cache: 'no-store' });
   }
 
   function escapeHtml(s) {
@@ -544,7 +560,11 @@
   }
 
   function isNoInitData() {
-    return !tg?.initData && !DEMO_TG;
+    return !tg?.initData && !(BACKEND_TELEGRAM_ID || getTelegramId());
+  }
+
+  function canLoadProfile() {
+    return Boolean(tg?.initData || BACKEND_TELEGRAM_ID || getTelegramId());
   }
 
 
@@ -1167,14 +1187,16 @@
   async function start() {
     applyStaticI18n();
     initTelegram();
+    BACKEND_TELEGRAM_ID = getTelegramId();
     bindEvents();
     bindEditName();
     bindEditTimes();
 
     const tgUser = tg?.initDataUnsafe?.user || null;
+    const telegramId = BACKEND_TELEGRAM_ID;
 
-    if (isNoInitData()) {
-      startDemoMode(tgUser);
+    if (!tg?.initData && !telegramId) {
+      startDemoMode(null);
       return;
     }
 
@@ -1185,11 +1207,11 @@
 
     const result = await loadProfile();
     if (!result.ok) {
-      if (result.status === 404 && (tg?.initData || DEMO_TG)) {
+      if (result.status === 404 && canLoadProfile()) {
         showEmptyState();
         return;
       }
-      if (tg?.initData || DEMO_TG) {
+      if (canLoadProfile()) {
         startLoadErrorMode(tgUser, result.status);
         return;
       }
