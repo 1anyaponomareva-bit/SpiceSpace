@@ -1206,6 +1206,7 @@
     }
 
     const result = await loadProfile();
+    alert('ok=' + result.ok + ' status=' + result.status + ' goal=' + (profile?.main_goal || 'EMPTY'));
     console.log('result.ok:', result.ok);
     console.log('result.status:', result.status);
     console.log('profile:', JSON.stringify(profile));
