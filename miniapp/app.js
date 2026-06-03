@@ -50,9 +50,7 @@
       const morning = formatTimeHHMM(o.morning, null);
       const evening = formatTimeHHMM(o.evening, null);
       if (morning && evening) return { morning, evening };
-    } catch (e) {
-      console.warn('loadDisplayTimesFromStorage:', e);
-    }
+    } catch (_) {}
     return null;
   }
 
@@ -65,9 +63,7 @@
         timesStorageKey(),
         JSON.stringify({ morning: morningHm, evening: eveningHm }),
       );
-    } catch (e) {
-      console.warn('saveDisplayTimesToStorage:', e);
-    }
+    } catch (_) {}
   }
 
   function appendTelegramIdQuery(url) {
