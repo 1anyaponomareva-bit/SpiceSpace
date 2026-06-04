@@ -745,44 +745,41 @@
   }
 
   function renderTasks(prof, list) {
-    if (typeof t !== 'function') {
-      console.warn('i18n not loaded yet');
-      return;
-    }
+    const safeT = typeof t === 'function' ? t : (key) => key;
     const host = document.getElementById('task-list');
     const todayItems = todayTasksList(prof, list);
 
     if (!todayItems.length) {
       const emptyMsg = displayTodayTask(prof)
-        ? t('tasks_empty_discuss')
+        ? safeT('tasks_empty_discuss')
         : todayTaskFallback();
       host.innerHTML = `<p class="task-empty">${escapeHtml(emptyMsg)}</p>`;
       return;
     }
 
-    host.innerHTML = todayItems.map((t) => {
-      const done = Boolean(t.done);
-      const missed = Boolean(t.missed);
-      const isFocus = t.id === '__today_focus__';
-      const id = escapeHtml(t.id);
-      const timeLabel = t.time ? formatTimeForDisplay(t.time, '') : '';
+    host.innerHTML = todayItems.map((task) => {
+      const done = Boolean(task.done);
+      const missed = Boolean(task.missed);
+      const isFocus = task.id === '__today_focus__';
+      const id = escapeHtml(task.id);
+      const timeLabel = task.time ? formatTimeForDisplay(task.time, '') : '';
       const timeHtml = timeLabel
         ? `<span class="task-time">${escapeHtml(timeLabel)}</span>`
         : '';
       const checkDisabled = done || missed || isFocus;
       const checkLabel = done
-        ? t('task_done_aria')
+        ? safeT('task_done_aria')
         : missed
-          ? t('task_missed_aria')
+          ? safeT('task_missed_aria')
           : isFocus
-            ? t('task_focus_aria')
-            : t('task_mark_aria');
+            ? safeT('task_focus_aria')
+            : safeT('task_mark_aria');
       const textStyle = missed ? ' style="text-decoration:line-through;opacity:0.7"' : '';
       return `
         <div class="task-row">
           <button type="button" class="task-check${done ? ' done' : ''}${missed ? ' missed' : ''}" data-id="${id}" ${checkDisabled ? 'disabled' : ''} aria-label="${escapeHtml(checkLabel)}">${done ? '✓' : missed ? '✗' : ''}</button>
           ${timeHtml}
-          <span class="task-text${done ? ' done' : ''}${missed ? ' missed' : ''}"${textStyle}>${escapeHtml(t.title || '')}</span>
+          <span class="task-text${done ? ' done' : ''}${missed ? ' missed' : ''}"${textStyle}>${escapeHtml(task.title || '')}</span>
         </div>`;
     }).join('');
   }
@@ -1240,14 +1237,14 @@
 
     applyLanguageFromProfile(profile);
     showMain();
-    setCanEditTimes(true);
-    setCanEditName(true);
-    hideSyncBanner();
     await checkMilestone();
     await markStreakOnOpen();
     tasks = await fetchTasks();
     renderTasks(profile, tasks);
     renderAll(tgUser);
+    hideSyncBanner();
+    setCanEditTimes(true);
+    setCanEditName(true);
     renderTimes(profile);
     paintMainScreenTimes(profileMorningTime(profile), profileEveningTime(profile));
     calendarData = await fetchCalendar();
