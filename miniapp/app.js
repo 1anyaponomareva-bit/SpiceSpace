@@ -1270,6 +1270,9 @@
     syncTimezone();
     syncLanguageCode();
     document.querySelector('.settings-block')?.classList.add('loaded');
+    if (window.SpiceFortune?.tryShow) {
+      await window.SpiceFortune.tryShow();
+    }
   }
 
   if (document.readyState === 'loading') {
