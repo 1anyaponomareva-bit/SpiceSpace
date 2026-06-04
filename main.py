@@ -3777,6 +3777,23 @@ def _display_streak(profile: dict, telegram_id: str | None) -> int:
     return max(streak, int(profile.get("streak") or 0))
 
 
+def _cycle_week_day_streak(profile: dict) -> int | None:
+    """Day within current 7-day cycle (1–7) from cycle_start_date."""
+    cycle_start_raw = str(profile.get("cycle_start_date") or "").strip()
+    if not cycle_start_raw:
+        return None
+    try:
+        cycle_start = date.fromisoformat(cycle_start_raw)
+        tz = _zone_or_default(_profile_timezone_name(profile))
+        today = datetime.now(tz).date()
+        days_since_start = (today - cycle_start).days
+        if days_since_start < 0:
+            return None
+        return (days_since_start % 7) + 1
+    except Exception:
+        return None
+
+
 def _bump_streak_on_mark(profile: dict, today: date) -> int:
     last = str(profile.get("last_streak_date") or "").strip()
     old = int(profile.get("streak") or 0)
@@ -3870,7 +3887,11 @@ def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> di
             p["today_completed"] = tc == "true"
 
     p["week_scores"] = _week_scores_array(p, tid or None)
-    p["display_streak"] = _display_streak(p, tid or None)
+    day_in_week = _cycle_week_day_streak(p)
+    if day_in_week is not None:
+        p["display_streak"] = day_in_week
+    else:
+        p["display_streak"] = 1
     if tid:
         summaries = db_store.list_daily_summaries(tid)
         completed_count = sum(
@@ -4846,7 +4867,7 @@ async def mark_day_endpoint(
         return {
             "ok": True,
             "streak": int(profile.get("streak") or 0),
-            "display_streak": _display_streak(profile, tid),
+            "display_streak": _cycle_week_day_streak(profile) or 1,
             "profile": _enrich_profile_for_api(profile, tid),
         }
 

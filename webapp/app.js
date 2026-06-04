@@ -784,42 +784,26 @@
     }).join('');
   }
 
-  function renderStreakCircles(prof) {
-    const streak = effectiveStreak(prof);
+  function renderStreak(prof) {
+    const p = prof || profile;
+    const streak = Math.min(7, Math.max(1, Number(p?.display_streak || 1)));
+    const total = 7;
+    const streakCount = document.getElementById('streak-count');
+    if (streakCount) streakCount.textContent = String(streak);
+
     const container = document.querySelector('.streak-circles');
     if (!container) return;
-
     container.innerHTML = '';
-
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < total; i++) {
       const wrap = document.createElement('div');
       wrap.className = 'streak-day-wrap';
-
       if (i < streak) {
-        const isToday = i === streak - 1;
-        wrap.innerHTML = `
-          <div class="streak-day active${isToday ? ' is-today' : ''}">
-            <img src="./spicespace-logo.jpg" alt="" class="streak-logo-icon"/>
-          </div>
-        `;
+        wrap.innerHTML = '<div class="streak-day active"><img src="./spicespace-logo.jpg" alt="✦" class="streak-logo-icon"/></div>';
       } else {
         wrap.innerHTML = '<div class="streak-day empty"></div>';
       }
-
       container.appendChild(wrap);
     }
-  }
-
-  function renderStreak(prof) {
-    const p = prof || profile;
-    const streak = Math.max(0, Number(p?.display_streak || p?.streak || 0));
-    const countEl = document.getElementById('streak-count');
-    if (countEl) {
-      countEl.textContent = streak > 0
-        ? `${streak} ${pluralizeDays(streak)} 🔥`
-        : t('streak_start');
-    }
-    renderStreakCircles(prof);
   }
 
   function renderTimes(prof) {
