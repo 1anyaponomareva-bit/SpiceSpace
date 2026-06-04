@@ -2498,13 +2498,68 @@ async def _handle_evening_reply(
     return reply
 
 
+def _week_date_range_for_recap(
+    profile: dict, days_since_start: int
+) -> tuple[date, date] | None:
+    raw = str(profile.get("cycle_start_date") or "").strip()[:10]
+    if not raw:
+        return None
+    try:
+        cycle_start = date.fromisoformat(raw)
+    except ValueError:
+        return None
+    week_index = max(0, int(days_since_start) // 7)
+    week_start = cycle_start + timedelta(days=week_index * 7)
+    week_end = week_start + timedelta(days=6)
+    return week_start, week_end
+
+
+def _collect_week_recap_facts(
+    cid: int, profile: dict, days_since_start: int
+) -> tuple[str, int, int]:
+    """Build week context from daily summaries; return (text, completed_days, days_with_notes)."""
+    span = _week_date_range_for_recap(profile, days_since_start)
+    if not span:
+        return "", 0, 0
+    week_start, week_end = span
+    lines: list[str] = []
+    completed = 0
+    with_notes = 0
+    d = week_start
+    while d <= week_end:
+        summ = db_store.get_daily_summary(cid, d)
+        if isinstance(summ, dict):
+            parts: list[str] = []
+            if summ.get("summary"):
+                parts.append(str(summ["summary"])[:280])
+            if summ.get("task"):
+                parts.append(f"задача дня: {str(summ['task'])[:120]}")
+            if summ.get("key_detail"):
+                parts.append(f"деталь: {str(summ['key_detail'])[:100]}")
+            if summ.get("mood"):
+                parts.append(f"настроение: {str(summ['mood'])[:60]}")
+            tc = summ.get("task_completed")
+            if tc == "true":
+                completed += 1
+                parts.append("задача дня: выполнена")
+            elif tc == "false":
+                parts.append("задача дня: не выполнена")
+            if parts:
+                with_notes += 1
+                lines.append(f"{d.isoformat()}: " + " | ".join(parts))
+        d += timedelta(days=1)
+    return "\n".join(lines), completed, with_notes
+
+
 async def _generate_weekly_recap_message(
     cid: int,
     profile: dict,
     model_chain: list[str],
     week_number: int,
+    *,
+    days_since_start: int = 0,
 ) -> str:
-    """Warm personal end-of-week letter (Telegram message, not DB weekly summary)."""
+    """One-way week recap letter from Space (no questions to the user)."""
     name = str(profile.get("name") or "").strip()
     main_goal = str(profile.get("main_goal") or "").strip()
     weekly_goal = str(profile.get("weekly_goal") or "").strip()
@@ -2512,58 +2567,54 @@ async def _generate_weekly_recap_message(
     lang = str(profile.get("language_code") or "ru")
     week_number = max(1, int(week_number or 1))
 
-    summaries = db_store.list_daily_summaries(str(cid))
-    week_summaries = summaries[-7:] if len(summaries) >= 7 else summaries
-
-    completed_days = sum(
-        1 for s in week_summaries if s.get("task_completed") == "true"
-    )
-    total_days = len(week_summaries)
-
-    week_context = "\n".join(
-        [
-            f"День {i + 1}: {str(s.get('summary') or '')[:100]}"
-            for i, s in enumerate(week_summaries)
-            if s.get("summary")
-        ]
+    week_context, completed_days, days_with_notes = _collect_week_recap_facts(
+        cid, profile, days_since_start
     )
 
     if lang.startswith("ru"):
-        prompt = f"""Напиши тёплое личное письмо-итог {week_number}-й недели для {name}.
+        prompt = f"""Напиши итог {week_number}-й личной недели для {name}. Это готовое сообщение в Telegram — пользователь только читает.
 
-Цель на 12 недель: {main_goal}
-Цель этой недели: {weekly_goal}
-Мечта: {vision}
-Выполнено дней: {completed_days} из {total_days}
-Что происходило на неделе: {week_context or "мало записей, опирайся на цели"}
+Цель на 12 недель: {main_goal or "не указана"}
+Цель этой недели: {weekly_goal or "не указана"}
+Мечта: {vision or "не указана"}
+Дней с выполненной задачей: {completed_days} из {max(days_with_notes, 1)}
+Записи бота за неделю (ЕДИНСТВЕННЫЙ источник фактов):
+{week_context or "мало записей — опирайся на цели, не выдумывай события"}
 
 Правила:
-- Это письмо от подруги которая наблюдала всю неделю
-- 4-6 предложений, тёплые и личные
-- Упомяни конкретные вещи из недели если они есть
-- Отметь что человек старался и двигался вперёд
-- Закончи воодушевляющей фразой про следующую неделю
-- Без markdown, без списков
-- Не пиши «N дней вместе» и не считай общий стрик — только итог этой недели
+- Ты САМА подводишь итог. ЗАПРЕЩЕНО задавать вопросы и просить ответить
+- ЗАПРЕЩЕНО спрашивать то, что уже есть в записях (например «удалось ли…» если в записях уже есть ответ)
+- Честно и тепло: где молодец — скажи прямо; где не дотянула — мягко, без стыда
+- Обязательно напомни цель на 12 недель одной фразой
+- Дай 2–3 конкретных шага на следующую неделю (формулируй как предложения, не вопросы)
+- В конце одна фраза: завтра утром вместе поставим новую цель на неделю
+- 5–7 предложений, без markdown, без списков и буллетов
+- Не упоминай воскресенье/понедельник как дни недели
 - Обращайся по имени {name}"""
+        system = (
+            "Ты Спейс. Пишешь готовый итог недели. Только текст сообщения, без вопросов."
+        )
     else:
-        prompt = f"""Write a warm personal end-of-week letter for week {week_number} for {name}.
+        prompt = f"""Write the closing recap for {name}'s week {week_number}. Ready Telegram message — user only reads.
 
-12-week goal: {main_goal}
-This week's goal: {weekly_goal}
-Dream: {vision}
-Completed days: {completed_days} of {total_days}
-What happened this week: {week_context or "few notes — lean on their goals"}
+12-week goal: {main_goal or "not set"}
+This week's goal: {weekly_goal or "not set"}
+Dream: {vision or "not set"}
+Days with completed daily task: {completed_days}
+Bot notes this week (ONLY fact source):
+{week_context or "few notes — use goals, do not invent events"}
 
 Rules:
-- This is a letter from a friend who watched the whole week
-- 4-6 sentences, warm and personal
-- Mention specific things from the week if available
-- Note that the person tried and moved forward
-- End with an encouraging phrase about next week
-- No markdown, no lists
-- Do not write "N days together" or total streak — only this week's closing
+- YOU summarize. FORBIDDEN to ask questions or request a reply
+- FORBIDDEN to ask what is already in the notes
+- Be honest and warm: praise where earned; name gaps gently
+- Remind the 12-week goal in one phrase
+- 2–3 concrete steps for next week (statements, not questions)
+- End with: tomorrow morning we'll set a new weekly goal together
+- 5–7 sentences, no markdown, no bullet lists
+- Do not mention Sunday/Monday
 - Address by name {name}"""
+        system = "You are Space. Week recap text only. No questions."
 
     def gen() -> str:
         for mid in model_chain:
@@ -2571,12 +2622,8 @@ Rules:
                 text = claude_generate(
                     mid,
                     [{"role": "user", "content": prompt}],
-                    system=(
-                        "Пиши тепло и лично. Только текст письма без заголовков."
-                        if lang.startswith("ru")
-                        else "Write warmly and personally. Only letter text."
-                    ),
-                    max_tokens=300,
+                    system=system,
+                    max_tokens=450,
                     cache_core=False,
                 ).strip()
                 if text:
@@ -2585,15 +2632,62 @@ Rules:
                 log.warning("weekly recap generate %s: %s", mid, e)
         if lang.startswith("ru"):
             return (
-                f"{name}, неделя {week_number} была настоящей 💙 "
-                f"Ты двигалась к своей цели. Следующая неделя — новый шанс."
+                f"{name}, неделя {week_number} позади 💙 "
+                f"Ты держала фокус на «{weekly_goal or main_goal}». "
+                f"Завтра утром поставим новую цель на неделю."
             )
         return (
-            f"{name}, week {week_number} was real 💙 "
-            f"You kept moving toward your goal. Next week is a fresh chance."
+            f"{name}, week {week_number} is behind you 💙 "
+            f"Tomorrow morning we'll set a new weekly goal."
         )
 
     return await asyncio.to_thread(gen)
+
+
+async def _deliver_weekly_recap_evening(
+    bot,
+    cid: int,
+    profile: dict,
+    model_chain: list[str],
+    *,
+    days_since_start: int,
+    today: str,
+    user_profiles: dict[str, dict],
+    claim_evening_slot: bool = True,
+) -> bool:
+    """Send one-way week recap letter (no Q&A). Returns True if sent."""
+    weekly_sent_key = f"weekly_sent_day_{days_since_start}"
+    if db_store.cycle_flag_sent(profile, weekly_sent_key):
+        return False
+    week_number = max(1, days_since_start // 7 + 1)
+    try:
+        await _generate_weekly_summary_async(cid, profile, model_chain)
+        recap = await _generate_weekly_recap_message(
+            cid,
+            profile,
+            model_chain,
+            week_number,
+            days_since_start=days_since_start,
+        )
+        await bot.send_message(chat_id=cid, text=sanitize_bot_reply(recap))
+        profile = db_store.mark_cycle_flag(cid, weekly_sent_key)
+        profile = db_store.mark_weekly_recap_sent(cid, today)
+        patch: dict = {"last_weekly_recap_date": today}
+        if claim_evening_slot:
+            if db_store.claim_send_slot(cid, "last_evening_sent_date", today):
+                patch["last_evening_sent_date"] = today
+        profile = db_store.update_profile(cid, patch)
+        user_profiles[str(cid)] = profile
+        onboarding.pop(cid, None)
+        log.info(
+            "weekly recap letter sent cid=%s day=%s",
+            cid,
+            days_since_start,
+        )
+        return True
+    except Exception as e:
+        log.warning("weekly recap deliver failed cid=%s: %s", cid, e)
+        return False
 
 
 async def _generate_weekly_summary_async(
@@ -3349,12 +3443,29 @@ async def cmd_weektest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         dss = _days_since_cycle_start(prof, today)
         if dss is None:
             dss = 6
-        ob.start_weekly_recap(onboarding, cid, prof, days_since_start=dss)
-        plang = _user_lang(prof, update)
-        await _bot_reply(
-            update.message,
-            ob.weekly_recap_opening(prof, plang),
+        if dss % 7 != 6:
+            dss = (dss // 7) * 7 + 6
+        model_chain = context.bot_data.get("claude_model_names") or []
+        sent = await _deliver_weekly_recap_evening(
+            context.bot,
+            cid,
+            prof,
+            model_chain,
+            days_since_start=dss,
+            today=today.isoformat(),
+            user_profiles=user_profiles,
+            claim_evening_slot=False,
         )
+        if sent:
+            await _bot_reply(
+                update.message,
+                "Итоги недели отправила в чат ☝️",
+            )
+        else:
+            await _bot_reply(
+                update.message,
+                "Итоги за эту неделю уже были или не удалось сгенерировать.",
+            )
         return
     if arg == "reset":
         prof = db_store.update_profile(
@@ -4206,7 +4317,7 @@ def _in_weekly_special_flow(cid: int) -> bool:
     if not isinstance(st, dict):
         return False
     step = int(st.get("step") or -1)
-    return step in (ob.OB_WEEKLY_RECAP, ob.OB_CHANGE_WEEKLY)
+    return step == ob.OB_CHANGE_WEEKLY
 
 
 async def _post_weekly_goal_morning(
@@ -4499,32 +4610,18 @@ async def _bootstrap_bot() -> None:
                         if not db_store.cycle_flag_sent(
                             profile, prev_recap_key
                         ):
-                            try:
-                                ob.start_weekly_recap(
-                                    onboarding,
-                                    cid,
-                                    profile,
-                                    days_since_start=days_since_start - 1,
-                                )
-                                opening = ob.weekly_recap_opening(
-                                    profile, plang
-                                )
-                                await bot.send_message(
-                                    chat_id=cid,
-                                    text=sanitize_bot_reply(opening),
-                                )
+                            sent = await _deliver_weekly_recap_evening(
+                                bot,
+                                cid,
+                                profile,
+                                model_chain,
+                                days_since_start=days_since_start - 1,
+                                today=today,
+                                user_profiles=user_profiles,
+                                claim_evening_slot=False,
+                            )
+                            if sent:
                                 skip_regular_morning = True
-                                log.info(
-                                    "weekly recap catch-up morning cid=%s day=%s",
-                                    cid,
-                                    days_since_start,
-                                )
-                            except Exception as e:
-                                log.warning(
-                                    "Weekly recap catch-up failed cid=%s: %s",
-                                    cid,
-                                    e,
-                                )
                         elif not db_store.cycle_flag_sent(
                             profile, new_week_sent_key
                         ):
@@ -4646,33 +4743,17 @@ async def _bootstrap_bot() -> None:
                         if not db_store.cycle_flag_sent(
                             profile, weekly_sent_key
                         ) and not _in_weekly_special_flow(cid):
-                            plang = str(profile.get("language_code") or "en")
-                            try:
-                                ob.start_weekly_recap(
-                                    onboarding,
-                                    cid,
-                                    profile,
-                                    days_since_start=days_since_start,
-                                )
-                                opening = ob.weekly_recap_opening(
-                                    profile, plang
-                                )
-                                await bot.send_message(
-                                    chat_id=cid,
-                                    text=sanitize_bot_reply(opening),
-                                )
+                            sent = await _deliver_weekly_recap_evening(
+                                bot,
+                                cid,
+                                profile,
+                                model_chain,
+                                days_since_start=days_since_start,
+                                today=today,
+                                user_profiles=user_profiles,
+                            )
+                            if sent:
                                 send_regular_evening = False
-                                log.info(
-                                    "weekly recap dialog started cid=%s day=%s",
-                                    cid,
-                                    days_since_start,
-                                )
-                            except Exception as e:
-                                log.warning(
-                                    "Weekly recap start failed cid=%s: %s",
-                                    cid,
-                                    e,
-                                )
                         elif db_store.cycle_flag_sent(profile, weekly_sent_key):
                             send_regular_evening = False
 

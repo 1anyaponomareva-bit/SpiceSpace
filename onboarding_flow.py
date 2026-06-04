@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "weekly-cycle-v2"
+BOT_BUILD = "weekly-cycle-v3"
 
 OB_RETURNING = 0
 OB_NAME = 1
@@ -2178,96 +2178,14 @@ async def handle_onboarding_turn(
         return
 
     if step == OB_WEEKLY_RECAP:
-        turns = st.setdefault("recap_turns", [])
-        turns.append({"role": "user", "content": raw.strip()[:2000]})
-        dss = int(st.get("days_since_start") or 0)
-        week_number = max(1, dss // 7 + 1)
-        prof = user_profiles.get(str(cid)) or db.get_profile(cid) or {}
-        summaries = db.list_daily_summaries(str(cid))
-        week_summaries = summaries[-7:] if len(summaries) >= 7 else summaries
-        week_context = "\n".join(
-            f"- {str(s.get('summary') or '')[:120]}"
-            for s in week_summaries
-            if s.get("summary")
+        onboarding.pop(cid, None)
+        hint = (
+            "Итоги недели теперь приходят одним сообщением от меня. "
+            "Если пропустила — напиши /weektest recap"
+            if _is_ru(lang)
+            else "Week recap is now one message from me. If you missed it — /weektest recap"
         )
-        recap_hint = (
-            "Ask one new question or close the week warmly (ready: true)."
-            if not _is_ru(lang)
-            else "Задай ещё один вопрос или тепло закрой неделю (ready: true)."
-        )
-        async with typing_while(context.bot, cid):
-            result = await _claude_weekly_recap_dialog(
-                turns,
-                model_names,
-                profile=prof,
-                week_number=week_number,
-                week_context=week_context,
-                lang=lang,
-            )
-            reply = (result.get("message") or ob_text("weekly_dialog_fallback", lang)).strip()
-        turns.append({"role": "assistant", "content": reply[:2000]})
-        if result.get("ready"):
-            from summaries import generate_weekly_summary
-
-            await asyncio.to_thread(generate_weekly_summary, cid, prof, model_names)
-            try:
-                tz = ZoneInfo(str(prof.get("timezone") or _default_timezone()))
-            except Exception:
-                tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
-            today_iso = datetime.now(tz).date().isoformat()
-            weekly_key = f"weekly_sent_day_{dss}"
-            db.mark_cycle_flag(cid, weekly_key)
-            db.mark_weekly_recap_sent(cid, today_iso)
-            db.claim_send_slot(cid, "last_evening_sent_date", today_iso)
-            profile = db.update_profile(
-                cid,
-                {
-                    "last_evening_sent_date": today_iso,
-                    "last_weekly_recap_date": today_iso,
-                },
-            )
-            user_profiles[str(cid)] = profile
-            onboarding.pop(cid, None)
-            today_dss = None
-            try:
-                tz = ZoneInfo(str(prof.get("timezone") or _default_timezone()))
-            except Exception:
-                tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
-            today_local = datetime.now(tz).date()
-            cs = str(prof.get("cycle_start_date") or "")[:10]
-            if cs:
-                try:
-                    today_dss = (today_local - date.fromisoformat(cs)).days
-                except ValueError:
-                    today_dss = None
-            catch_up_new_week = (
-                today_dss is not None
-                and today_dss % 7 == 0
-                and dss == today_dss - 1
-            )
-            if catch_up_new_week:
-                close = (
-                    "Спасибо 💚 Неделя закрыта. Теперь поставим цель на новую неделю."
-                    if _is_ru(lang)
-                    else "Thanks 💚 Week closed. Now let's set this week's goal."
-                )
-                await msg.reply_text(reply + "\n\n" + close)
-                start_change_weekly(
-                    onboarding, cid, prof, from_week_start=True
-                )
-                nw_key = f"new_week_sent_day_{today_dss}"
-                db.mark_cycle_flag(cid, nw_key)
-                prof = user_profiles.get(str(cid)) or prof
-                await msg.reply_text(new_week_opening(prof, lang))
-            else:
-                close = (
-                    "Спасибо что поделилась 💚 Неделя закрыта — завтра поставим новую недельную цель."
-                    if _is_ru(lang)
-                    else "Thanks for sharing 💚 Week closed — tomorrow we'll set a new weekly goal."
-                )
-                await msg.reply_text(reply + "\n\n" + close)
-        else:
-            await msg.reply_text(reply)
+        await msg.reply_text(hint)
         return
 
     if step == OB_CHANGE_WEEKLY:
