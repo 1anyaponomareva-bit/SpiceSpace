@@ -3129,10 +3129,44 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if isinstance(prof, dict) and prof.get("name"):
-        if not _profile_has_goals(prof):
+        if not ob.profile_onboarding_complete(prof):
             name = str(prof.get("name", "")).strip()
-            ob.start_reonboarding(onboarding, cid, name, lang)
-            await _bot_reply(update.message, ob.message_vision(name, lang))
+            kind = ob.start_resume_incomplete_onboarding(
+                onboarding, cid, prof, lang
+            )
+            if kind == "vision":
+                await _bot_reply(
+                    update.message,
+                    ob.message_vision(name, lang),
+                )
+            elif kind == "weekly":
+                await _bot_reply(
+                    update.message,
+                    ob.ob_text("profile_incomplete_reonboard", lang, name=name),
+                )
+                await _bot_reply(
+                    update.message,
+                    ob.ob_text("main_to_weekly", lang),
+                )
+                await ob._start_weekly_tactics_dialog(
+                    update.message,
+                    onboarding[cid],
+                    context.bot_data.get("claude_model_names") or [],
+                )
+            elif kind == "morning":
+                await _bot_reply(
+                    update.message,
+                    ob.ob_text("profile_incomplete_reonboard", lang, name=name),
+                )
+                await _bot_reply(
+                    update.message,
+                    ob.morning_time_question(lang),
+                )
+            else:
+                await _bot_reply(
+                    update.message,
+                    ob.greeting_returning(name, lang),
+                )
             return
         ob.start_returning_choice(onboarding, cid, lang)
         await _bot_reply(
@@ -3235,6 +3269,50 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     st_ob = onboarding.get(cid)
     if st_ob is not None:
         await handle_onboarding_turn(update, context, raw)
+        return
+
+    prof_check = user_profiles.get(str(cid)) or db_store.get_profile(cid)
+    if isinstance(prof_check, dict) and not ob.profile_onboarding_complete(
+        prof_check
+    ):
+        user_profiles[str(cid)] = prof_check
+        name = str(prof_check.get("name") or "").strip()
+        if not name and update.effective_user:
+            name = str(update.effective_user.first_name or "").strip()
+        lang = _user_lang(prof_check, update)
+        kind = ob.start_resume_incomplete_onboarding(
+            onboarding, cid, prof_check, lang
+        )
+        if kind == "vision":
+            await _bot_reply(
+                update.message,
+                ob.message_vision(name, lang),
+            )
+        elif kind == "weekly":
+            await _bot_reply(
+                update.message,
+                ob.ob_text("profile_incomplete_reonboard", lang, name=name),
+            )
+            await _bot_reply(update.message, ob.ob_text("main_to_weekly", lang))
+            await ob._start_weekly_tactics_dialog(
+                update.message,
+                onboarding[cid],
+                context.bot_data.get("claude_model_names") or [],
+            )
+        elif kind == "morning":
+            await _bot_reply(
+                update.message,
+                ob.ob_text("profile_incomplete_reonboard", lang, name=name),
+            )
+            await _bot_reply(
+                update.message,
+                ob.morning_time_question(lang),
+            )
+        else:
+            await _bot_reply(
+                update.message,
+                ob.ob_text("returning_hint", lang),
+            )
         return
 
     if not user_profiles.get(str(cid)):

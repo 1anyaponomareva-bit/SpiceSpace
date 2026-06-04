@@ -1647,6 +1647,86 @@ def looks_like_just_chat(raw: str) -> bool:
     )
 
 
+def profile_has_main_goal(prof: dict | None) -> bool:
+    if not isinstance(prof, dict):
+        return False
+    goal = str(
+        prof.get("main_goal")
+        or prof.get("final_goal")
+        or prof.get("raw_goal")
+        or ""
+    ).strip()
+    return bool(goal)
+
+
+def profile_onboarding_complete(prof: dict | None) -> bool:
+    """True only after full flow: name, 12w goal, week 1 goal, cycle start (times saved)."""
+    if not isinstance(prof, dict):
+        return False
+    if not str(prof.get("name") or "").strip():
+        return False
+    if not profile_has_main_goal(prof):
+        return False
+    if not str(prof.get("weekly_goal") or "").strip():
+        return False
+    if not str(prof.get("cycle_start_date") or "").strip():
+        return False
+    return True
+
+
+def start_resume_incomplete_onboarding(
+    onboarding: dict[int, dict],
+    cid: int,
+    prof: dict,
+    lang: str = "en",
+) -> str:
+    """
+    Resume setup for a partial profile. Returns resume kind:
+    vision | weekly | morning | complete
+    """
+    lc = str(lang or prof.get("language_code") or "en")
+    name = str(prof.get("name") or "").strip()
+
+    if not profile_has_main_goal(prof):
+        start_reonboarding(onboarding, cid, name, lc)
+        return "vision"
+
+    if not str(prof.get("weekly_goal") or "").strip():
+        onboarding[cid] = {
+            "step": OB_WEEKLY_TACTICS,
+            "name": name,
+            "main_goal": str(
+                prof.get("main_goal")
+                or prof.get("final_goal")
+                or prof.get("raw_goal")
+                or ""
+            ).strip()[:2000],
+            "vision": str(prof.get("vision") or "").strip()[:4000],
+            "weekly_turns": [],
+            "lang": lc,
+            "language_code": lc,
+            "last_activity_at": datetime.now(),
+            "reminder_sent": False,
+        }
+        return "weekly"
+
+    if not str(prof.get("cycle_start_date") or "").strip():
+        onboarding[cid] = {
+            "step": OB_MORNING_TIME,
+            "name": name,
+            "main_goal": str(prof.get("main_goal") or "").strip()[:2000],
+            "weekly_goal": str(prof.get("weekly_goal") or "").strip()[:2000],
+            "vision": str(prof.get("vision") or "").strip()[:4000],
+            "lang": lc,
+            "language_code": lc,
+            "last_activity_at": datetime.now(),
+            "reminder_sent": False,
+        }
+        return "morning"
+
+    return "complete"
+
+
 def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
     morning = str(st.get("morning_time", "09:30"))
     evening = str(st.get("evening_time", "21:00"))
@@ -1892,6 +1972,9 @@ async def handle_returning_choice(
         return True
 
     if looks_like_just_chat(raw):
+        if not profile_onboarding_complete(prof):
+            await msg.reply_text(ob_text("returning_hint", lang))
+            return True
         onboarding.pop(cid, None)
         await msg.reply_text(ob_text("returning_just_chat", lang))
         return True
