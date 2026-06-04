@@ -166,8 +166,13 @@
     const overlay = document.getElementById('fortune-overlay');
     if (!overlay || wasSeenToday()) return;
 
-    const data = await apiFetch('/api/fortune/today');
-    if (!data?.text) return;
+    let data = await apiFetch('/api/fortune/today');
+    if (!data?.text) {
+      data = {
+        text: 'Сегодня знак найдёт тебя сам — не игнорируй первое совпадение.',
+        sub: 'Сохрани картинку — завтра будет смешно проверить.',
+      };
+    }
 
     setFortuneText(data);
     ensureSparks(overlay);
