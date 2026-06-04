@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "weekly-cycle-v1"
+BOT_BUILD = "weekly-cycle-v2"
 
 OB_RETURNING = 0
 OB_NAME = 1
@@ -318,7 +318,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "Давай поставим цель на эту неделю — одним фокусом."
     ),
     "weekly_recap_opening": (
-        "Воскресный вечер — время подвести итоги недели.\n\n"
+        "Последний вечер этой недели — давай подведём итоги.\n\n"
         "Цель этой недели была: {weekly_goal}\n\n"
         "Как прошла неделя? Что получилось, а что нет?"
     ),
@@ -2261,9 +2261,9 @@ async def handle_onboarding_turn(
                 await msg.reply_text(new_week_opening(prof, lang))
             else:
                 close = (
-                    "Спасибо что поделилась 💚 Неделя закрыта — завтра утром поставим новую цель."
+                    "Спасибо что поделилась 💚 Неделя закрыта — завтра поставим новую недельную цель."
                     if _is_ru(lang)
-                    else "Thanks for sharing 💚 Week closed — tomorrow we'll set a new goal."
+                    else "Thanks for sharing 💚 Week closed — tomorrow we'll set a new weekly goal."
                 )
                 await msg.reply_text(reply + "\n\n" + close)
         else:

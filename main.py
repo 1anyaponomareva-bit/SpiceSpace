@@ -3278,13 +3278,20 @@ async def cmd_weektest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         prev_key = (
             f"weekly_sent_day_{dss - 1}" if dss is not None and dss > 0 else "—"
         )
+        phase_days = _cycle_phase_weekdays(prof)
+        phase_line = (
+            f"итоги_вечер={phase_days[0]}, новая_цель_утро={phase_days[1]}"
+            if phase_days
+            else "итоги/новая_неделя: нет cycle_start"
+        )
         await _bot_reply(
             update.message,
             f"cycle_start={prof.get('cycle_start_date')}\n"
             f"program_day={journey}\n"
             f"days_since_start={dss}\n"
-            f"week_end={_is_program_week_end(dss)}\n"
-            f"week_start={_is_program_week_start(dss)}\n"
+            f"{phase_line}\n"
+            f"сегодня_итоги={_is_program_week_end(dss)}\n"
+            f"сегодня_новая_неделя={_is_program_week_start(dss)}\n"
             f"recap_flag={db_store.cycle_flag_sent(prof, prev_key) if dss else '—'}\n"
             f"onboarding_step={onboarding.get(cid, {}).get('step')}",
         )
@@ -4132,17 +4139,34 @@ def _days_since_cycle_start(profile: dict, today: date) -> int | None:
 
 
 def _is_program_week_end(days_since_start: int | None) -> bool:
-    """Day 7 of the personal week (0-based offset 6)."""
+    """Day 7 of the personal week (evening recap; tied to cycle_start_date, not calendar)."""
     return days_since_start is not None and days_since_start % 7 == 6
 
 
 def _is_program_week_start(days_since_start: int | None) -> bool:
-    """Day 8, 15, … — Monday after the first Sunday evening recap."""
+    """Day 8, 15, … — morning new weekly goal (next day after personal week recap)."""
     return (
         days_since_start is not None
         and days_since_start >= 7
         and days_since_start % 7 == 0
     )
+
+
+_WEEKDAY_RU = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+
+
+def _cycle_phase_weekdays(profile: dict) -> tuple[str, str] | None:
+    """(recap weekday, new-week weekday) from cycle_start_date."""
+    raw = str(profile.get("cycle_start_date") or "").strip()[:10]
+    if not raw:
+        return None
+    try:
+        start = date.fromisoformat(raw)
+    except ValueError:
+        return None
+    recap = start + timedelta(days=6)
+    new_week = start + timedelta(days=7)
+    return (_WEEKDAY_RU[recap.weekday()], _WEEKDAY_RU[new_week.weekday()])
 
 
 def _ensure_cycle_start_date(
