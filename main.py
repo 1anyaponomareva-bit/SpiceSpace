@@ -5338,10 +5338,7 @@ async def get_fortune_today(
     if cached_date == today_iso and text:
         return {"date": today_iso, "text": text, "sub": sub or _fortune_fallback(profile.get("language_code"))[1]}
 
-    model_chain = build_model_chain(
-        os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5"),
-        os.environ.get("CLAUDE_FALLBACK_MODELS", ""),
-    )
+    model_chain = build_model_chain(select_model_id())
     text, sub = await asyncio.to_thread(_generate_fortune_message, profile, model_chain)
     db_store.update_profile(
         tid,
