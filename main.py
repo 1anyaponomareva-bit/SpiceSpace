@@ -3368,7 +3368,7 @@ async def cmd_weektest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     await _bot_reply(
         update.message,
-        "Использование: /weektest status | end | start | reset",
+        "Использование: /weektest status | end | start | recap | reset",
     )
 
 
