@@ -4617,6 +4617,7 @@ async def root() -> dict:
             "/api/profile?telegram_id=<digits>",
             "/api/calendar",
             "/api/milestone",
+            "/api/fortune/today",
             "/api/tasks",
         ],
         "miniapp": _mini_app_url(),
@@ -5214,6 +5215,139 @@ async def delete_task_endpoint(
     if not _delete_task_by_id(task_id, int(tid)):
         raise HTTPException(status_code=404, detail="task not found")
     return {"ok": True}
+
+
+_FORTUNE_FALLBACKS_RU = [
+    (
+        "Сегодня знак найдёт тебя сам — не игнорируй первое совпадение.",
+        "Сохрани картинку. Завтра будет смешно проверить.",
+    ),
+    (
+        "Одно маленькое «да» сегодня сдвинет неделю сильнее, чем идеальный план.",
+        "Сделай скрин — пусть предсказание догонит тебя вечером.",
+    ),
+    (
+        "Ты уже ближе к цели, чем вчера утром. Доверься следующему шагу.",
+        "Скачай записку и спрячь — откроешь через сутки.",
+    ),
+]
+
+_FORTUNE_FALLBACKS_EN = [
+    (
+        "Today a sign will find you — don't ignore the first coincidence.",
+        "Save the image. Tomorrow it'll be fun to check.",
+    ),
+    (
+        "One small yes today moves the week more than a perfect plan.",
+        "Screenshot it — let the fortune catch up tonight.",
+    ),
+]
+
+
+def _fortune_fallback(lang: str) -> tuple[str, str]:
+    pool = _FORTUNE_FALLBACKS_EN if str(lang or "").startswith("en") else _FORTUNE_FALLBACKS_RU
+    idx = abs(hash(datetime.now().strftime("%Y-%m-%d"))) % len(pool)
+    return pool[idx]
+
+
+def _generate_fortune_message(profile: dict, model_chain: list[str]) -> tuple[str, str]:
+    """Daily fortune cookie: main line + short subline."""
+    name = str(profile.get("name") or "").strip() or "друг"
+    main_goal = str(profile.get("main_goal") or "").strip()
+    weekly_goal = str(profile.get("weekly_goal") or "").strip()
+    vision = str(profile.get("vision") or "").strip()
+    lang = str(profile.get("language_code") or "ru")
+    program_day = int(profile.get("program_day") or profile.get("streak") or 1)
+
+    if lang.startswith("ru"):
+        prompt = f"""Напиши предсказание из печенья с судьбой для {name}.
+
+Контекст (не перечисляй списком, вплети намёком):
+— день в программе: {program_day}
+— цель 12 недель: {main_goal or "не указана"}
+— цель недели: {weekly_goal or "не указана"}
+— мечта: {vision or "не указана"}
+
+Формат ответа СТРОГО две строки через символ | (вертикальная черта):
+СТРОКА1 — главное предсказание: 1–2 коротких предложения, тёпло, с лёгкой иронией, без пафоса
+СТРОКА2 — подпись мелким шрифтом: одно предложение, намекни сохранить скрин и проверить завтра
+
+Без markdown, без кавычек, без эмодзи."""
+        system = "Ты пишешь fortune cookie для подруги. Только две строки через |."
+    else:
+        prompt = f"""Write a fortune-cookie prediction for {name}.
+
+Context (weave in subtly, no bullet lists):
+— program day: {program_day}
+— 12-week goal: {main_goal or "not set"}
+— weekly goal: {weekly_goal or "not set"}
+— dream: {vision or "not set"}
+
+Reply format STRICTLY two lines separated by |:
+LINE1 — main fortune: 1–2 short sentences, warm, lightly witty
+LINE2 — small subline: one sentence, hint to save a screenshot and check tomorrow
+
+No markdown, no quotes, no emoji."""
+        system = "You write fortune cookies for a friend. Only two lines separated by |."
+
+    for mid in model_chain or [""]:
+        if not mid:
+            continue
+        try:
+            raw = claude_generate(
+                mid,
+                [{"role": "user", "content": prompt}],
+                system=system,
+                max_tokens=180,
+                cache_core=False,
+            ).strip()
+            if "|" in raw:
+                a, b = raw.split("|", 1)
+                text = sanitize_bot_reply(a.strip())
+                sub = sanitize_bot_reply(b.strip())
+            else:
+                text = sanitize_bot_reply(raw)
+                sub = (
+                    "Save the image — fun to check tomorrow."
+                    if lang.startswith("en")
+                    else "Сохрани картинку — завтра будет смешно проверить."
+                )
+            if text:
+                return text, sub or _fortune_fallback(lang)[1]
+        except Exception as e:
+            log.warning("fortune generate failed model=%s: %s", mid, e)
+    return _fortune_fallback(lang)
+
+
+@app.get("/api/fortune/today")
+async def get_fortune_today(
+    request: Request,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+) -> dict:
+    """Daily fortune for Mini App overlay (cached per local calendar day)."""
+    tid = _auth_telegram_id(request, telegram_id)
+    profile = db_store.get_profile(tid)
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    today_iso = _profile_local_date(profile).isoformat()
+    cached_date = str(profile.get("fortune_date") or "").strip()
+    text = str(profile.get("fortune_text") or "").strip()
+    sub = str(profile.get("fortune_sub") or "").strip()
+
+    if cached_date == today_iso and text:
+        return {"date": today_iso, "text": text, "sub": sub or _fortune_fallback(profile.get("language_code"))[1]}
+
+    model_chain = build_model_chain(
+        os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5"),
+        os.environ.get("CLAUDE_FALLBACK_MODELS", ""),
+    )
+    text, sub = await asyncio.to_thread(_generate_fortune_message, profile, model_chain)
+    db_store.update_profile(
+        tid,
+        {"fortune_date": today_iso, "fortune_text": text, "fortune_sub": sub},
+    )
+    return {"date": today_iso, "text": text, "sub": sub}
 
 
 if __name__ == "__main__":
