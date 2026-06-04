@@ -5217,29 +5217,31 @@ async def delete_task_endpoint(
     return {"ok": True}
 
 
+_FORTUNE_STYLE_VERSION = "goal-future-v1"
+
 _FORTUNE_FALLBACKS_RU = [
     (
-        "Сегодня знак найдёт тебя сам — не игнорируй первое совпадение.",
-        "Сохрани картинку. Завтра будет смешно проверить.",
+        "Скоро увидишь, как твоя цель на 12 недель сдвинется — один честный шаг за другим.",
+        "Сохрани записку и сверься с ней через пару дней.",
     ),
     (
-        "Одно маленькое «да» сегодня сдвинет неделю сильнее, чем идеальный план.",
-        "Сделай скрин — пусть предсказание догонит тебя вечером.",
+        "Впереди неделя, где твоя цель станет ближе — если не отложишь первый маленький шаг.",
+        "Скачай картинку — потом будет интересно сравнить.",
     ),
     (
-        "Ты уже ближе к цели, чем вчера утром. Доверься следующему шагу.",
-        "Скачай записку и спрячь — откроешь через сутки.",
+        "Твоя мечта не ждёт идеального дня — скоро поймёшь, что хватило одного решения.",
+        "Спрячь скрин и открой, когда захочешь проверить знак.",
     ),
 ]
 
 _FORTUNE_FALLBACKS_EN = [
     (
-        "Today a sign will find you — don't ignore the first coincidence.",
-        "Save the image. Tomorrow it'll be fun to check.",
+        "Soon you'll see your 12-week goal move — one honest step at a time.",
+        "Save the slip and check back in a few days.",
     ),
     (
-        "One small yes today moves the week more than a perfect plan.",
-        "Screenshot it — let the fortune catch up tonight.",
+        "Ahead is a week where your goal gets closer — if you don't postpone the first small step.",
+        "Download the image — fun to compare later.",
     ),
 ]
 
@@ -5298,7 +5300,7 @@ No markdown, no quotes, no emoji."""
                 mid,
                 [{"role": "user", "content": prompt}],
                 system=system,
-                max_tokens=180,
+                max_tokens=120,
                 cache_core=False,
             ).strip()
             if "|" in raw:
@@ -5335,14 +5337,20 @@ async def get_fortune_today(
     text = str(profile.get("fortune_text") or "").strip()
     sub = str(profile.get("fortune_sub") or "").strip()
 
-    if cached_date == today_iso and text:
+    style_ok = str(profile.get("fortune_style") or "") == _FORTUNE_STYLE_VERSION
+    if cached_date == today_iso and text and style_ok:
         return {"date": today_iso, "text": text, "sub": sub or _fortune_fallback(profile.get("language_code"))[1]}
 
     model_chain = build_model_chain(select_model_id())
     text, sub = await asyncio.to_thread(_generate_fortune_message, profile, model_chain)
     db_store.update_profile(
         tid,
-        {"fortune_date": today_iso, "fortune_text": text, "fortune_sub": sub},
+        {
+            "fortune_date": today_iso,
+            "fortune_text": text,
+            "fortune_sub": sub,
+            "fortune_style": _FORTUNE_STYLE_VERSION,
+        },
     )
     return {"date": today_iso, "text": text, "sub": sub}
 
