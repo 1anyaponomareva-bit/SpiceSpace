@@ -3194,6 +3194,20 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db_store.save_subscriber(cid, True)
 
     start_arg = (context.args[0] if context.args else "").strip().lower()
+    if start_arg in ("change_weekly", "change-weekly", "weekly_goal"):
+        if isinstance(prof, dict) and prof.get("name"):
+            ob.start_change_weekly(onboarding, cid, prof)
+            plang = str(prof.get("language_code") or lang)
+            opening = ob.change_weekly_opening(prof, plang)
+            await _bot_reply(update.message, opening)
+            return
+    if start_arg in ("change_12w", "change-12w", "12w_goal", "main_goal"):
+        if isinstance(prof, dict) and prof.get("name"):
+            ob.start_change_12w(onboarding, cid, prof)
+            plang = str(prof.get("language_code") or lang)
+            opening = ob.change_12w_choice_prompt(plang)
+            await _bot_reply(update.message, opening)
+            return
     if start_arg in ("reonboard", "setup", "goals", "заново"):
         name = ""
         if isinstance(prof, dict):
@@ -5314,6 +5328,53 @@ async def patch_language(
     db_store.upsert_profile(int(tid), profile)
     user_profiles[tid] = profile
     return {"ok": True}
+
+
+async def _begin_goal_change_from_webapp(tid: str, mode: str) -> dict:
+    """Start change-weekly or change-12w dialog; notify user in Telegram chat."""
+    profile = _resolve_user_profile(tid)
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=404, detail="profile not found")
+    if not str(profile.get("name") or "").strip():
+        raise HTTPException(status_code=400, detail="profile incomplete")
+
+    cid = int(tid)
+    plang = str(profile.get("language_code") or "en")
+    if mode == "weekly":
+        ob.start_change_weekly(onboarding, cid, profile)
+        message = ob.change_weekly_opening(profile, plang)
+    elif mode == "12w":
+        ob.start_change_12w(onboarding, cid, profile)
+        message = ob.change_12w_choice_prompt(plang)
+    else:
+        raise HTTPException(status_code=400, detail="invalid mode")
+
+    bot = telegram_app.bot if telegram_app else None
+    if bot:
+        try:
+            await bot.send_message(chat_id=cid, text=sanitize_bot_reply(message))
+        except Exception as e:
+            log.warning("goal_change send failed cid=%s mode=%s: %s", cid, mode, e)
+
+    return {"ok": True, "mode": mode}
+
+
+@app.post("/api/profile/change-weekly")
+async def change_weekly_goal_endpoint(
+    request: Request,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+) -> dict:
+    tid = _auth_telegram_id(request, telegram_id)
+    return await _begin_goal_change_from_webapp(tid, "weekly")
+
+
+@app.post("/api/profile/change-12w")
+async def change_12w_goal_endpoint(
+    request: Request,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+) -> dict:
+    tid = _auth_telegram_id(request, telegram_id)
+    return await _begin_goal_change_from_webapp(tid, "12w")
 
 
 @app.patch("/api/profile")

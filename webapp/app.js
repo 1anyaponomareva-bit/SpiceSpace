@@ -194,6 +194,8 @@
     const editNameBtn = document.getElementById('edit-name-btn');
     if (editNameBtn) editNameBtn.setAttribute('aria-label', t('edit_name'));
 
+    setText('#btn-change-12w', 'change_goal_12w');
+    setText('#btn-change-weekly', 'change_goal_weekly');
     setText('#btn-reset', 'settings_reset');
     setText('#btn-subscription', 'settings_subscription');
     setText('#btn-stop', 'settings_stop');
@@ -280,6 +282,11 @@
   function setCanEditName(enabled) {
     const btn = document.getElementById('edit-name-btn');
     if (btn) btn.hidden = !enabled;
+  }
+
+  function setGoalActionsVisible(visible) {
+    const block = document.getElementById('goal-actions');
+    if (block) block.hidden = !visible;
   }
 
   function setCanEditTimes(enabled) {
@@ -431,6 +438,33 @@
       try { tg.openTelegramLink(link); return; } catch (_) {}
     }
     window.open(link, '_blank');
+  }
+
+  async function startGoalChange(mode) {
+    const path = mode === 'weekly' ? '/api/profile/change-weekly' : '/api/profile/change-12w';
+    const btn = mode === 'weekly'
+      ? document.getElementById('btn-change-weekly')
+      : document.getElementById('btn-change-12w');
+    if (btn) btn.disabled = true;
+    try {
+      const resp = await apiFetch(path, { method: 'POST' });
+      if (!resp.ok) {
+        alert(t('save_failed') || 'Could not start. Try again.');
+        return;
+      }
+      haptic('light');
+      openBotChat(mode === 'weekly' ? 'change_weekly' : 'change_12w');
+      if (tg?.close) {
+        setTimeout(() => {
+          try { tg.close(); } catch (_) {}
+        }, 400);
+      }
+    } catch (e) {
+      console.error('startGoalChange failed:', e);
+      alert(t('save_failed') || 'Could not start. Try again.');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   function showSyncBanner(messageKey) {
@@ -620,6 +654,7 @@
     tasks = [];
     setCanEditName(false);
     setCanEditTimes(false);
+    setGoalActionsVisible(false);
     if (status === 401 || status === 503) {
       showSyncBanner('err_auth');
     } else {
@@ -1311,6 +1346,7 @@
     hideSyncBanner();
     setCanEditTimes(true);
     setCanEditName(true);
+    setGoalActionsVisible(profileHasGoals(profile));
     renderTimes(profile);
     paintMainScreenTimes(profileMorningTime(profile), profileEveningTime(profile));
     calendarData = await fetchCalendar();
