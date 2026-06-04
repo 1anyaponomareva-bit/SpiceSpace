@@ -10,6 +10,8 @@
     .trim()
     .replace(/\/+$/, '');
 
+  const FORTUNE_TEST_IDS = new Set(['8412438788']);
+
   const SPARK_OFFSETS = [
     [-118, -82],
     [108, -90],
@@ -73,6 +75,11 @@
     if (!tid) return url;
     const sep = url.includes('?') ? '&' : '?';
     return `${url}${sep}telegram_id=${encodeURIComponent(tid)}`;
+  }
+
+  function isFortuneTester() {
+    const tid = getTelegramId();
+    return Boolean(tid && FORTUNE_TEST_IDS.has(tid));
   }
 
   async function apiFetch(path) {
@@ -162,11 +169,19 @@
     });
   }
 
-  async function tryShow() {
-    const overlay = document.getElementById('fortune-overlay');
-    if (!overlay || wasSeenToday()) return;
+  function prepareOverlay(overlay) {
+    opened = false;
+    overlay.classList.remove('opened');
+  }
 
-    let data = await apiFetch('/api/fortune/today');
+  async function tryShow({ force = false } = {}) {
+    const overlay = document.getElementById('fortune-overlay');
+    if (!overlay) return;
+    if (!force && wasSeenToday()) return;
+
+    prepareOverlay(overlay);
+    const path = force ? '/api/fortune/today?force=1' : '/api/fortune/today';
+    let data = await apiFetch(path);
     if (!data?.text) {
       data = {
         text: 'Скоро твоя цель станет ближе — если сделаешь один честный шаг на этой неделе.',
@@ -183,5 +198,27 @@
     showOverlay(overlay);
   }
 
-  window.SpiceFortune = { tryShow, markSeenToday };
+  async function tryShowForce() {
+    try {
+      localStorage.removeItem(seenStorageKey());
+    } catch (_) {}
+    await tryShow({ force: true });
+  }
+
+  function initFortuneTestButton() {
+    const btn = document.getElementById('btn-fortune-test');
+    if (!btn || !isFortuneTester()) return;
+    btn.hidden = false;
+    btn.addEventListener('click', () => {
+      tryShowForce();
+    });
+  }
+
+  window.SpiceFortune = { tryShow, tryShowForce, markSeenToday, initFortuneTestButton };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initFortuneTestButton, { once: true });
+  } else {
+    initFortuneTestButton();
+  }
 })();

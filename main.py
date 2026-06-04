@@ -5693,10 +5693,21 @@ No markdown, no quotes, no emoji."""
     return _fortune_fallback(lang)
 
 
+def _fortune_test_telegram_ids() -> set[str]:
+    ids = {str(ADMIN_TELEGRAM_ID)}
+    raw = (os.getenv("FORTUNE_TEST_TELEGRAM_IDS") or "").strip()
+    for part in raw.split(","):
+        p = part.strip()
+        if p:
+            ids.add(p)
+    return ids
+
+
 @app.get("/api/fortune/today")
 async def get_fortune_today(
     request: Request,
     telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+    force: bool = Query(default=False),
 ) -> dict:
     """Daily fortune for Mini App overlay (cached per local calendar day)."""
     tid = _auth_telegram_id(request, telegram_id)
@@ -5710,7 +5721,8 @@ async def get_fortune_today(
     sub = str(profile.get("fortune_sub") or "").strip()
 
     style_ok = str(profile.get("fortune_style") or "") == _FORTUNE_STYLE_VERSION
-    if cached_date == today_iso and text and style_ok:
+    allow_force = force and tid in _fortune_test_telegram_ids()
+    if cached_date == today_iso and text and style_ok and not allow_force:
         return {"date": today_iso, "text": text, "sub": sub or _fortune_fallback(profile.get("language_code"))[1]}
 
     model_chain = build_model_chain(select_model_id())
