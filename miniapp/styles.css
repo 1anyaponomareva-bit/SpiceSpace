@@ -648,6 +648,10 @@ body.tg-app { background: var(--bg); }
   transition: opacity 0.3s;
 }
 
+.settings-btn--fortune-test[hidden] {
+  display: none !important;
+}
+
 .settings-block.loaded {
   opacity: 1;
 }
