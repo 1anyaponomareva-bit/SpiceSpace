@@ -4023,10 +4023,12 @@ async def _bootstrap_bot() -> None:
                             1, min(12, (days_since_start // 7) + 1)
                         )
                         is_week_end = (
-                            days_since_start > 0 and days_since_start % 7 == 0
+                            days_since_start >= 6
+                            and (days_since_start + 1) % 7 == 0
                         )
                         is_week_start = (
-                            days_since_start > 0 and days_since_start % 7 == 1
+                            days_since_start >= 7
+                            and days_since_start % 7 == 0
                         )
                         fresh = db_store.get_profile(key)
                         if isinstance(fresh, dict):
@@ -4144,7 +4146,7 @@ async def _bootstrap_bot() -> None:
                             user_profiles[key] = profile
 
                 if in_evening:
-                    if is_week_end and days_since_start >= 7:
+                    if is_week_end and days_since_start >= 6:
                         weekly_sent_key = f"weekly_sent_day_{days_since_start}"
                         if not db_store.cycle_flag_sent(
                             profile, weekly_sent_key
