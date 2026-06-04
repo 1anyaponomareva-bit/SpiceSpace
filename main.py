@@ -2572,7 +2572,7 @@ async def _generate_weekly_recap_message(
     )
 
     if lang.startswith("ru"):
-        prompt = f"""Напиши итог {week_number}-й личной недели для {name}. Это готовое сообщение в Telegram — пользователь только читает.
+        prompt = f"""Напиши итог личной недели для {name}. Это готовое сообщение в Telegram — пользователь только читает.
 
 Цель на 12 недель: {main_goal or "не указана"}
 Цель этой недели: {weekly_goal or "не указана"}
@@ -2584,6 +2584,7 @@ async def _generate_weekly_recap_message(
 Правила:
 - Ты САМА подводишь итог. ЗАПРЕЩЕНО задавать вопросы и просить ответить
 - ЗАПРЕЩЕНО спрашивать то, что уже есть в записях (например «удалось ли…» если в записях уже есть ответ)
+- ЗАПРЕЩЕНО писать «первая/вторая/N-я неделя» — только «неделя позади» или «эта неделя»
 - Честно и тепло: где молодец — скажи прямо; где не дотянула — мягко, без стыда
 - Обязательно напомни цель на 12 недель одной фразой
 - Дай 2–3 конкретных шага на следующую неделю (формулируй как предложения, не вопросы)
@@ -2595,7 +2596,7 @@ async def _generate_weekly_recap_message(
             "Ты Спейс. Пишешь готовый итог недели. Только текст сообщения, без вопросов."
         )
     else:
-        prompt = f"""Write the closing recap for {name}'s week {week_number}. Ready Telegram message — user only reads.
+        prompt = f"""Write the closing recap for {name}'s week. Ready Telegram message — user only reads.
 
 12-week goal: {main_goal or "not set"}
 This week's goal: {weekly_goal or "not set"}
@@ -2632,7 +2633,7 @@ Rules:
                 log.warning("weekly recap generate %s: %s", mid, e)
         if lang.startswith("ru"):
             return (
-                f"{name}, неделя {week_number} позади 💙 "
+                f"{name}, неделя позади 💙 "
                 f"Ты держала фокус на «{weekly_goal or main_goal}». "
                 f"Завтра утром поставим новую цель на неделю."
             )
@@ -2990,7 +2991,11 @@ async def _try_handle_natural_reminder(
     """Создать напоминание по запросу. False — не обработано (пусть Claude ответит)."""
     if not _looks_like_reminder_command(raw):
         return False
-    parsed = _parse_natural_reminder(raw, prof_d)
+    try:
+        parsed = _parse_natural_reminder(raw, prof_d)
+    except Exception as e:
+        log.exception("natural_reminder parse failed cid=%s: %s", cid, e)
+        return False
     if not parsed:
         return False
     need_title = bool(parsed.pop("_need_title", False)) or not (
@@ -4263,7 +4268,7 @@ def _is_program_week_start(days_since_start: int | None) -> bool:
     )
 
 
-_WEEKDAY_RU = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+_WEEKDAY_SHORT_RU = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
 
 
 def _cycle_phase_weekdays(profile: dict) -> tuple[str, str] | None:
@@ -4277,7 +4282,10 @@ def _cycle_phase_weekdays(profile: dict) -> tuple[str, str] | None:
         return None
     recap = start + timedelta(days=6)
     new_week = start + timedelta(days=7)
-    return (_WEEKDAY_RU[recap.weekday()], _WEEKDAY_RU[new_week.weekday()])
+    return (
+        _WEEKDAY_SHORT_RU[recap.weekday()],
+        _WEEKDAY_SHORT_RU[new_week.weekday()],
+    )
 
 
 def _ensure_cycle_start_date(
