@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
@@ -22,6 +22,7 @@ from prompts import (
     GOAL_DIALOG_SYSTEM,
     NAME_EXTRACT_PROMPT,
     VISION_DIALOG_SYSTEM,
+    WEEKLY_RECAP_DIALOG_SYSTEM,
     WEEKLY_TACTICS_DIALOG_SYSTEM,
     goal_polish_prompt_template,
 )
@@ -46,6 +47,7 @@ OB_EVENING_TIME = 8
 OB_DONE = 9
 OB_CHANGE_WEEKLY = 10
 OB_CHANGE_12W = 11
+OB_WEEKLY_RECAP = 12
 
 GOAL_TYPE_12W = "12-недельная цель"
 GOAL_TYPE_WEEKLY = "цель на неделю"
@@ -308,7 +310,17 @@ STRINGS: dict[str, dict[str, str]] = {
     "change_weekly_opening": (
         "Окей, давай поменяем цель на эту неделю. "
         "Текущая цель на 12 недель: {main_goal}\n\n"
-        "Что хочешь сделать на этой неделе вместо этого?"
+        "Что хочешь сделать на этой неделю вместо этого?"
+    ),
+    "new_week_opening": (
+        "Новая неделя 🌅\n\n"
+        "Цель на 12 недель: {main_goal}\n\n"
+        "Давай поставим цель на эту неделю — одним фокусом."
+    ),
+    "weekly_recap_opening": (
+        "Воскресный вечер — время подвести итоги недели.\n\n"
+        "Цель этой недели была: {weekly_goal}\n\n"
+        "Как прошла неделя? Что получилось, а что нет?"
     ),
     "change_12w_choice": (
         "Хочешь начать новый 12-недельный цикл с новой целью — "
@@ -470,6 +482,16 @@ STRINGS: dict[str, dict[str, str]] = {
     "change_weekly_opening": (
         "Okay, let's change this week's goal. Your 12-week goal is: {main_goal}\n\n"
         "What do you want to do this week instead?"
+    ),
+    "new_week_opening": (
+        "New week 🌅\n\n"
+        "12-week goal: {main_goal}\n\n"
+        "Let's set one clear focus for this week."
+    ),
+    "weekly_recap_opening": (
+        "Sunday evening — time to wrap up the week.\n\n"
+        "This week's goal was: {weekly_goal}\n\n"
+        "How did the week go? What worked and what didn't?"
     ),
     "change_12w_choice": (
         "Do you want to start a new 12-week cycle with a new goal — "
@@ -667,6 +689,57 @@ def change_weekly_opening(profile: dict, lang: str = "en") -> str:
     return ob_text("change_weekly_opening", lang, main_goal=main)
 
 
+def new_week_opening(profile: dict, lang: str = "en") -> str:
+    main = str(
+        profile.get("main_goal") or profile.get("final_goal") or ob_text("default_goal", lang)
+    ).strip()
+    return ob_text("new_week_opening", lang, main_goal=main)
+
+
+def weekly_recap_opening(profile: dict, lang: str = "en") -> str:
+    weekly = str(profile.get("weekly_goal") or ob_text("default_goal", lang)).strip()
+    return ob_text("weekly_recap_opening", lang, weekly_goal=weekly)
+
+
+def start_weekly_recap(
+    onboarding: dict[int, dict],
+    cid: int,
+    profile: dict,
+    *,
+    days_since_start: int,
+) -> None:
+    lang = _ob_lang(profile=profile)
+    st: dict = {
+        "step": OB_WEEKLY_RECAP,
+        "recap_turns": [],
+        "days_since_start": int(days_since_start),
+        "lang": lang,
+        "language_code": lang,
+    }
+    _seed_from_profile(st, profile)
+    onboarding[cid] = st
+
+
+def start_change_weekly(
+    onboarding: dict[int, dict],
+    cid: int,
+    profile: dict,
+    *,
+    from_week_start: bool = False,
+) -> None:
+    lang = _ob_lang(profile=profile)
+    st: dict = {
+        "step": OB_CHANGE_WEEKLY,
+        "change_mode": "weekly_only",
+        "weekly_turns": [],
+        "from_week_start": bool(from_week_start),
+        "lang": lang,
+        "language_code": lang,
+    }
+    _seed_from_profile(st, profile)
+    onboarding[cid] = st
+
+
 def change_12w_choice_prompt(lang: str = "en") -> str:
     return ob_text("change_12w_choice", lang)
 
@@ -674,19 +747,6 @@ def change_12w_choice_prompt(lang: str = "en") -> str:
 def change_12w_adjust_opening(main_goal: str, lang: str = "en") -> str:
     g = (main_goal or ob_text("default_goal", lang)).strip()
     return ob_text("change_12w_adjust", lang, goal=g)
-
-
-def start_change_weekly(onboarding: dict[int, dict], cid: int, profile: dict) -> None:
-    lang = _ob_lang(profile=profile)
-    st: dict = {
-        "step": OB_CHANGE_WEEKLY,
-        "change_mode": "weekly_only",
-        "weekly_turns": [],
-        "lang": lang,
-        "language_code": lang,
-    }
-    _seed_from_profile(st, profile)
-    onboarding[cid] = st
 
 
 def start_change_12w(onboarding: dict[int, dict], cid: int, profile: dict) -> None:
@@ -978,6 +1038,72 @@ async def _claude_vision_dialog(
     return await asyncio.to_thread(call)
 
 
+def _parse_weekly_recap_json(text: str) -> dict | None:
+    parsed = _parse_json_dialog(text, "message")
+    if not parsed:
+        return None
+    return {
+        "message": str(parsed.get("message") or "").strip(),
+        "ready": _bool_flag(parsed.get("ready")),
+    }
+
+
+async def _claude_weekly_recap_dialog(
+    turns: list[dict],
+    model_names: list[str],
+    *,
+    profile: dict,
+    week_number: int,
+    week_context: str,
+    lang: str = "en",
+    extra_user_hint: str = "",
+) -> dict:
+    messages = [
+        {"role": t["role"], "content": t["content"]}
+        for t in turns
+        if t.get("role") in ("user", "assistant") and t.get("content")
+    ]
+    if extra_user_hint:
+        messages.append({"role": "user", "content": extra_user_hint})
+
+    name = str(profile.get("name") or _friend_word(lang)).strip()
+    system = _system_with_lang(
+        WEEKLY_RECAP_DIALOG_SYSTEM.format(
+            name=name,
+            weekly_goal=str(profile.get("weekly_goal") or ("не указана" if _is_ru(lang) else "not set")),
+            main_goal=str(profile.get("main_goal") or ("не указана" if _is_ru(lang) else "not set")),
+            week_number=max(1, int(week_number)),
+            week_context=week_context or ("мало записей" if _is_ru(lang) else "few notes"),
+        ),
+        lang,
+    )
+
+    def call() -> dict:
+        for mid in model_names:
+            try:
+                text = claude_generate(
+                    mid,
+                    _messages_with_lang(messages, lang),
+                    system=system,
+                    max_tokens=400,
+                    cache_core=False,
+                ).strip()
+                parsed = _parse_weekly_recap_json(text)
+                if parsed:
+                    return parsed
+                log.warning("weekly_recap bad JSON model=%s raw=%s", mid, text[:400])
+            except Exception as e:
+                log.warning("weekly_recap %s: %s", mid, e, exc_info=True)
+        ask = (
+            "What felt like the main win this week — and what didn't work?"
+            if not _is_ru(lang)
+            else "Что было главной победой на этой неделе — и что не сработало?"
+        )
+        return {"message": ask, "ready": False}
+
+    return await asyncio.to_thread(call)
+
+
 async def _claude_change_weekly_dialog(
     turns: list[dict],
     model_names: list[str],
@@ -1187,10 +1313,16 @@ async def _dispatch_goal_confirm_after(
 
     if after == "finish_weekly":
         weekly = str(st.get("weekly_goal") or "").strip()
+        from_week_start = bool(st.get("from_week_start"))
         done_msg = await _finish_change_weekly(
             cid, weekly, user_profiles, onboarding
         )
         await msg.reply_text(done_msg)
+        if from_week_start:
+            cb = context.bot_data.get("post_weekly_goal_morning")
+            if cb:
+                prof = user_profiles.get(str(cid)) or db.get_profile(cid) or {}
+                await cb(context.bot, cid, prof, model_names)
         return
 
     if after == "finish_12w":
@@ -2043,6 +2175,99 @@ async def handle_onboarding_turn(
             await msg.reply_text(ob_text(key, lang))
             return
         await msg.reply_text(ob_text("goal_confirm_yes_no", lang))
+        return
+
+    if step == OB_WEEKLY_RECAP:
+        turns = st.setdefault("recap_turns", [])
+        turns.append({"role": "user", "content": raw.strip()[:2000]})
+        dss = int(st.get("days_since_start") or 0)
+        week_number = max(1, dss // 7 + 1)
+        prof = user_profiles.get(str(cid)) or db.get_profile(cid) or {}
+        summaries = db.list_daily_summaries(str(cid))
+        week_summaries = summaries[-7:] if len(summaries) >= 7 else summaries
+        week_context = "\n".join(
+            f"- {str(s.get('summary') or '')[:120]}"
+            for s in week_summaries
+            if s.get("summary")
+        )
+        recap_hint = (
+            "Ask one new question or close the week warmly (ready: true)."
+            if not _is_ru(lang)
+            else "Задай ещё один вопрос или тепло закрой неделю (ready: true)."
+        )
+        async with typing_while(context.bot, cid):
+            result = await _claude_weekly_recap_dialog(
+                turns,
+                model_names,
+                profile=prof,
+                week_number=week_number,
+                week_context=week_context,
+                lang=lang,
+            )
+            reply = (result.get("message") or ob_text("weekly_dialog_fallback", lang)).strip()
+        turns.append({"role": "assistant", "content": reply[:2000]})
+        if result.get("ready"):
+            from summaries import generate_weekly_summary
+
+            await asyncio.to_thread(generate_weekly_summary, cid, prof, model_names)
+            try:
+                tz = ZoneInfo(str(prof.get("timezone") or _default_timezone()))
+            except Exception:
+                tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
+            today_iso = datetime.now(tz).date().isoformat()
+            weekly_key = f"weekly_sent_day_{dss}"
+            db.mark_cycle_flag(cid, weekly_key)
+            db.mark_weekly_recap_sent(cid, today_iso)
+            db.claim_send_slot(cid, "last_evening_sent_date", today_iso)
+            profile = db.update_profile(
+                cid,
+                {
+                    "last_evening_sent_date": today_iso,
+                    "last_weekly_recap_date": today_iso,
+                },
+            )
+            user_profiles[str(cid)] = profile
+            onboarding.pop(cid, None)
+            today_dss = None
+            try:
+                tz = ZoneInfo(str(prof.get("timezone") or _default_timezone()))
+            except Exception:
+                tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
+            today_local = datetime.now(tz).date()
+            cs = str(prof.get("cycle_start_date") or "")[:10]
+            if cs:
+                try:
+                    today_dss = (today_local - date.fromisoformat(cs)).days
+                except ValueError:
+                    today_dss = None
+            catch_up_new_week = (
+                today_dss is not None
+                and today_dss % 7 == 0
+                and dss == today_dss - 1
+            )
+            if catch_up_new_week:
+                close = (
+                    "Спасибо 💚 Неделя закрыта. Теперь поставим цель на новую неделю."
+                    if _is_ru(lang)
+                    else "Thanks 💚 Week closed. Now let's set this week's goal."
+                )
+                await msg.reply_text(reply + "\n\n" + close)
+                start_change_weekly(
+                    onboarding, cid, prof, from_week_start=True
+                )
+                nw_key = f"new_week_sent_day_{today_dss}"
+                db.mark_cycle_flag(cid, nw_key)
+                prof = user_profiles.get(str(cid)) or prof
+                await msg.reply_text(new_week_opening(prof, lang))
+            else:
+                close = (
+                    "Спасибо что поделилась 💚 Неделя закрыта — завтра утром поставим новую цель."
+                    if _is_ru(lang)
+                    else "Thanks for sharing 💚 Week closed — tomorrow we'll set a new goal."
+                )
+                await msg.reply_text(reply + "\n\n" + close)
+        else:
+            await msg.reply_text(reply)
         return
 
     if step == OB_CHANGE_WEEKLY:

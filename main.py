@@ -3240,6 +3240,138 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+_WEEKTEST_ADMINS = {
+    x.strip()
+    for x in (
+        os.getenv("WEEKTEST_TELEGRAM_IDS", "8412438788") or ""
+    ).split(",")
+    if x.strip()
+}
+
+
+async def cmd_weektest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Dev helper: simulate week end (day 7) or week start (day 8) for your cycle."""
+    if not update.effective_chat or not update.message:
+        return
+    cid = update.effective_chat.id
+    if str(cid) not in _WEEKTEST_ADMINS:
+        await _bot_reply(
+            update.message,
+            "Команда только для тестового аккаунта.",
+        )
+        return
+    prof = user_profiles.get(str(cid)) or db_store.get_profile(cid)
+    if not isinstance(prof, dict):
+        await _bot_reply(update.message, "Сначала /start — нужен профиль.")
+        return
+    tz_name = _profile_timezone_name(prof)
+    try:
+        user_tz = ZoneInfo(tz_name)
+    except Exception:
+        user_tz = _get_timezone()
+    today = datetime.now(user_tz).date()
+    arg = (context.args[0] if context.args else "status").strip().lower()
+    if arg == "status":
+        prof = _ensure_cycle_start_date(cid, prof, today)
+        dss = _days_since_cycle_start(prof, today)
+        journey = _program_journey_days(prof)
+        prev_key = (
+            f"weekly_sent_day_{dss - 1}" if dss is not None and dss > 0 else "—"
+        )
+        await _bot_reply(
+            update.message,
+            f"cycle_start={prof.get('cycle_start_date')}\n"
+            f"program_day={journey}\n"
+            f"days_since_start={dss}\n"
+            f"week_end={_is_program_week_end(dss)}\n"
+            f"week_start={_is_program_week_start(dss)}\n"
+            f"recap_flag={db_store.cycle_flag_sent(prof, prev_key) if dss else '—'}\n"
+            f"onboarding_step={onboarding.get(cid, {}).get('step')}",
+        )
+        return
+    if arg == "end":
+        start = (today - timedelta(days=6)).isoformat()
+        prof = db_store.update_profile(
+            cid,
+            {
+                "cycle_start_date": start,
+                "last_evening_sent_date": None,
+            },
+        )
+        user_profiles[str(cid)] = prof
+        onboarding.pop(cid, None)
+        await _bot_reply(
+            update.message,
+            f"Ок. cycle_start_date={start} (сегодня день 7).\n"
+            "Дождись вечернего времени или напиши боту вечером — начнётся диалог итогов.",
+        )
+        return
+    if arg == "start":
+        start = (today - timedelta(days=7)).isoformat()
+        prof = db_store.update_profile(
+            cid,
+            {
+                "cycle_start_date": start,
+                "last_morning_sent_date": None,
+            },
+        )
+        user_profiles[str(cid)] = prof
+        onboarding.pop(cid, None)
+        for k in list(prof.keys()):
+            if str(k).startswith("weekly_sent_day_") or str(k).startswith(
+                "new_week_sent_day_"
+            ):
+                prof.pop(k, None)
+        cf = prof.get("cycle_flags")
+        if isinstance(cf, dict):
+            prof["cycle_flags"] = {
+                k: v
+                for k, v in cf.items()
+                if not str(k).startswith(("weekly_sent_day_", "new_week_sent_day_"))
+            }
+        db_store.update_profile(cid, {"cycle_flags": prof.get("cycle_flags") or {}})
+        user_profiles[str(cid)] = db_store.get_profile(cid) or prof
+        await _bot_reply(
+            update.message,
+            f"Ок. cycle_start_date={start} (сегодня день 8).\n"
+            "Утром придёт запрос новой недельной цели; после неё — задачи на день.",
+        )
+        return
+    if arg == "recap":
+        prof = _ensure_cycle_start_date(cid, prof, today)
+        dss = _days_since_cycle_start(prof, today)
+        if dss is None:
+            dss = 6
+        ob.start_weekly_recap(onboarding, cid, prof, days_since_start=dss)
+        plang = _user_lang(prof, update)
+        await _bot_reply(
+            update.message,
+            ob.weekly_recap_opening(prof, plang),
+        )
+        return
+    if arg == "reset":
+        prof = db_store.update_profile(
+            cid,
+            {
+                "cycle_start_date": today.isoformat(),
+                "last_morning_sent_date": None,
+                "last_evening_sent_date": None,
+                "cycle_flags": {},
+            },
+        )
+        user_profiles[str(cid)] = prof
+        onboarding.pop(cid, None)
+        await _bot_reply(
+            update.message,
+            "Сброс недельных флагов. cycle_start = сегодня (день 1).",
+        )
+        return
+    await _bot_reply(
+        update.message,
+        "Использование: /weektest status | end | start | reset",
+    )
+
+
 async def cmd_reonboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Заново настроить цели (профиль в Supabase можно не удалять)."""
     if not update.effective_chat or not update.message:
@@ -3987,6 +4119,100 @@ def _program_journey_days(profile: dict) -> int | None:
         return None
 
 
+def _days_since_cycle_start(profile: dict, today: date) -> int | None:
+    cycle_start_raw = str(profile.get("cycle_start_date") or "").strip()
+    if not cycle_start_raw:
+        return None
+    try:
+        cycle_start = date.fromisoformat(cycle_start_raw)
+    except ValueError:
+        return None
+    days = (today - cycle_start).days
+    return days if days >= 0 else None
+
+
+def _is_program_week_end(days_since_start: int | None) -> bool:
+    """Day 7 of the personal week (0-based offset 6)."""
+    return days_since_start is not None and days_since_start % 7 == 6
+
+
+def _is_program_week_start(days_since_start: int | None) -> bool:
+    """Day 8, 15, … — Monday after the first Sunday evening recap."""
+    return (
+        days_since_start is not None
+        and days_since_start >= 7
+        and days_since_start % 7 == 0
+    )
+
+
+def _ensure_cycle_start_date(
+    cid: int, profile: dict, today: date
+) -> dict:
+    """Backfill cycle_start_date for profiles created before the field existed."""
+    if str(profile.get("cycle_start_date") or "").strip():
+        return profile
+    journey = _program_journey_days(profile)
+    if journey is None:
+        summaries = db_store.list_daily_summaries(str(cid))
+        dates = [
+            str(s.get("summary_date") or s.get("date") or "")[:10]
+            for s in summaries
+            if isinstance(s, dict)
+        ]
+        dates = [d for d in dates if len(d) >= 10]
+        if dates:
+            inferred = min(dates)
+        else:
+            inferred = today.isoformat()
+    else:
+        inferred = (today - timedelta(days=journey - 1)).isoformat()
+    profile = db_store.update_profile(cid, {"cycle_start_date": inferred})
+    user_profiles[str(cid)] = profile
+    log.info(
+        "cycle_start_date backfilled cid=%s start=%s journey=%s",
+        cid,
+        inferred,
+        journey,
+    )
+    return profile
+
+
+def _in_weekly_special_flow(cid: int) -> bool:
+    st = onboarding.get(cid)
+    if not isinstance(st, dict):
+        return False
+    step = int(st.get("step") or -1)
+    return step in (ob.OB_WEEKLY_RECAP, ob.OB_CHANGE_WEEKLY)
+
+
+async def _post_weekly_goal_morning(
+    bot,
+    cid: int,
+    profile: dict,
+    model_names: list[str],
+) -> None:
+    """After a new weekly goal is set — morning task options for today."""
+    ulang = _user_lang(profile)
+    try:
+        await _restore_history_from_db(cid, "morning after weekly goal")
+        async with typing_while(bot, cid):
+            text = await _morning_message_text(cid, profile, model_names)
+        histories.setdefault(cid, []).append({"role": "model", "parts": [text]})
+        keyboard = _webapp_keyboard(cid, ulang)
+        await bot.send_message(
+            chat_id=cid,
+            text=sanitize_bot_reply(text),
+            reply_markup=keyboard,
+        )
+        pending_morning[cid] = {
+            "task": "",
+            "text": text,
+            "awaiting_reminder": False,
+        }
+    except Exception as e:
+        log.warning("post_weekly_goal_morning failed cid=%s: %s", cid, e)
+
+
 def _bump_streak_on_mark(profile: dict, today: date) -> int:
     last = str(profile.get("last_streak_date") or "").strip()
     old = int(profile.get("streak") or 0)
@@ -4116,6 +4342,7 @@ def _register_telegram_handlers(app_: Application) -> None:
     app_.add_handler(CommandHandler("reset", cmd_reset))
     app_.add_handler(CommandHandler("reonboard", cmd_reonboard))
     app_.add_handler(CommandHandler("setup", cmd_reonboard))
+    app_.add_handler(CommandHandler("weektest", cmd_weektest))
     app_.add_handler(MessageHandler(filters.VOICE, on_voice))
     app_.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app_.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
@@ -4143,6 +4370,7 @@ async def _bootstrap_bot() -> None:
     telegram_app = Application.builder().token(token).build()
     telegram_app.bot_data["claude_model_names"] = model_chain
     telegram_app.bot_data["mini_app_url"] = _mini_app_url()
+    telegram_app.bot_data["post_weekly_goal_morning"] = _post_weekly_goal_morning
     _register_telegram_handlers(telegram_app)
 
     bot = telegram_app.bot
@@ -4205,52 +4433,85 @@ async def _bootstrap_bot() -> None:
                     already_sent_today=evening_sent,
                 )
 
-                is_week_end = False
-                is_week_start = False
-                days_since_start = 0
+                profile = _ensure_cycle_start_date(
+                    cid, profile, now_local.date()
+                )
+                user_profiles[key] = profile
+                days_since_start = _days_since_cycle_start(
+                    profile, now_local.date()
+                )
+                is_week_end = _is_program_week_end(days_since_start)
+                is_week_start = _is_program_week_start(days_since_start)
                 current_week = int(profile.get("current_week") or 1)
-                cycle_start_raw = str(profile.get("cycle_start_date") or "").strip()
-                if cycle_start_raw:
-                    try:
-                        cycle_start = date.fromisoformat(cycle_start_raw)
-                    except ValueError:
-                        cycle_start = None
-                    if cycle_start is not None:
-                        days_since_start = (now_local.date() - cycle_start).days
-                        current_week = max(
-                            1, min(12, (days_since_start // 7) + 1)
+                if days_since_start is not None:
+                    current_week = max(
+                        1, min(12, (days_since_start // 7) + 1)
+                    )
+                    fresh = db_store.get_profile(key)
+                    if isinstance(fresh, dict):
+                        profile = fresh
+                        user_profiles[key] = fresh
+                    if int(profile.get("current_week") or 1) != current_week:
+                        profile["current_week"] = current_week
+                        db_store.update_profile(
+                            cid, {"current_week": current_week}
                         )
-                        is_week_end = (
-                            days_since_start >= 6
-                            and (days_since_start + 1) % 7 == 0
-                        )
-                        is_week_start = (
-                            days_since_start >= 7
-                            and days_since_start % 7 == 0
-                        )
-                        fresh = db_store.get_profile(key)
-                        if isinstance(fresh, dict):
-                            profile = fresh
-                            user_profiles[key] = fresh
-                        if int(profile.get("current_week") or 1) != current_week:
-                            profile["current_week"] = current_week
-                            db_store.update_profile(
-                                cid, {"current_week": current_week}
-                            )
-                            user_profiles[key] = profile
+                        user_profiles[key] = profile
 
                 if in_morning:
-                    if is_week_start:
+                    skip_regular_morning = _in_weekly_special_flow(cid)
+                    if (
+                        is_week_start
+                        and days_since_start is not None
+                        and not skip_regular_morning
+                    ):
+                        prev_recap_key = (
+                            f"weekly_sent_day_{days_since_start - 1}"
+                        )
                         new_week_sent_key = (
                             f"new_week_sent_day_{days_since_start}"
                         )
+                        plang = str(profile.get("language_code") or "en")
                         if not db_store.cycle_flag_sent(
+                            profile, prev_recap_key
+                        ):
+                            try:
+                                ob.start_weekly_recap(
+                                    onboarding,
+                                    cid,
+                                    profile,
+                                    days_since_start=days_since_start - 1,
+                                )
+                                opening = ob.weekly_recap_opening(
+                                    profile, plang
+                                )
+                                await bot.send_message(
+                                    chat_id=cid,
+                                    text=sanitize_bot_reply(opening),
+                                )
+                                skip_regular_morning = True
+                                log.info(
+                                    "weekly recap catch-up morning cid=%s day=%s",
+                                    cid,
+                                    days_since_start,
+                                )
+                            except Exception as e:
+                                log.warning(
+                                    "Weekly recap catch-up failed cid=%s: %s",
+                                    cid,
+                                    e,
+                                )
+                        elif not db_store.cycle_flag_sent(
                             profile, new_week_sent_key
                         ):
-                            ob.start_change_weekly(onboarding, cid, profile)
-                            plang = str(profile.get("language_code") or "en")
-                            opening = ob.change_weekly_opening(profile, plang)
                             try:
+                                ob.start_change_weekly(
+                                    onboarding,
+                                    cid,
+                                    profile,
+                                    from_week_start=True,
+                                )
+                                opening = ob.new_week_opening(profile, plang)
                                 await bot.send_message(
                                     chat_id=cid,
                                     text=sanitize_bot_reply(opening),
@@ -4259,8 +4520,9 @@ async def _bootstrap_bot() -> None:
                                     cid, new_week_sent_key
                                 )
                                 user_profiles[key] = profile
+                                skip_regular_morning = True
                                 log.info(
-                                    "new week prompt sent cid=%s day=%s",
+                                    "new week dialog started cid=%s day=%s",
                                     cid,
                                     days_since_start,
                                 )
@@ -4270,130 +4532,127 @@ async def _bootstrap_bot() -> None:
                                     cid,
                                     e,
                                 )
+                    elif _in_weekly_special_flow(cid):
+                        skip_regular_morning = True
 
-                    claimed = db_store.claim_send_slot(
-                        cid, "last_morning_sent_date", today
-                    )
-                    log.info(
-                        "daily_check morning cid=%s now=%s target=%s tz=%s "
-                        "already_sent=%s claimed=%s",
-                        cid,
-                        now_hm,
-                        morning_time,
-                        tz_name,
-                        morning_sent,
-                        claimed,
-                    )
-                    if not claimed and not morning_sent:
-                        log.warning(
-                            "daily_check morning cid=%s: slot blocked in DB "
-                            "(last_morning_sent_date may be stuck on %s)",
+                    if skip_regular_morning:
+                        log.info(
+                            "daily_check morning skipped (weekly flow) cid=%s",
                             cid,
-                            today,
                         )
-                    if claimed:
-                        profile["last_morning_sent_date"] = today
-                        profile["last_daily_sent_date"] = today
-                        user_profiles[key] = profile
-                        db_store.update_profile(
+                    else:
+                        claimed = db_store.claim_send_slot(
+                            cid, "last_morning_sent_date", today
+                        )
+                        log.info(
+                            "daily_check morning cid=%s now=%s target=%s tz=%s "
+                            "already_sent=%s claimed=%s",
                             cid,
-                            {
-                                "last_morning_sent_date": today,
-                                "last_daily_sent_date": today,
-                            },
+                            now_hm,
+                            morning_time,
+                            tz_name,
+                            morning_sent,
+                            claimed,
                         )
-
-                        try:
-                            await _restore_history_from_db(cid, "morning message")
-                            async with typing_while(bot, cid):
-                                text = await _morning_message_text(
-                                    cid, profile, model_chain
-                                )
-                            histories.setdefault(cid, []).append(
-                                {"role": "model", "parts": [text]}
-                            )
-                            keyboard = _webapp_keyboard(cid, ulang)
-                            await bot.send_message(
-                                chat_id=cid,
-                                text=sanitize_bot_reply(text),
-                                reply_markup=keyboard,
-                            )
-                            pending_morning[cid] = {
-                                "task": "",
-                                "text": text,
-                                "awaiting_reminder": False,
-                            }
-                            asyncio.create_task(
-                                _check_and_send_milestone(
-                                    bot, cid, profile, model_chain
-                                )
-                            )
-                        except Exception as e:
+                        if not claimed and not morning_sent:
                             log.warning(
-                                "Morning message failed for %s: %s", cid, e
+                                "daily_check morning cid=%s: slot blocked in DB "
+                                "(last_morning_sent_date may be stuck on %s)",
+                                cid,
+                                today,
                             )
+                        if claimed:
+                            profile["last_morning_sent_date"] = today
+                            profile["last_daily_sent_date"] = today
+                            user_profiles[key] = profile
                             db_store.update_profile(
                                 cid,
                                 {
-                                    "last_morning_sent_date": None,
-                                    "last_daily_sent_date": None,
+                                    "last_morning_sent_date": today,
+                                    "last_daily_sent_date": today,
                                 },
                             )
-                            profile["last_morning_sent_date"] = None
-                            profile["last_daily_sent_date"] = None
-                            user_profiles[key] = profile
+
+                            try:
+                                await _restore_history_from_db(
+                                    cid, "morning message"
+                                )
+                                async with typing_while(bot, cid):
+                                    text = await _morning_message_text(
+                                        cid, profile, model_chain
+                                    )
+                                histories.setdefault(cid, []).append(
+                                    {"role": "model", "parts": [text]}
+                                )
+                                keyboard = _webapp_keyboard(cid, ulang)
+                                await bot.send_message(
+                                    chat_id=cid,
+                                    text=sanitize_bot_reply(text),
+                                    reply_markup=keyboard,
+                                )
+                                pending_morning[cid] = {
+                                    "task": "",
+                                    "text": text,
+                                    "awaiting_reminder": False,
+                                }
+                                asyncio.create_task(
+                                    _check_and_send_milestone(
+                                        bot, cid, profile, model_chain
+                                    )
+                                )
+                            except Exception as e:
+                                log.warning(
+                                    "Morning message failed for %s: %s", cid, e
+                                )
+                                db_store.update_profile(
+                                    cid,
+                                    {
+                                        "last_morning_sent_date": None,
+                                        "last_daily_sent_date": None,
+                                    },
+                                )
+                                profile["last_morning_sent_date"] = None
+                                profile["last_daily_sent_date"] = None
+                                user_profiles[key] = profile
 
                 if in_evening:
-                    if is_week_end and days_since_start >= 6:
+                    send_regular_evening = True
+                    if is_week_end and days_since_start is not None:
                         weekly_sent_key = f"weekly_sent_day_{days_since_start}"
                         if not db_store.cycle_flag_sent(
                             profile, weekly_sent_key
-                        ):
-                            week_number = max(1, days_since_start // 7 + 1)
-                            existing_weekly = db_store.load_weekly_summaries(
-                                cid, limit=1
-                            )
-                            already_this_week = (
-                                existing_weekly
-                                and int(
-                                    existing_weekly[0].get("week_number") or 0
-                                )
-                                == week_number
-                            )
-                            if not already_this_week:
-                                await _generate_weekly_summary_async(
-                                    cid, profile, model_chain
-                                )
-                            recap = await _generate_weekly_recap_message(
-                                cid, profile, model_chain, week_number
-                            )
+                        ) and not _in_weekly_special_flow(cid):
+                            plang = str(profile.get("language_code") or "en")
                             try:
+                                ob.start_weekly_recap(
+                                    onboarding,
+                                    cid,
+                                    profile,
+                                    days_since_start=days_since_start,
+                                )
+                                opening = ob.weekly_recap_opening(
+                                    profile, plang
+                                )
                                 await bot.send_message(
                                     chat_id=cid,
-                                    text=sanitize_bot_reply(recap),
+                                    text=sanitize_bot_reply(opening),
                                 )
-                                profile = db_store.mark_cycle_flag(
-                                    cid, weekly_sent_key
-                                )
-                                user_profiles[key] = profile
-                                claimed = db_store.claim_send_slot(
-                                    cid, "last_evening_sent_date", today
-                                )
-                                if claimed:
-                                    profile["last_evening_sent_date"] = today
-                                    user_profiles[key] = profile
+                                send_regular_evening = False
                                 log.info(
-                                    "weekly recap sent cid=%s day=%s",
+                                    "weekly recap dialog started cid=%s day=%s",
                                     cid,
                                     days_since_start,
                                 )
                             except Exception as e:
                                 log.warning(
-                                    "Weekly recap failed for %s: %s",
+                                    "Weekly recap start failed cid=%s: %s",
                                     cid,
                                     e,
                                 )
-                    else:
+                        elif db_store.cycle_flag_sent(profile, weekly_sent_key):
+                            send_regular_evening = False
+
+                    if send_regular_evening:
                         claimed = db_store.claim_send_slot(
                             cid, "last_evening_sent_date", today
                         )
