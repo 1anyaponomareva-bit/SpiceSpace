@@ -2498,6 +2498,104 @@ async def _handle_evening_reply(
     return reply
 
 
+async def _generate_weekly_recap_message(
+    cid: int,
+    profile: dict,
+    model_chain: list[str],
+    week_number: int,
+) -> str:
+    """Warm personal end-of-week letter (Telegram message, not DB weekly summary)."""
+    name = str(profile.get("name") or "").strip()
+    main_goal = str(profile.get("main_goal") or "").strip()
+    weekly_goal = str(profile.get("weekly_goal") or "").strip()
+    vision = str(profile.get("vision") or "").strip()
+    lang = str(profile.get("language_code") or "ru")
+    week_number = max(1, int(week_number or 1))
+
+    summaries = db_store.list_daily_summaries(str(cid))
+    week_summaries = summaries[-7:] if len(summaries) >= 7 else summaries
+
+    completed_days = sum(
+        1 for s in week_summaries if s.get("task_completed") == "true"
+    )
+    total_days = len(week_summaries)
+
+    week_context = "\n".join(
+        [
+            f"День {i + 1}: {str(s.get('summary') or '')[:100]}"
+            for i, s in enumerate(week_summaries)
+            if s.get("summary")
+        ]
+    )
+
+    if lang.startswith("ru"):
+        prompt = f"""Напиши тёплое личное письмо-итог {week_number}-й недели для {name}.
+
+Цель на 12 недель: {main_goal}
+Цель этой недели: {weekly_goal}
+Мечта: {vision}
+Выполнено дней: {completed_days} из {total_days}
+Что происходило на неделе: {week_context or "мало записей, опирайся на цели"}
+
+Правила:
+- Это письмо от подруги которая наблюдала всю неделю
+- 4-6 предложений, тёплые и личные
+- Упомяни конкретные вещи из недели если они есть
+- Отметь что человек старался и двигался вперёд
+- Закончи воодушевляющей фразой про следующую неделю
+- Без markdown, без списков
+- Не пиши «N дней вместе» и не считай общий стрик — только итог этой недели
+- Обращайся по имени {name}"""
+    else:
+        prompt = f"""Write a warm personal end-of-week letter for week {week_number} for {name}.
+
+12-week goal: {main_goal}
+This week's goal: {weekly_goal}
+Dream: {vision}
+Completed days: {completed_days} of {total_days}
+What happened this week: {week_context or "few notes — lean on their goals"}
+
+Rules:
+- This is a letter from a friend who watched the whole week
+- 4-6 sentences, warm and personal
+- Mention specific things from the week if available
+- Note that the person tried and moved forward
+- End with an encouraging phrase about next week
+- No markdown, no lists
+- Do not write "N days together" or total streak — only this week's closing
+- Address by name {name}"""
+
+    def gen() -> str:
+        for mid in model_chain:
+            try:
+                text = claude_generate(
+                    mid,
+                    [{"role": "user", "content": prompt}],
+                    system=(
+                        "Пиши тепло и лично. Только текст письма без заголовков."
+                        if lang.startswith("ru")
+                        else "Write warmly and personally. Only letter text."
+                    ),
+                    max_tokens=300,
+                    cache_core=False,
+                ).strip()
+                if text:
+                    return sanitize_bot_reply(text)
+            except Exception as e:
+                log.warning("weekly recap generate %s: %s", mid, e)
+        if lang.startswith("ru"):
+            return (
+                f"{name}, неделя {week_number} была настоящей 💙 "
+                f"Ты двигалась к своей цели. Следующая неделя — новый шанс."
+            )
+        return (
+            f"{name}, week {week_number} was real 💙 "
+            f"You kept moving toward your goal. Next week is a fresh chance."
+        )
+
+    return await asyncio.to_thread(gen)
+
+
 async def _generate_weekly_summary_async(
     cid: int, profile: dict, model_names: list[str]
 ) -> None:
@@ -4151,7 +4249,7 @@ async def _bootstrap_bot() -> None:
                         if not db_store.cycle_flag_sent(
                             profile, weekly_sent_key
                         ):
-                            week_number = current_week - 1
+                            week_number = max(1, days_since_start // 7 + 1)
                             existing_weekly = db_store.load_weekly_summaries(
                                 cid, limit=1
                             )
@@ -4166,24 +4264,9 @@ async def _bootstrap_bot() -> None:
                                 await _generate_weekly_summary_async(
                                     cid, profile, model_chain
                                 )
-                            active_days = len(
-                                db_store.list_daily_summaries(str(cid))
+                            recap = await _generate_weekly_recap_message(
+                                cid, profile, model_chain, week_number
                             )
-                            lang = str(profile.get("language_code") or "en")
-                            if lang.startswith("ru"):
-                                recap = (
-                                    f"{active_days} дней вместе 💙\n\n"
-                                    f"Неделя {current_week - 1} закрыта. "
-                                    f"На следующей неделе: "
-                                    f"{profile.get('weekly_goal', '')}"
-                                )
-                            else:
-                                recap = (
-                                    f"{active_days} days together 💙\n\n"
-                                    f"Week {current_week - 1} done. "
-                                    f"Next week: "
-                                    f"{profile.get('weekly_goal', '')}"
-                                )
                             try:
                                 await bot.send_message(
                                     chat_id=cid,
