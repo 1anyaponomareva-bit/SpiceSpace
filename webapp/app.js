@@ -784,12 +784,43 @@
     }).join('');
   }
 
+  function programDayFromProfile(prof) {
+    const p = prof || profile;
+    if (!p) return 0;
+    const raw = String(p.cycle_start_date || '').trim();
+    if (!raw) return Math.max(0, Number(p.program_day || p.streak || 0));
+    try {
+      const start = parseISODate(raw);
+      const today = new Date();
+      const startUtc = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
+      const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+      const diff = Math.floor((todayUtc - startUtc) / 86400000) + 1;
+      return Math.max(1, diff);
+    } catch (_) {
+      return Math.max(1, Number(p.program_day || p.streak || 1));
+    }
+  }
+
+  function weekDayFromProfile(prof) {
+    const p = prof || profile;
+    if (!p) return 1;
+    const fromApi = Number(p.display_streak);
+    if (fromApi >= 1 && fromApi <= 7) return fromApi;
+    const journey = programDayFromProfile(p);
+    return ((journey - 1) % 7) + 1;
+  }
+
   function renderStreak(prof) {
     const p = prof || profile;
-    const streak = Math.min(7, Math.max(1, Number(p?.display_streak || 1)));
+    const weekDay = Math.min(7, Math.max(1, weekDayFromProfile(p)));
+    const totalDays = Math.max(1, Number(p?.program_day) || programDayFromProfile(p));
     const total = 7;
     const streakCount = document.getElementById('streak-count');
-    if (streakCount) streakCount.textContent = String(streak);
+    if (streakCount) {
+      streakCount.textContent = totalDays > 0
+        ? `${totalDays} ${pluralizeDays(totalDays)} 🔥`
+        : t('streak_start');
+    }
 
     const container = document.querySelector('.streak-circles');
     if (!container) return;
@@ -797,8 +828,9 @@
     for (let i = 0; i < total; i++) {
       const wrap = document.createElement('div');
       wrap.className = 'streak-day-wrap';
-      if (i < streak) {
-        wrap.innerHTML = '<div class="streak-day active"><img src="./spicespace-logo.jpg" alt="✦" class="streak-logo-icon"/></div>';
+      if (i < weekDay) {
+        const isToday = i === weekDay - 1;
+        wrap.innerHTML = `<div class="streak-day active${isToday ? ' is-today' : ''}"><img src="./spicespace-logo.jpg" alt="✦" class="streak-logo-icon"/></div>`;
       } else {
         wrap.innerHTML = '<div class="streak-day empty"></div>';
       }

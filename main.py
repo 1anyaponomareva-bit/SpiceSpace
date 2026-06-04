@@ -3892,6 +3892,23 @@ def _cycle_week_day_streak(profile: dict) -> int | None:
         return None
 
 
+def _program_journey_days(profile: dict) -> int | None:
+    """Calendar day in 12-week program (day 1 = cycle_start_date)."""
+    cycle_start_raw = str(profile.get("cycle_start_date") or "").strip()
+    if not cycle_start_raw:
+        return None
+    try:
+        cycle_start = date.fromisoformat(cycle_start_raw)
+        tz = _zone_or_default(_profile_timezone_name(profile))
+        today = datetime.now(tz).date()
+        days_since_start = (today - cycle_start).days
+        if days_since_start < 0:
+            return None
+        return days_since_start + 1
+    except Exception:
+        return None
+
+
 def _bump_streak_on_mark(profile: dict, today: date) -> int:
     last = str(profile.get("last_streak_date") or "").strip()
     old = int(profile.get("streak") or 0)
@@ -3990,6 +4007,11 @@ def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> di
         p["display_streak"] = day_in_week
     else:
         p["display_streak"] = 1
+    journey_days = _program_journey_days(p)
+    if journey_days is not None:
+        p["program_day"] = journey_days
+    else:
+        p["program_day"] = max(1, int(p.get("streak") or 0))
     if tid:
         summaries = db_store.list_daily_summaries(tid)
         completed_count = sum(
