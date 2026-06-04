@@ -14,8 +14,9 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&family=Geologica:wght@300;400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=20260606f" />
-  <link rel="stylesheet" href="./cookie.css?v=20260606f" />
+  <link rel="stylesheet" href="./styles.css?v=20260609f" />
+  <link rel="stylesheet" href="./cookie.css?v=20260609f" />
+  <link rel="preload" href="./assets/cookie-whole.png" as="image" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -171,28 +172,33 @@
 
 <div id="fortune-overlay" class="fortune-overlay" hidden aria-hidden="true">
   <div class="fortune-title">Твоё предсказание<br>на сегодня</div>
-  <div class="fortune-stage">
-    <img class="cookie-whole" id="fortune-cookie" src="./assets/cookie-whole.png" alt="" />
-    <div class="broken-wrap">
-      <img class="cookie-broken" src="./assets/cookie-broken.png" alt="" />
+  <div class="fortune-scroll">
+    <div class="fortune-stage">
+      <div class="cookie-hit" id="fortune-cookie-hit" role="button" tabindex="0" aria-label="Открыть печеньку">
+        <span class="fortune-tap-ring" aria-hidden="true"></span>
+        <span class="fortune-tap-ring fortune-tap-ring--delay" aria-hidden="true"></span>
+        <img class="cookie-whole" id="fortune-cookie" src="./assets/cookie-whole.png" alt="" width="480" height="480" decoding="async" />
+      </div>
+      <div class="broken-wrap">
+        <img class="cookie-broken" data-src="./assets/cookie-broken.png" alt="" width="480" height="480" decoding="async" />
+      </div>
+      <div class="flash"></div>
     </div>
+    <p class="tap-hint">нажми на печеньку</p>
     <div class="fortune-paper" id="fortune-paper">
       <div class="paper-label">fortune cookie</div>
       <div class="fortune-text" id="fortune-text">—</div>
-      <div class="fortune-sub" id="fortune-sub">Сохрани картинку — завтра будет смешно проверить.</div>
+      <p class="fortune-signature" id="fortune-signature">сохрани это предсказание что бы увидеть что я была права</p>
     </div>
-    <div class="flash"></div>
-  </div>
-  <div class="tap-hint">нажми</div>
-  <div class="fortune-actions">
-    <button type="button" class="fortune-btn fortune-btn-secondary" id="fortune-btn-save">Скачать картинку</button>
-    <button type="button" class="fortune-btn fortune-btn-primary" id="fortune-btn-go">Погнали дальше →</button>
+    <div class="fortune-actions">
+      <button type="button" class="fortune-btn fortune-btn-secondary" id="fortune-btn-save">Скачать картинку</button>
+      <button type="button" class="fortune-btn fortune-btn-primary" id="fortune-btn-go">Погнали дальше →</button>
+    </div>
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-<script src="./i18n.js?v=20260606f"></script>
-<script src="./fortune.js?v=20260606f"></script>
-<script src="./app.js?v=20260606f"></script>
+<script src="./i18n.js?v=20260609f"></script>
+<script src="./fortune.js?v=20260609f"></script>
+<script src="./app.js?v=20260609f"></script>
 </body>
 </html>

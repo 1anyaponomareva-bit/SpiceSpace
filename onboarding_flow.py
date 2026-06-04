@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "weekly-cycle-v4-fortune-test"
+BOT_BUILD = "fortune-cookie-v6"
 
 OB_RETURNING = 0
 OB_NAME = 1

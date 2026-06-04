@@ -2417,28 +2417,10 @@ async def _handle_evening_reply(
         )
 
     if outcome:
-        patch: dict[str, object] = {"task_completed": outcome}
-        if outcome == "true":
-            patch["completed"] = True
-        elif outcome == "false":
-            patch["completed"] = False
-        _update_today_summary_field(chat_id, profile, **patch)
+        _apply_task_outcome_to_profile(
+            chat_id, profile, outcome, telegram_id=str(chat_id)
+        )
         log.info("evening task_completed saved cid=%s outcome=%s", chat_id, outcome)
-
-        if outcome == "true":
-            today = _profile_local_date(profile)
-            _bump_streak_on_mark(profile, today)
-            _week_scores_array(profile, str(chat_id))
-            db_store.update_profile(
-                chat_id,
-                {
-                    "streak": int(profile.get("streak") or 0),
-                    "last_streak_date": str(profile.get("last_streak_date") or ""),
-                    "weekly_score": int(profile.get("weekly_score") or 0),
-                    "week_scores": profile.get("week_scores") or [0] * 12,
-                },
-            )
-            user_profiles[str(chat_id)] = profile
 
     pending_evening.pop(chat_id, None)
     reply = await _coach_reply(
@@ -2452,6 +2434,17 @@ async def _handle_evening_reply(
     if not outcome:
         reply_lower = reply.lower()
         if any(
+            w in reply_lower
+            for w in (
+                "частич",
+                "наполовину",
+                "не всё",
+                "не все",
+                "немного сделала",
+            )
+        ):
+            outcome = "partial"
+        elif any(
             w in reply_lower
             for w in (
                 "сделала",
@@ -2470,25 +2463,9 @@ async def _handle_evening_reply(
             outcome = "false"
 
         if outcome:
-            patch: dict[str, object] = {"task_completed": outcome}
-            if outcome == "true":
-                patch["completed"] = True
-                today = _profile_local_date(profile)
-                _bump_streak_on_mark(profile, today)
-                ws = min(100, int(profile.get("weekly_score") or 0) + 15)
-                profile["weekly_score"] = ws
-                db_store.update_profile(
-                    chat_id,
-                    {
-                        "streak": int(profile.get("streak") or 0),
-                        "last_streak_date": str(profile.get("last_streak_date") or ""),
-                        "weekly_score": ws,
-                    },
-                )
-                user_profiles[str(chat_id)] = profile
-            elif outcome == "false":
-                patch["completed"] = False
-            _update_today_summary_field(chat_id, profile, **patch)
+            _apply_task_outcome_to_profile(
+                chat_id, profile, outcome, telegram_id=str(chat_id)
+            )
             log.info(
                 "evening task_completed detected from reply cid=%s outcome=%s",
                 chat_id,
@@ -4162,15 +4139,144 @@ def _sanitize_today_task(text: str, weekly_goal: str = "") -> str:
     return cleaned
 
 
+WEEK_CYCLE_LEN = 7
+DAY_SCORE_FULL = 100.0 / WEEK_CYCLE_LEN
+DAY_SCORE_PARTIAL = DAY_SCORE_FULL / 2
+
+
+def _cycle_week_start(profile: dict, today: date | None = None) -> date | None:
+    """Первый день текущей 7-дневной волны от cycle_start_date."""
+    cycle_start_raw = str(profile.get("cycle_start_date") or "").strip()[:10]
+    if not cycle_start_raw:
+        return None
+    try:
+        cycle_start = date.fromisoformat(cycle_start_raw)
+    except ValueError:
+        return None
+    ref = today if today is not None else _profile_local_date(profile)
+    days_since = (ref - cycle_start).days
+    if days_since < 0:
+        return None
+    week_index = days_since // WEEK_CYCLE_LEN
+    return cycle_start + timedelta(days=week_index * WEEK_CYCLE_LEN)
+
+
+def _infer_task_completed_from_text(text: str) -> str | None:
+    return _detect_evening_task_completed(text)
+
+
+def _effective_task_completed(summ: dict | None) -> str | None:
+    if not isinstance(summ, dict):
+        return None
+    tc = db_store.normalize_task_completed(summ.get("task_completed"))
+    if tc:
+        return tc
+    completed = summ.get("completed")
+    if completed is True:
+        return "true"
+    if completed is False:
+        return "false"
+    blob = " ".join(
+        str(summ.get(k) or "")
+        for k in ("summary", "mood", "key_detail", "task")
+    ).strip()
+    if blob:
+        return _infer_task_completed_from_text(blob)
+    return None
+
+
+def _effective_task_completed_from_row(row: dict | None) -> str | None:
+    if not isinstance(row, dict):
+        return None
+    return _effective_task_completed(row)
+
+
+def _day_score_points(task_completed: str | None, *, is_recap_day: bool) -> float:
+    if is_recap_day:
+        return 0.0
+    if task_completed == "true":
+        return DAY_SCORE_FULL
+    if task_completed == "partial":
+        return DAY_SCORE_PARTIAL
+    return 0.0
+
+
+def _compute_weekly_score(profile: dict, telegram_id: str | None) -> int:
+    tid = str(telegram_id or profile.get("telegram_id") or profile.get("user_id") or "")
+    week_start = _cycle_week_start(profile)
+    if not tid or not week_start:
+        return int(profile.get("weekly_score") or 0)
+    today = _profile_local_date(profile)
+    total = 0.0
+    for i in range(WEEK_CYCLE_LEN):
+        d = week_start + timedelta(days=i)
+        if d > today:
+            break
+        summ = db_store.get_daily_summary(tid, d)
+        tc = _effective_task_completed(summ)
+        total += _day_score_points(tc, is_recap_day=(i == WEEK_CYCLE_LEN - 1))
+    return min(100, int(round(total)))
+
+
+def _build_week_cycle_days(profile: dict, telegram_id: str | None) -> list[dict]:
+    tid = str(telegram_id or profile.get("telegram_id") or profile.get("user_id") or "")
+    week_start = _cycle_week_start(profile)
+    if not week_start:
+        return []
+    today = _profile_local_date(profile)
+    out: list[dict] = []
+    for i in range(WEEK_CYCLE_LEN):
+        d = week_start + timedelta(days=i)
+        summ = db_store.get_daily_summary(tid, d) if tid and d <= today else None
+        tc = _effective_task_completed(summ) if summ else None
+        out.append(
+            {
+                "day": i + 1,
+                "date": d.isoformat(),
+                "task_completed": tc,
+                "is_recap_day": i == WEEK_CYCLE_LEN - 1,
+                "is_today": d == today,
+                "is_future": d > today,
+            }
+        )
+    return out
+
+
+def _apply_task_outcome_to_profile(
+    chat_id: int,
+    profile: dict,
+    outcome: str,
+    *,
+    telegram_id: str | None = None,
+) -> None:
+    patch: dict[str, object] = {"task_completed": outcome}
+    if outcome == "true":
+        patch["completed"] = True
+    elif outcome in ("false", "partial"):
+        patch["completed"] = False
+    _update_today_summary_field(chat_id, profile, **patch)
+    tid = str(telegram_id or chat_id)
+    profile["weekly_score"] = _compute_weekly_score(profile, tid)
+    profile["week_scores"] = _week_scores_array(profile, tid)
+    if outcome == "true":
+        today = _profile_local_date(profile)
+        _bump_streak_on_mark(profile, today)
+    db_store.update_profile(
+        chat_id,
+        {
+            "streak": int(profile.get("streak") or 0),
+            "last_streak_date": str(profile.get("last_streak_date") or ""),
+            "weekly_score": int(profile.get("weekly_score") or 0),
+            "week_scores": profile.get("week_scores") or [0] * 12,
+        },
+    )
+    user_profiles[str(chat_id)] = profile
+
+
 def _week_scores_array(profile: dict, telegram_id: str | None = None) -> list[int]:
     tid = str(telegram_id or profile.get("telegram_id") or profile.get("user_id") or "")
     if tid:
-        summaries = db_store.list_daily_summaries(tid)
-        completed_count = sum(
-            1 for s in summaries if s.get("task_completed") == "true"
-        )
-        weekly_score = min(100, completed_count * 14)
-        profile["weekly_score"] = weekly_score
+        profile["weekly_score"] = _compute_weekly_score(profile, tid)
 
     cw = max(1, min(12, int(profile.get("current_week") or 1)))
     ws = int(profile.get("weekly_score") or 0)
@@ -4449,6 +4555,10 @@ def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> di
             p["today_completed"] = tc == "true"
 
     p["week_scores"] = _week_scores_array(p, tid or None)
+    if tid:
+        p["week_cycle_days"] = _build_week_cycle_days(p, tid)
+    else:
+        p["week_cycle_days"] = []
     day_in_week = _cycle_week_day_streak(p)
     if day_in_week is not None:
         p["display_streak"] = day_in_week
@@ -5397,15 +5507,19 @@ async def calendar_endpoint(
 
     start = _profile_cycle_start(profile, tid)
     today = _profile_local_date(profile)
-    by_date = {
-        str(r.get("date", ""))[:10]: r.get("task_completed")
-        for r in db_store.list_daily_summaries(tid)
-        if r.get("date")
-    }
+    by_date: dict[str, str | None] = {}
+    for r in db_store.list_daily_summaries(tid):
+        d = str(r.get("date", ""))[:10]
+        if d:
+            by_date[d] = _effective_task_completed_from_row(r)
+    today_summ = db_store.get_daily_summary(tid, today)
+    if isinstance(today_summ, dict):
+        by_date[today.isoformat()] = _effective_task_completed(today_summ)
     days: list[dict] = []
     for i in range(84):
         d = start + timedelta(days=i)
         iso = d.isoformat()
+        day_index = i % 7
         days.append(
             {
                 "date": iso,
@@ -5413,13 +5527,16 @@ async def calendar_endpoint(
                 "is_today": iso == today.isoformat(),
                 "is_future": d > today,
                 "week_index": i // 7,
-                "day_index": i % 7,
+                "day_index": day_index,
+                "is_recap_day": day_index == 6,
             }
         )
     cw = max(1, min(12, int(profile.get("current_week") or 1)))
+    weekly_score = _compute_weekly_score(profile, tid)
     return {
         "cycle_start_date": start.isoformat(),
         "current_week": cw,
+        "weekly_score": weekly_score,
         "days": days,
     }
 
@@ -5448,22 +5565,8 @@ async def mark_day_endpoint(
     if isinstance(body, dict) and body.get("task_completed"):
         tc = db_store.normalize_task_completed(body["task_completed"])
 
-    if tc == "false":
-        return {"profile": _enrich_profile_for_api(profile, tid)}
-
-    if tc:
-        patch: dict[str, object] = {"task_completed": tc}
-        if tc == "true":
-            patch["completed"] = True
-        _update_today_summary_field(int(tid), profile, **patch)
-
-    if tc == "true":
-        today = _profile_local_date(profile)
-        _bump_streak_on_mark(profile, today)
-        profile["week_scores"] = _week_scores_array(profile, tid)
-
-        db_store.upsert_profile(int(tid), profile)
-        user_profiles[tid] = profile
+    if tc in ("true", "partial", "false"):
+        _apply_task_outcome_to_profile(int(tid), profile, tc, telegram_id=tid)
 
     user_profiles[tid] = profile
     return {"profile": _enrich_profile_for_api(profile, tid)}

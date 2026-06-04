@@ -496,7 +496,17 @@
       cal.classList.toggle('screen--active', tab === 'calendar');
       cal.hidden = tab !== 'calendar';
     }
-    if (tab === 'calendar') renderCalendar();
+    if (tab === 'calendar') {
+      fetchCalendar().then((data) => {
+        if (data) {
+          calendarData = data;
+          if (profile && data.weekly_score != null) profile.weekly_score = data.weekly_score;
+          renderCalendar(data);
+        } else {
+          renderCalendar();
+        }
+      });
+    }
     haptic('light');
   }
 
@@ -511,9 +521,20 @@
     if (day.task_completed === 'true') return 'done';
     if (day.task_completed === 'false') return 'missed';
     if (day.task_completed === 'partial') return 'partial';
-    if (day.is_today) return 'today';
     if (day.is_future) return 'future';
+    if (day.is_recap_day) return 'recap';
+    if (day.is_today) return 'today';
     return 'no-data';
+  }
+
+  function cycleDayStatus(d) {
+    if (d.task_completed === 'true') return 'done';
+    if (d.task_completed === 'false') return 'missed';
+    if (d.task_completed === 'partial') return 'partial';
+    if (d.is_future) return 'future';
+    if (d.is_recap_day && !d.task_completed) return 'recap';
+    if (d.is_today) return 'today';
+    return 'empty';
   }
 
   function isTaskCompletedStrict(prof) {
@@ -727,7 +748,21 @@
 
   function renderWeekCard(prof) {
     const week = Number(prof.current_week || 1);
-    const pct = Math.max(0, Math.min(100, Number(prof.weekly_score || 0)));
+    let pct = Math.max(0, Math.min(100, Number(prof.weekly_score || 0)));
+    const cycle = Array.isArray(prof?.week_cycle_days) ? prof.week_cycle_days : null;
+    if (cycle && cycle.length === 7) {
+      const full = 100 / 7;
+      const half = full / 2;
+      pct = Math.round(
+        cycle.reduce((sum, d) => {
+          if (d.is_recap_day) return sum;
+          if (d.task_completed === 'true') return sum + full;
+          if (d.task_completed === 'partial') return sum + half;
+          return sum;
+        }, 0),
+      );
+      pct = Math.max(0, Math.min(100, pct));
+    }
 
     document.getElementById('week-badge').textContent = weekBadgeText(week);
     document.getElementById('week-goal').textContent = weeklyGoalText(prof);
@@ -812,9 +847,8 @@
 
   function renderStreak(prof) {
     const p = prof || profile;
-    const weekDay = Math.min(7, Math.max(1, weekDayFromProfile(p)));
     const totalDays = Math.max(1, Number(p?.program_day) || programDayFromProfile(p));
-    const total = 7;
+    const cycle = Array.isArray(p?.week_cycle_days) ? p.week_cycle_days : null;
     const streakCount = document.getElementById('streak-count');
     if (streakCount) {
       streakCount.textContent = totalDays > 0
@@ -825,7 +859,23 @@
     const container = document.querySelector('.streak-circles');
     if (!container) return;
     container.innerHTML = '';
-    for (let i = 0; i < total; i++) {
+
+    if (cycle && cycle.length === 7) {
+      cycle.forEach((d) => {
+        const status = cycleDayStatus(d);
+        const wrap = document.createElement('div');
+        wrap.className = 'streak-day-wrap';
+        const todayCls = d.is_today && status !== 'done' && status !== 'missed' && status !== 'partial'
+          ? ' is-today'
+          : '';
+        wrap.innerHTML = `<div class="streak-day ${status}${todayCls}" title="${escapeHtml(d.date || '')}"></div>`;
+        container.appendChild(wrap);
+      });
+      return;
+    }
+
+    const weekDay = Math.min(7, Math.max(1, weekDayFromProfile(p)));
+    for (let i = 0; i < 7; i++) {
       const wrap = document.createElement('div');
       wrap.className = 'streak-day-wrap';
       if (i < weekDay) {

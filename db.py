@@ -759,7 +759,9 @@ def list_daily_summaries(user_id: int | str) -> list[dict]:
         rows = (
             _request(
                 "GET",
-                f"daily_summaries?user_id=eq.{key}&select=summary_date,task_completed,completed&order=summary_date.asc",
+                f"daily_summaries?user_id=eq.{key}"
+                "&select=summary_date,task_completed,completed,summary,mood,key_detail"
+                "&order=summary_date.asc",
             )
             or []
         )
@@ -770,7 +772,16 @@ def list_daily_summaries(user_id: int | str) -> list[dict]:
             if not d:
                 continue
             tc = row.get("task_completed")
-            out.append({"date": d, "task_completed": normalize_task_completed(tc)})
+            out.append(
+                {
+                    "date": d,
+                    "task_completed": normalize_task_completed(tc),
+                    "completed": row.get("completed"),
+                    "summary": str(row.get("summary") or ""),
+                    "mood": str(row.get("mood") or ""),
+                    "key_detail": str(row.get("key_detail") or ""),
+                }
+            )
         if out:
             return out
     store = _load_json(DAILY_SUMMARIES_PATH, {})
@@ -785,6 +796,10 @@ def list_daily_summaries(user_id: int | str) -> list[dict]:
             {
                 "date": str(d)[:10],
                 "task_completed": normalize_task_completed(tc),
+                "completed": row.get("completed"),
+                "summary": str(row.get("summary") or ""),
+                "mood": str(row.get("mood") or ""),
+                "key_detail": str(row.get("key_detail") or ""),
             }
         )
     return out

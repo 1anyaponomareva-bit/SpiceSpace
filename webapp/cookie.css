@@ -12,12 +12,11 @@ body.fortune-open {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   background:
-    radial-gradient(circle at 50% 38%, rgba(212, 242, 107, 0.1), transparent 32%),
+    radial-gradient(circle at 50% 32%, rgba(212, 242, 107, 0.1), transparent 34%),
     rgba(5, 5, 5, 0.88);
-  backdrop-filter: blur(14px);
-  padding: calc(26px + env(safe-area-inset-top, 0)) 18px calc(34px + env(safe-area-inset-bottom, 0));
+  backdrop-filter: blur(10px);
+  padding: calc(20px + env(safe-area-inset-top, 0)) 16px calc(20px + env(safe-area-inset-bottom, 0));
   color: #fff;
   font-family: Inter, system-ui, sans-serif;
   overflow: hidden;
@@ -28,41 +27,77 @@ body.fortune-open {
 }
 
 #fortune-overlay .fortune-title {
-  position: absolute;
-  top: calc(42px + env(safe-area-inset-top, 0));
-  left: 22px;
-  right: 22px;
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 430px;
   text-align: center;
   font-family: Unbounded, sans-serif;
-  font-size: 19px;
+  font-size: 18px;
   line-height: 1.25;
   letter-spacing: -0.02em;
+  margin-bottom: 8px;
+}
+
+#fortune-overlay .fortune-scroll {
+  flex: 1;
+  width: 100%;
+  max-width: 430px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 8px;
 }
 
 #fortune-overlay .fortune-stage {
   position: relative;
+  flex-shrink: 0;
   width: 100%;
-  max-width: 430px;
-  height: min(390px, 52vh);
+  height: min(300px, 42vh);
   display: grid;
   place-items: center;
 }
 
-#fortune-overlay .cookie-whole {
-  width: 315px;
-  max-width: 86vw;
+#fortune-overlay .cookie-hit {
+  position: relative;
+  display: inline-block;
   cursor: pointer;
-  filter: drop-shadow(0 22px 28px rgba(0, 0, 0, 0.45));
-  animation: fortuneFlyIn 0.75s cubic-bezier(0.18, 1.35, 0.34, 1) both,
-    fortuneWiggle 1.6s ease-in-out 0.8s infinite;
   z-index: 5;
 }
 
+#fortune-overlay .cookie-whole {
+  display: block;
+  width: min(280px, 78vw);
+  filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.42));
+  animation: fortuneFlyIn 0.75s cubic-bezier(0.18, 1.35, 0.34, 1) both,
+    fortuneWiggle 1.6s ease-in-out 0.8s infinite;
+}
+
+#fortune-overlay .fortune-tap-ring {
+  position: absolute;
+  left: 50%;
+  top: 54%;
+  width: 64px;
+  height: 64px;
+  margin: -32px 0 0 -32px;
+  border: 2px solid var(--fortune-accent);
+  border-radius: 50%;
+  pointer-events: none;
+  animation: fortuneTapRing 1.5s ease-out infinite;
+}
+
+#fortune-overlay .fortune-tap-ring--delay {
+  animation-delay: 0.65s;
+}
+
 #fortune-overlay .tap-hint {
-  margin-top: -20px;
+  flex-shrink: 0;
+  margin: 4px 0 0;
   font-family: Unbounded, sans-serif;
   color: var(--fortune-accent);
-  font-size: 18px;
+  font-size: 16px;
   animation: fortunePulse 1s ease-in-out infinite;
 }
 
@@ -77,30 +112,29 @@ body.fortune-open {
 }
 
 #fortune-overlay .cookie-broken {
-  width: 320px;
-  max-width: 88vw;
-  filter: drop-shadow(0 22px 26px rgba(0, 0, 0, 0.45));
+  width: min(285px, 80vw);
+  filter: drop-shadow(0 18px 22px rgba(0, 0, 0, 0.42));
 }
 
 #fortune-overlay .fortune-paper {
-  position: absolute;
-  left: 50%;
-  top: 48%;
+  position: relative;
+  flex-shrink: 0;
   width: min(365px, 91vw);
-  min-height: 168px;
-  padding: 22px 22px 20px;
+  margin-top: 8px;
+  padding: 20px 20px 18px;
   background:
     linear-gradient(90deg, rgba(0, 0, 0, 0.035), transparent 9%, transparent 91%, rgba(0, 0, 0, 0.035)),
     repeating-linear-gradient(0deg, transparent 0 30px, rgba(120, 80, 40, 0.035) 31px),
     var(--fortune-paper);
   color: var(--fortune-ink);
   border-radius: 4px;
-  transform: translate(-50%, 70px) rotate(-1.5deg) scale(0.76);
-  opacity: 0;
   box-shadow:
-    0 18px 40px rgba(0, 0, 0, 0.34),
+    0 14px 32px rgba(0, 0, 0, 0.32),
     inset 0 0 18px rgba(90, 55, 20, 0.08);
-  z-index: 10;
+  opacity: 0;
+  transform: translateY(28px) rotate(-1deg) scale(0.94);
+  pointer-events: none;
+  z-index: 6;
 }
 
 #fortune-overlay .fortune-paper::before,
@@ -125,47 +159,58 @@ body.fortune-open {
 
 #fortune-overlay .paper-label {
   font-family: Unbounded, sans-serif;
-  font-size: 10px;
+  font-size: 9px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: #7a5c31;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 #fortune-overlay .fortune-text {
-  font-size: 22px;
-  line-height: 1.18;
-  font-weight: 700;
-  letter-spacing: -0.03em;
+  font-size: 15px;
+  line-height: 1.45;
+  font-weight: 400;
+  letter-spacing: -0.01em;
 }
 
-#fortune-overlay .fortune-sub {
-  margin-top: 12px;
-  font-size: 13px;
-  line-height: 1.35;
-  color: rgba(25, 25, 25, 0.63);
+#fortune-overlay .fortune-signature {
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid rgba(25, 25, 25, 0.1);
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 400;
+  color: rgba(25, 25, 25, 0.58);
+  font-style: italic;
 }
 
 #fortune-overlay .fortune-actions {
+  flex-shrink: 0;
   position: relative;
-  z-index: 14;
+  z-index: 12;
   width: min(365px, 91vw);
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  margin-top: 34px;
+  gap: 10px;
+  margin-top: 16px;
   opacity: 0;
-  transform: translateY(22px);
+  transform: translateY(12px);
+  pointer-events: none;
 }
 
 #fortune-overlay .fortune-btn {
   width: 100%;
   border: 0;
   border-radius: 18px;
-  padding: 16px 18px;
+  padding: 15px 18px;
   font-family: Unbounded, sans-serif;
   font-size: 13px;
   cursor: pointer;
+}
+
+#fortune-overlay .fortune-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 #fortune-overlay .fortune-btn-primary {
@@ -192,14 +237,23 @@ body.fortune-open {
 #fortune-overlay .spark {
   position: absolute;
   left: 50%;
-  top: 51%;
-  width: 7px;
-  height: 7px;
+  top: 48%;
+  width: 6px;
+  height: 6px;
   border-radius: 999px;
   background: var(--fortune-accent);
   opacity: 0;
   z-index: 21;
-  box-shadow: 0 0 18px var(--fortune-accent);
+  box-shadow: 0 0 14px var(--fortune-accent);
+}
+
+#fortune-overlay.opened .cookie-hit {
+  pointer-events: none;
+}
+
+#fortune-overlay.opened .fortune-tap-ring {
+  animation: none;
+  opacity: 0;
 }
 
 #fortune-overlay.opened .cookie-whole {
@@ -208,8 +262,9 @@ body.fortune-open {
 
 #fortune-overlay.opened .tap-hint {
   opacity: 0;
-  transform: translateY(8px);
-  transition: 0.18s ease;
+  height: 0;
+  margin: 0;
+  overflow: hidden;
 }
 
 #fortune-overlay.opened .broken-wrap {
@@ -217,15 +272,17 @@ body.fortune-open {
 }
 
 #fortune-overlay.opened .cookie-broken {
-  animation: fortuneBrokenFly 0.9s cubic-bezier(0.19, 1, 0.22, 1) 0.12s forwards;
+  animation: fortuneBrokenFly 0.85s cubic-bezier(0.19, 1, 0.22, 1) 0.1s forwards;
 }
 
 #fortune-overlay.opened .fortune-paper {
-  animation: fortunePaperOut 0.86s cubic-bezier(0.2, 1.35, 0.28, 1) 0.28s forwards;
+  pointer-events: auto;
+  animation: fortunePaperIn 0.72s cubic-bezier(0.2, 1.2, 0.28, 1) 0.26s forwards;
 }
 
 #fortune-overlay.opened .fortune-actions {
-  animation: fortuneActionsIn 0.5s ease 0.92s forwards;
+  pointer-events: auto;
+  animation: fortuneActionsIn 0.45s ease 0.78s forwards;
 }
 
 #fortune-overlay.opened .flash {
@@ -238,7 +295,7 @@ body.fortune-open {
 
 @keyframes fortuneFlyIn {
   from {
-    transform: translateY(-240px) scale(0.6) rotate(-18deg);
+    transform: translateY(-200px) scale(0.62) rotate(-16deg);
     opacity: 0;
   }
   to {
@@ -253,7 +310,22 @@ body.fortune-open {
     transform: rotate(-2deg) translateY(0);
   }
   50% {
-    transform: rotate(2.4deg) translateY(-8px);
+    transform: rotate(2.4deg) translateY(-6px);
+  }
+}
+
+@keyframes fortuneTapRing {
+  0% {
+    transform: scale(0.5);
+    opacity: 0.85;
+  }
+  75% {
+    transform: scale(1.25);
+    opacity: 0.12;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
   }
 }
 
@@ -279,27 +351,19 @@ body.fortune-open {
 
 @keyframes fortuneBrokenFly {
   0% {
-    transform: scale(1) translate(0, 0) rotate(0);
+    transform: scale(1) translate(0, 0);
     opacity: 1;
   }
   100% {
-    transform: scale(0.92) translate(0, 118px) rotate(0);
-    opacity: 0.24;
+    transform: scale(0.9) translate(0, 72px);
+    opacity: 0.2;
   }
 }
 
-@keyframes fortunePaperOut {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, 80px) rotate(-3deg) scale(0.72);
-  }
-  62% {
+@keyframes fortunePaperIn {
+  to {
     opacity: 1;
-    transform: translate(-50%, -52px) rotate(1.5deg) scale(1.03);
-  }
-  100% {
-    opacity: 1;
-    transform: translate(-50%, -38px) rotate(-1deg) scale(1);
+    transform: translateY(0) rotate(-0.5deg) scale(1);
   }
 }
 
@@ -334,14 +398,7 @@ body.fortune-open {
 }
 
 @media (max-height: 720px) {
-  #fortune-overlay .fortune-title {
-    top: calc(24px + env(safe-area-inset-top, 0));
-  }
   #fortune-overlay .fortune-stage {
-    height: min(345px, 48vh);
-  }
-  #fortune-overlay .fortune-paper {
-    top: 49%;
-    min-height: 150px;
+    height: min(260px, 38vh);
   }
 }

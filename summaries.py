@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import anthropic
 
 from claude_client import generate
-from db import get_daily_summary, patch_daily_summary, upsert_daily_summary
+from db import get_daily_summary, normalize_task_completed, patch_daily_summary, upsert_daily_summary
 from prompts import DAILY_SUMMARY_PROMPT, ONBOARDING_SUMMARY_PROMPT
 
 log = logging.getLogger("coach_bot")
@@ -72,6 +72,12 @@ def _parse_summary_json(text: str, weekly_goal: str = "") -> dict | None:
     try:
         data = json.loads(m.group(0))
         if isinstance(data, dict) and data.get("summary"):
+            tc_raw = data.get("task_completed")
+            tc = (
+                normalize_task_completed(tc_raw)
+                if tc_raw is not None and str(tc_raw).strip().lower() not in ("null", "")
+                else None
+            )
             out = {
                 "summary": str(data.get("summary", ""))[:4000],
                 "mood": str(data.get("mood", ""))[:200],
@@ -80,6 +86,8 @@ def _parse_summary_json(text: str, weekly_goal: str = "") -> dict | None:
                     str(data.get("task", "")), weekly_goal=weekly_goal
                 ),
             }
+            if tc:
+                out["task_completed"] = tc
             return out
     except json.JSONDecodeError:
         pass
@@ -150,14 +158,19 @@ def save_summary_for_today(
                 task = parsed.get("task", "")
                 if not _sanitize_summary_task(task, weekly_goal=weekly_goal):
                     task = ""
-                patch_daily_summary(
-                    user_id,
-                    today,
-                    summary=parsed["summary"],
-                    mood=parsed["mood"],
-                    key_detail=parsed["key_detail"],
-                    task=task if task else None,
-                )
+                patch_fields: dict = {
+                    "summary": parsed["summary"],
+                    "mood": parsed["mood"],
+                    "key_detail": parsed["key_detail"],
+                    "task": task if task else None,
+                }
+                if parsed.get("task_completed"):
+                    patch_fields["task_completed"] = parsed["task_completed"]
+                    if parsed["task_completed"] == "true":
+                        patch_fields["completed"] = True
+                    elif parsed["task_completed"] == "false":
+                        patch_fields["completed"] = False
+                patch_daily_summary(user_id, today, **patch_fields)
                 log.info("daily_summary saved user=%s date=%s", user_id, today)
                 return
         except (anthropic.RateLimitError, anthropic.NotFoundError):

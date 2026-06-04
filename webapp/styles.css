@@ -236,6 +236,7 @@ body.tg-app { background: var(--bg); }
   border: 2px solid #D4F26B;
 }
 .day-dot.future { background: #E0E0E0; }
+.day-dot.recap { background: #E8E4F0; border: 2px solid #C8BFD8; }
 .day-dot.no-data { background: #F5F5F5; }
 .calendar-legend {
   display: flex;
@@ -556,6 +557,37 @@ body.tg-app { background: var(--bg); }
 .streak-day.empty {
   background: #111;
   border: 1.5px solid #1e1e1e;
+}
+
+.streak-day.done {
+  background: #D4F26B;
+  border: 1.5px solid #D4F26B;
+}
+
+.streak-day.missed {
+  background: #1A1A1A;
+  border: 1.5px solid #1A1A1A;
+}
+
+.streak-day.partial {
+  background: linear-gradient(90deg, #D4F26B 50%, #1A1A1A 50%);
+  border: 1.5px solid #3a3a3a;
+}
+
+.streak-day.recap {
+  background: #1a1a22;
+  border: 1.5px dashed rgba(200, 191, 216, 0.55);
+}
+
+.streak-day.future {
+  background: #111;
+  border: 1.5px solid #1e1e1e;
+  opacity: 0.55;
+}
+
+.streak-day.today {
+  background: transparent;
+  border: 2px solid #D4F26B;
 }
 
 @keyframes starGlow {
