@@ -283,6 +283,7 @@
   }
 
   function setCanEditTimes(enabled) {
+    console.log('setCanEditTimes called with:', enabled, new Error().stack);
     const btn = document.getElementById('edit-times-btn');
     if (btn) btn.hidden = !enabled;
   }
@@ -519,7 +520,8 @@
     return todayTaskCompletionStatus(prof) === 'done';
   }
 
-  function renderCalendar() {
+  function renderCalendar(data) {
+    if (data != null) calendarData = data;
     const host = document.getElementById('calendar-grid');
     const badge = document.getElementById('calendar-week-badge');
     const dowHost = document.querySelector('.calendar-dow');
@@ -569,6 +571,7 @@
 
 
   function startDemoMode(user) {
+    console.log('startDemoMode called', new Error().stack);
     profile = buildDemoProfile();
     tasks = [];
     setCanEditName(false);
@@ -581,6 +584,7 @@
 
   /** API недоступен, но пользователь открыл из Telegram — не подменяем демо-целями. */
   function startLoadErrorMode(user, status) {
+    console.log('startLoadErrorMode called', new Error().stack);
     profile = {
       name: pickName(user, null),
       main_goal: '',
@@ -659,7 +663,9 @@
   }
 
   function effectiveStreak(prof) {
-    return Math.max(0, Number(prof.display_streak ?? prof.streak ?? 0));
+    const p = prof || profile;
+    if (!p) return 0;
+    return Math.max(0, Number(p.display_streak || p.streak || 0));
   }
 
   function taskAppliesToday(task, todayIso) {
@@ -739,6 +745,10 @@
   }
 
   function renderTasks(prof, list) {
+    if (typeof t !== 'function') {
+      console.warn('i18n not loaded yet');
+      return;
+    }
     const host = document.getElementById('task-list');
     const todayItems = todayTasksList(prof, list);
 
@@ -804,7 +814,8 @@
   }
 
   function renderStreak(prof) {
-    const streak = effectiveStreak(prof);
+    const p = prof || profile;
+    const streak = Math.max(0, Number(p?.display_streak || p?.streak || 0));
     const countEl = document.getElementById('streak-count');
     if (countEl) {
       countEl.textContent = streak > 0
@@ -974,6 +985,7 @@
       const result = await fetchProfile();
       if (!result.ok || !result.profile) return result;
       profile = result.profile;
+      hideSyncBanner();
       if (!opts.skipRender) {
         renderProfile(profile);
       }
@@ -1227,16 +1239,21 @@
     }
 
     applyLanguageFromProfile(profile);
-    hideSyncBanner();
     showMain();
-    setCanEditName(true);
     setCanEditTimes(true);
+    setCanEditName(true);
+    hideSyncBanner();
     await checkMilestone();
     await markStreakOnOpen();
     tasks = await fetchTasks();
     renderTasks(profile, tasks);
-    calendarData = await fetchCalendar();
     renderAll(tgUser);
+    renderTimes(profile);
+    paintMainScreenTimes(profileMorningTime(profile), profileEveningTime(profile));
+    calendarData = await fetchCalendar();
+    if (typeof renderCalendar === 'function') {
+      renderCalendar(calendarData);
+    }
     syncTimezone();
     syncLanguageCode();
     document.querySelector('.settings-block')?.classList.add('loaded');
