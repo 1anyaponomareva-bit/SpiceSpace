@@ -4276,6 +4276,12 @@ async def _bootstrap_bot() -> None:
                                     cid, weekly_sent_key
                                 )
                                 user_profiles[key] = profile
+                                claimed = db_store.claim_send_slot(
+                                    cid, "last_evening_sent_date", today
+                                )
+                                if claimed:
+                                    profile["last_evening_sent_date"] = today
+                                    user_profiles[key] = profile
                                 log.info(
                                     "weekly recap sent cid=%s day=%s",
                                     cid,
@@ -4287,12 +4293,6 @@ async def _bootstrap_bot() -> None:
                                     cid,
                                     e,
                                 )
-                        claimed = db_store.claim_send_slot(
-                            cid, "last_evening_sent_date", today
-                        )
-                        if claimed:
-                            profile["last_evening_sent_date"] = today
-                            user_profiles[key] = profile
                     else:
                         claimed = db_store.claim_send_slot(
                             cid, "last_evening_sent_date", today
