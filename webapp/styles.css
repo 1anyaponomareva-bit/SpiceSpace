@@ -569,6 +569,12 @@ body.tg-app { background: var(--bg); }
   background: linear-gradient(135deg, #161616 50%, #2a2a18 50%);
 }
 
+.streak-day.active.missed-day {
+  border-color: rgba(120, 120, 120, 0.55);
+  box-shadow: none;
+  animation: none;
+}
+
 .streak-day.missed {
   background: #1A1A1A;
   border: 1.5px solid #1A1A1A;

@@ -896,17 +896,23 @@
     container.innerHTML = '';
 
     if (cycle && cycle.length === 7) {
-      cycle.forEach((d) => {
+      const weekDay = Math.min(7, Math.max(1, weekDayFromProfile(p)));
+      cycle.forEach((d, i) => {
+        const dayNum = i + 1;
         const status = cycleDayStatus(d);
         const wrap = document.createElement('div');
         wrap.className = 'streak-day-wrap';
-        if (status === 'future' || status === 'empty') {
+        if (d.is_future || dayNum > weekDay) {
           wrap.innerHTML = '<div class="streak-day empty"></div>';
-        } else if (status === 'missed') {
-          wrap.innerHTML = `<div class="streak-day missed" title="${escapeHtml(d.date || '')}"></div>`;
         } else {
           const todayCls = d.is_today ? ' is-today' : '';
-          const statusCls = status === 'done' ? ' done' : status === 'partial' ? ' partial' : '';
+          const statusCls = status === 'done'
+            ? ' done'
+            : status === 'partial'
+              ? ' partial'
+              : status === 'missed'
+                ? ' missed-day'
+                : '';
           wrap.innerHTML = (
             `<div class="streak-day active${todayCls}${statusCls}" title="${escapeHtml(d.date || '')}">` +
             `<img src="./spicespace-logo.jpg" alt="✦" class="streak-logo-icon"/>` +
