@@ -738,6 +738,43 @@ def evening_no_task_prompt(lang: str = "en") -> str:
     return EVENING_NO_TASK_PROMPT
 
 
+TODAY_TASK_OPTIONS_PROMPT_RU = """Ты — Спейс. Пользователь только что записала цель на эту неделю.
+
+Недельная цель: {weekly_goal}
+Цель на 12 недель: {main_goal}
+Время на задачу сегодня: {time_per_day}
+
+Напиши ОДНО короткое сообщение (без «доброе утро», без вчерашнего контекста, без приветствия по времени суток):
+1. Одно живое предложение — цель на неделю записана, давай первый шаг на сегодня
+2. 2-3 конкретных варианта задачи на СЕГОДНЯ — каждый выполним за {time_per_day}
+Формат строго: «Сегодня можно: [вариант 1] / [вариант 2] / [вариант 3]. Что берёшь или предложи своё?»
+
+Задача дня — один конкретный шаг к недельной цели, НЕ сама недельная цель целиком.
+ЗАПРЕЩЕНО: утреннее приветствие, упоминание вчера, коуч-язык, markdown, прощания, закрывающие фразы.
+Максимум 3-4 предложения."""
+
+TODAY_TASK_OPTIONS_PROMPT = """You are Space. The user just saved this week's goal.
+
+Weekly goal: {weekly_goal}
+12-week goal: {main_goal}
+Time for today's task: {time_per_day}
+
+Write ONE short message (no "good morning", no yesterday context, no time-of-day greeting):
+1. One lively sentence — weekly goal is saved, let's pick the first step for today
+2. 2-3 concrete options for TODAY — each doable in {time_per_day}
+Strict format: "Today you can: [option 1] / [option 2] / [option 3]. What do you pick or suggest your own?"
+
+Today's task is one concrete step toward the weekly goal, NOT the whole weekly goal.
+FORBIDDEN: morning greeting, yesterday references, coach-speak, markdown, goodbyes, closing phrases.
+Max 3-4 sentences."""
+
+
+def today_task_options_prompt(lang: str = "en") -> str:
+    if str(lang or "en").lower().startswith("ru"):
+        return TODAY_TASK_OPTIONS_PROMPT_RU
+    return TODAY_TASK_OPTIONS_PROMPT
+
+
 TODAY_TASK_PROMPT = """Сформулируй одну задачу на сегодня — конкретное действие за {time_per_day}.
 
 Недельная цель (НЕ копируй её в task): {weekly_goal}

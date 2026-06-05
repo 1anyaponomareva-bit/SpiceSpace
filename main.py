@@ -42,6 +42,7 @@ from claude_client import build_model_chain, configure as configure_claude, gene
 from claude_client import select_model_id
 from prompts import (
     TODAY_TASK_PROMPT,
+    today_task_options_prompt,
     build_chat_system,
     evening_message_prompt,
     evening_no_task_prompt,
@@ -1779,8 +1780,6 @@ async def _morning_message_text(
     chat_id: int,
     profile: dict,
     model_names: list[str],
-    *,
-    after_weekly_change: bool = False,
 ) -> str:
     lang = str(profile.get("language_code") or "en")
     ru = lang.lower().startswith("ru")
@@ -1824,21 +1823,6 @@ async def _morning_message_text(
     personality_block = _personality_block_for_prompt(chat_id)
     yctx_label = "Вчерашний контекст" if ru else "Yesterday's context"
 
-    weekly_change_note = ""
-    if after_weekly_change:
-        weekly_change_note = (
-            "\n\nВАЖНО: пользователь только что записала новую цель на эту неделю. "
-            "Не ссылайся на вчера и не спрашивай про прошлый день. "
-            "Сразу предложи 2-3 конкретных шага на СЕГОДНЯ как первый шаг к новой недельной цели. "
-            "Не обязательно «доброе утро» — продолжи разговор естественно."
-            if ru
-            else (
-                "\n\nIMPORTANT: the user just saved a new weekly goal. "
-                "Do not reference yesterday or ask about the past day. "
-                "Offer 2-3 concrete steps for TODAY as the first move toward the new weekly goal. "
-                "No need for «good morning» — continue the conversation naturally."
-            )
-        )
     user_content = (
         f"{name_instruction}\n\n"
         f"{yctx_label}:\n{yesterday_context or none_word}\n\n"
@@ -1847,12 +1831,11 @@ async def _morning_message_text(
             vision=vision,
             main_goal=main_goal,
             weekly_goal=weekly_goal,
-            last_summary=last_summary if not after_weekly_change else none_word,
+            last_summary=last_summary,
             time_per_day=time_per_day,
             facts_block=facts_block,
             personality_block=personality_block,
         )
-        + weekly_change_note
     )
 
     morning_body = _morning_personal_system(lang) + f"{name_instruction}"
@@ -3989,15 +3972,95 @@ def _task_equals_weekly_goal(task: str, weekly_goal: str) -> bool:
 
 
 def _extract_morning_task_options(text: str) -> list[str]:
+    raw = text or ""
     m = re.search(
         r"сегодня можно:\s*(.+?)(?:\.\s*что берёшь|\?\s*что берёшь|\.\s*$)",
-        text or "",
+        raw,
         re.IGNORECASE | re.DOTALL,
     )
+    if not m:
+        m = re.search(
+            r"today you can:\s*(.+?)(?:\.\s*what do you|\?\s*what do you|\.\s*$)",
+            raw,
+            re.IGNORECASE | re.DOTALL,
+        )
     if not m:
         return []
     blob = m.group(1).strip().rstrip(".")
     return [p.strip() for p in re.split(r"\s*/\s*", blob) if p.strip()][:3]
+
+
+def _today_task_options_fallback(profile: dict) -> str:
+    lang = str(profile.get("language_code") or "en")
+    ru = lang.lower().startswith("ru")
+    weekly = str(profile.get("weekly_goal") or "").strip() or (
+        "твоя цель на неделю" if ru else "your goal this week"
+    )
+    if ru:
+        return (
+            f"Цель на неделю записана 💚\n\n"
+            f"Сегодня можно: сделать первый шаг к «{weekly}» / "
+            f"выбрать одно конкретное действие на сегодня / "
+            f"написать свой вариант. Что берёшь?"
+        )
+    return (
+        f"Weekly goal saved 💚\n\n"
+        f"Today you can: take the first step toward «{weekly}» / "
+        f"pick one concrete action for today / "
+        f"suggest your own. What do you pick?"
+    )
+
+
+async def _today_task_options_message_text(
+    profile: dict,
+    model_names: list[str],
+) -> str:
+    lang = str(profile.get("language_code") or "en")
+    ru = lang.lower().startswith("ru")
+    na = "не указана" if ru else "not specified"
+    main_goal = str(
+        profile.get("main_goal") or profile.get("final_goal") or ""
+    ).strip() or na
+    weekly_goal = str(profile.get("weekly_goal") or "").strip() or main_goal
+    time_per_day = _format_time_per_day_for_prompt(profile)
+    prompt = today_task_options_prompt(lang).format(
+        weekly_goal=weekly_goal,
+        main_goal=main_goal,
+        time_per_day=time_per_day,
+    )
+    system = prepend_user_time(
+        profile,
+        "Ты — Спейс. Коротко, тепло, без markdown."
+        if ru
+        else "You are Space. Short, warm, no markdown.",
+    )
+    if not ru:
+        system = (
+            "CRITICAL: Write ONLY in English. Not a single Russian word.\n\n"
+        ) + system
+
+    def call() -> str:
+        for mid in model_names:
+            try:
+                text = sanitize_bot_reply(
+                    claude_generate(
+                        mid,
+                        [{"role": "user", "content": prompt}],
+                        system=refresh_user_time_in_system(profile, system),
+                        max_tokens=280,
+                        cache_core=False,
+                    )
+                ).strip()
+                low = text.lower()
+                if text and (
+                    "сегодня можно:" in low or "today you can:" in low
+                ):
+                    return text
+            except Exception as e:
+                log.warning("today_task_options %s: %s", mid, e)
+        return _today_task_options_fallback(profile)
+
+    return await asyncio.to_thread(call)
 
 
 async def _generate_today_task(profile: dict, model_names: list[str]) -> str:
@@ -4524,25 +4587,45 @@ def _in_weekly_special_flow(cid: int) -> bool:
     return step == ob.OB_CHANGE_WEEKLY
 
 
+async def _post_today_task_after_weekly(
+    bot,
+    cid: int,
+    profile: dict,
+    model_names: list[str],
+) -> None:
+    """After manual weekly goal change — propose today's task (not morning message)."""
+    ulang = _user_lang(profile)
+    try:
+        async with typing_while(bot, cid):
+            text = await _today_task_options_message_text(profile, model_names)
+        histories.setdefault(cid, []).append({"role": "model", "parts": [text]})
+        keyboard = _webapp_keyboard(cid, ulang)
+        await bot.send_message(
+            chat_id=cid,
+            text=sanitize_bot_reply(text),
+            reply_markup=keyboard,
+        )
+        pending_morning[cid] = {
+            "task": "",
+            "text": text,
+            "awaiting_reminder": False,
+        }
+    except Exception as e:
+        log.warning("post_today_task_after_weekly failed cid=%s: %s", cid, e)
+
+
 async def _post_weekly_goal_morning(
     bot,
     cid: int,
     profile: dict,
     model_names: list[str],
-    *,
-    after_weekly_change: bool = False,
 ) -> None:
-    """After a new weekly goal is set — morning task options for today."""
+    """Scheduled morning after new week — full morning message with task options."""
     ulang = _user_lang(profile)
     try:
         await _restore_history_from_db(cid, "morning after weekly goal")
         async with typing_while(bot, cid):
-            text = await _morning_message_text(
-                cid,
-                profile,
-                model_names,
-                after_weekly_change=after_weekly_change,
-            )
+            text = await _morning_message_text(cid, profile, model_names)
         histories.setdefault(cid, []).append({"role": "model", "parts": [text]})
         keyboard = _webapp_keyboard(cid, ulang)
         await bot.send_message(
@@ -4721,6 +4804,7 @@ async def _bootstrap_bot() -> None:
     telegram_app.bot_data["claude_model_names"] = model_chain
     telegram_app.bot_data["mini_app_url"] = _mini_app_url()
     telegram_app.bot_data["post_weekly_goal_morning"] = _post_weekly_goal_morning
+    telegram_app.bot_data["post_today_task_after_weekly"] = _post_today_task_after_weekly
     _register_telegram_handlers(telegram_app)
 
     bot = telegram_app.bot
