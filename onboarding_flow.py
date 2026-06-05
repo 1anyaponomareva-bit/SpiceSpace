@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "goal-buttons-fix-v12"
+BOT_BUILD = "weekly-change-flow-v13"
 
 OB_RETURNING = 0
 OB_NAME = 1
@@ -308,9 +308,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "Не совсем поняла. Напиши вечернее время как 21:00 или «в 9 вечера»."
     ),
     "change_weekly_opening": (
-        "Окей, давай поменяем цель на эту неделю. "
-        "Текущая цель на 12 недель: {main_goal}\n\n"
-        "Что хочешь сделать на этой неделю вместо этого?"
+        "Меняем цель на эту неделю 💚\n\n"
+        "Твоя цель на 12 недель: {main_goal}"
     ),
     "new_week_opening": (
         "Теперь поставим цель на следующую неделю 💚\n\n"
@@ -340,7 +339,7 @@ STRINGS: dict[str, dict[str, str]] = {
     ),
     "change_12w_broken": "Что-то сбилось. Напиши «поменять цель» ещё раз.",
     "main_to_weekly": "Отлично 🎯 Теперь первая неделя.",
-    "weekly_saved": "Записала 💚 Цель на эту неделю: {weekly}. Погнали.",
+    "weekly_saved": "Записала 💚 Цель на эту неделю: {weekly}.",
     "finish_12w": (
         "Записала ✨ Новая цель на 12 недель: {main}\n"
         "На эту неделю: {weekly}\n"
@@ -515,7 +514,7 @@ STRINGS: dict[str, dict[str, str]] = {
     ),
     "change_12w_broken": "Something went wrong. Type «change goal» again.",
     "main_to_weekly": "First week. What do you want to accomplish this week?",
-    "weekly_saved": "Saved 💚 This week's goal: {weekly}. Let's go.",
+    "weekly_saved": "Saved 💚 This week's goal: {weekly}.",
     "finish_12w": (
         "Saved ✨ New 12-week goal: {main}\n"
         "This week: {weekly}\n"
@@ -728,20 +727,18 @@ def start_weekly_recap(
     onboarding[cid] = st
 
 
-async def kickoff_new_week_goal_after_recap(
+async def _kickoff_weekly_options_message(
     bot,
     cid: int,
-    profile: dict,
-    onboarding: dict[int, dict],
+    st: dict,
     model_names: list[str],
+    *,
+    opening: str | None = None,
 ) -> bool:
-    """Day 7 evening: after recap, help user set next week's goal (proactive dialog)."""
-    lang = _ob_lang(profile=profile)
-    start_change_weekly(onboarding, cid, profile, from_week_start=True)
+    lang = _ob_lang(st)
     try:
-        opening = new_week_opening(profile, lang)
-        await bot.send_message(chat_id=cid, text=opening)
-        st = onboarding[cid]
+        if opening:
+            await bot.send_message(chat_id=cid, text=opening)
         async with typing_while(bot, cid):
             result = await _claude_weekly_tactics_dialog(
                 [],
@@ -753,14 +750,44 @@ async def kickoff_new_week_goal_after_recap(
         reply = (
             result.get("message") or ob_text("weekly_dialog_fallback", lang)
         ).strip()
-        st.setdefault("weekly_turns", []).append(
-            {"role": "assistant", "content": reply[:2000]}
-        )
+        st["weekly_turns"] = [{"role": "assistant", "content": reply[:2000]}]
         await bot.send_message(chat_id=cid, text=reply)
         return True
     except Exception as e:
-        log.warning("kickoff_new_week_goal_after_recap cid=%s: %s", cid, e)
+        log.warning("kickoff_weekly_options cid=%s: %s", cid, e)
         return False
+
+
+async def kickoff_change_weekly_dialog(
+    bot,
+    cid: int,
+    profile: dict,
+    onboarding: dict[int, dict],
+    model_names: list[str],
+) -> bool:
+    """Manual weekly goal change: short intro + 2-3 options from main_goal."""
+    start_change_weekly(onboarding, cid, profile, from_week_start=False)
+    lang = _ob_lang(profile=profile)
+    opening = change_weekly_opening(profile, lang)
+    return await _kickoff_weekly_options_message(
+        bot, cid, onboarding[cid], model_names, opening=opening
+    )
+
+
+async def kickoff_new_week_goal_after_recap(
+    bot,
+    cid: int,
+    profile: dict,
+    onboarding: dict[int, dict],
+    model_names: list[str],
+) -> bool:
+    """Day 7 evening: after recap, help user set next week's goal (proactive dialog)."""
+    start_change_weekly(onboarding, cid, profile, from_week_start=True)
+    lang = _ob_lang(profile=profile)
+    opening = new_week_opening(profile, lang)
+    return await _kickoff_weekly_options_message(
+        bot, cid, onboarding[cid], model_names, opening=opening
+    )
 
 
 def start_change_weekly(
@@ -1301,6 +1328,52 @@ async def _propose_goal_confirm(
     else:
         confirm_msg = _confirmation_text(polished_s, lang)
     await msg.reply_text(confirm_msg)
+
+
+async def _complete_change_weekly_from_dialog(
+    msg,
+    context: ContextTypes.DEFAULT_TYPE,
+    cid: int,
+    st: dict,
+    onboarding: dict[int, dict],
+    user_profiles: dict[str, dict],
+    weekly_goal: str,
+    model_names: list[str],
+) -> None:
+    lang = _ob_lang(st)
+    weekly = (weekly_goal or "").strip()
+    from_week_start = bool(st.get("from_week_start"))
+    done_msg = await _finish_change_weekly(
+        cid, weekly, user_profiles, onboarding
+    )
+    if from_week_start:
+        done_msg = ob_text("weekly_saved_evening", lang, weekly=weekly)
+    await msg.reply_text(done_msg)
+    if not from_week_start:
+        return
+    prof = user_profiles.get(str(cid)) or db.get_profile(cid) or {}
+    tz_name = str(prof.get("timezone") or "Asia/Ho_Chi_Minh")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Ho_Chi_Minh")
+    today_iso = datetime.now(tz).date().isoformat()
+    morning_not_sent = str(prof.get("last_morning_sent_date") or "") != today_iso
+    cycle_raw = str(prof.get("cycle_start_date") or "").strip()[:10]
+    days_since = None
+    if cycle_raw:
+        try:
+            cycle_start = date.fromisoformat(cycle_raw)
+            days_since = (datetime.now(tz).date() - cycle_start).days
+        except ValueError:
+            pass
+    is_week_start_day = (
+        days_since is not None and days_since >= 7 and days_since % 7 == 0
+    )
+    if is_week_start_day and morning_not_sent:
+        cb = context.bot_data.get("post_weekly_goal_morning")
+        if cb:
+            await cb(context.bot, cid, prof, model_names)
 
 
 async def _finish_change_weekly(
@@ -2259,26 +2332,36 @@ async def handle_onboarding_turn(
         turns.append({"role": "user", "content": raw.strip()[:2000]})
 
         prev_reply = _last_assistant_reply(turns)
-        cw_hint = (
-            "Ask a different question or confirm the weekly goal (ready: true)."
+        wt_hint = (
+            "Do not repeat your last reply. Use what the user wrote. "
+            "ready=true ONLY if user clearly said yes/да after your «Right?». "
+            "Otherwise propose 2-3 options or one «Записываю: X. Верно?» with ready=false."
             if not _is_ru(lang)
-            else "Задай другой вопрос или подтверди недельную цель (ready: true)."
+            else (
+                "Не повторяй прошлый ответ. Учти что написала пользователь. "
+                "ready=true ТОЛЬКО если после твоего «Верно?» она явно написала да/верно. "
+                "Иначе предложи 2-3 варианта или одно «Записываю: X. Верно?» с ready=false."
+            )
         )
         async with typing_while(context.bot, cid):
-            result = await _claude_change_weekly_dialog(
+            result = await _claude_weekly_tactics_dialog(
                 turns,
                 model_names,
                 main_goal=str(st.get("main_goal") or ""),
+                user_message=raw,
                 lang=lang,
             )
-            reply = (result.get("message") or ob_text("weekly_dialog_fallback", lang)).strip()
+            reply = (
+                result.get("message") or ob_text("weekly_dialog_fallback", lang)
+            ).strip()
 
             if prev_reply and _normalize_text(reply) == _normalize_text(prev_reply):
-                result = await _claude_change_weekly_dialog(
+                result = await _claude_weekly_tactics_dialog(
                     turns,
                     model_names,
                     main_goal=str(st.get("main_goal") or ""),
-                    extra_user_hint=cw_hint,
+                    user_message=raw,
+                    extra_user_hint=wt_hint,
                     lang=lang,
                 )
                 reply = (result.get("message") or "").strip() or reply
@@ -2286,15 +2369,15 @@ async def handle_onboarding_turn(
         turns.append({"role": "assistant", "content": reply[:2000]})
 
         if result.get("ready") and result.get("weekly_goal"):
-            await msg.reply_text(reply)
-            await _propose_goal_confirm(
+            await _complete_change_weekly_from_dialog(
                 msg,
+                context,
+                cid,
                 st,
-                field="weekly_goal",
-                raw=result["weekly_goal"],
-                goal_type=GOAL_TYPE_WEEKLY,
-                model_names=model_names,
-                after="finish_weekly",
+                onboarding,
+                user_profiles,
+                str(result["weekly_goal"]),
+                model_names,
             )
         else:
             await msg.reply_text(reply)

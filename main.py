@@ -3208,10 +3208,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     start_arg = (context.args[0] if context.args else "").strip().lower()
     if start_arg in ("change_weekly", "change-weekly", "weekly_goal"):
         if isinstance(prof, dict) and prof.get("name"):
-            ob.start_change_weekly(onboarding, cid, prof)
-            plang = str(prof.get("language_code") or lang)
-            opening = ob.change_weekly_opening(prof, plang)
-            await _bot_reply(update.message, opening)
+            model_names = context.bot_data.get("claude_model_names") or []
+            await ob.kickoff_change_weekly_dialog(
+                context.bot, cid, prof, onboarding, model_names
+            )
             return
     if start_arg in ("change_12w", "change-12w", "12w_goal", "main_goal"):
         if isinstance(prof, dict) and prof.get("name"):
