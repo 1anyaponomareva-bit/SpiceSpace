@@ -51,13 +51,26 @@ body.fortune-open {
   padding-bottom: 8px;
 }
 
+#fortune-overlay .fortune-cookie-block {
+  flex-shrink: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
 #fortune-overlay .fortune-stage {
   position: relative;
   flex-shrink: 0;
   width: 100%;
-  height: min(300px, 42vh);
-  display: grid;
-  place-items: center;
+  height: auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0 4px;
+  overflow: visible;
 }
 
 #fortune-overlay .cookie-hit {
@@ -68,6 +81,7 @@ body.fortune-open {
   cursor: pointer;
   z-index: 5;
   line-height: 0;
+  flex-shrink: 0;
 }
 
 #fortune-overlay .cookie-whole,
@@ -83,6 +97,8 @@ body.fortune-open {
 }
 
 #fortune-overlay .cookie-whole {
+  position: relative;
+  z-index: 1;
   filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.42));
   animation: fortuneFlyIn 0.75s cubic-bezier(0.18, 1.35, 0.34, 1) both,
     fortuneWiggle 1.6s ease-in-out 0.8s infinite;
@@ -91,13 +107,14 @@ body.fortune-open {
 #fortune-overlay .fortune-tap-ring {
   position: absolute;
   left: 50%;
-  top: 54%;
-  width: 64px;
-  height: 64px;
-  margin: -32px 0 0 -32px;
+  top: 28%;
+  width: 58px;
+  height: 58px;
+  margin: -29px 0 0 -29px;
   border: 2px solid var(--fortune-accent);
   border-radius: 50%;
   pointer-events: none;
+  z-index: 3;
   animation: fortuneTapRing 1.5s ease-out infinite;
 }
 
@@ -410,7 +427,12 @@ body.fortune-open {
 }
 
 @media (max-height: 720px) {
-  #fortune-overlay .fortune-stage {
-    height: min(260px, 38vh);
+  #fortune-overlay .cookie-whole,
+  #fortune-overlay .cookie-broken {
+    max-height: min(240px, 32vh);
+  }
+
+  #fortune-overlay .tap-hint {
+    margin-top: 10px;
   }
 }

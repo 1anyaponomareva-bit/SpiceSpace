@@ -15,7 +15,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&family=Geologica:wght@300;400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./styles.css?v=20260610h" />
-  <link rel="stylesheet" href="./cookie.css?v=20260611c" />
+  <link rel="stylesheet" href="./cookie.css?v=20260611d" />
   <link rel="preload" href="./assets/cookie-whole.png" as="image" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
@@ -178,18 +178,20 @@
 <div id="fortune-overlay" class="fortune-overlay" hidden aria-hidden="true">
   <div class="fortune-title">Твоё предсказание<br>на сегодня</div>
   <div class="fortune-scroll">
-    <div class="fortune-stage">
-      <div class="cookie-hit" id="fortune-cookie-hit" role="button" tabindex="0" aria-label="Открыть печеньку">
-        <span class="fortune-tap-ring" aria-hidden="true"></span>
-        <span class="fortune-tap-ring fortune-tap-ring--delay" aria-hidden="true"></span>
-        <img class="cookie-whole" id="fortune-cookie" src="./assets/cookie-whole.png" alt="" decoding="async" />
+    <div class="fortune-cookie-block">
+      <div class="fortune-stage">
+        <div class="cookie-hit" id="fortune-cookie-hit" role="button" tabindex="0" aria-label="Открыть печеньку">
+          <img class="cookie-whole" id="fortune-cookie" src="./assets/cookie-whole.png" alt="" decoding="async" />
+          <span class="fortune-tap-ring" aria-hidden="true"></span>
+          <span class="fortune-tap-ring fortune-tap-ring--delay" aria-hidden="true"></span>
+        </div>
+        <div class="broken-wrap">
+          <img class="cookie-broken" data-src="./assets/cookie-broken.png" alt="" decoding="async" />
+        </div>
+        <div class="flash"></div>
       </div>
-      <div class="broken-wrap">
-        <img class="cookie-broken" data-src="./assets/cookie-broken.png" alt="" decoding="async" />
-      </div>
-      <div class="flash"></div>
+      <p class="tap-hint">нажми</p>
     </div>
-    <p class="tap-hint">нажми на печеньку</p>
     <div class="fortune-paper" id="fortune-paper">
       <div class="paper-label">fortune cookie</div>
       <div class="fortune-text" id="fortune-text">—</div>
