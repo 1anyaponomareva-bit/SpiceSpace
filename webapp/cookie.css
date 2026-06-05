@@ -62,14 +62,27 @@ body.fortune-open {
 
 #fortune-overlay .cookie-hit {
   position: relative;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   z-index: 5;
+  line-height: 0;
+}
+
+#fortune-overlay .cookie-whole,
+#fortune-overlay .cookie-broken {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(280px, 78vw);
+  max-height: min(280px, 36vh);
+  aspect-ratio: 1;
+  object-fit: contain;
+  object-position: center;
 }
 
 #fortune-overlay .cookie-whole {
-  display: block;
-  width: min(280px, 78vw);
   filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.42));
   animation: fortuneFlyIn 0.75s cubic-bezier(0.18, 1.35, 0.34, 1) both,
     fortuneWiggle 1.6s ease-in-out 0.8s infinite;
@@ -112,7 +125,6 @@ body.fortune-open {
 }
 
 #fortune-overlay .cookie-broken {
-  width: min(285px, 80vw);
   filter: drop-shadow(0 18px 22px rgba(0, 0, 0, 0.42));
 }
 
