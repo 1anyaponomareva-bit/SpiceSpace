@@ -42,6 +42,7 @@ from claude_client import build_model_chain, configure as configure_claude, gene
 from claude_client import select_model_id
 from prompts import (
     TODAY_TASK_PROMPT,
+    post_task_followup_prompt,
     today_task_options_prompt,
     build_chat_system,
     evening_message_prompt,
@@ -3586,24 +3587,33 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         prof_d = _sync_profile_language_code(cid, update, prof_d) or prof_d
         _touch_streak_for_activity(cid, prof_d)
 
+    model_chain: list[str] = context.bot_data.get("claude_model_names") or []
+
     morning_state = pending_morning.get(cid)
     if isinstance(morning_state, dict):
         if morning_state.get("awaiting_reminder"):
             raw_lower = raw.strip().lower()
+            task_title = str(morning_state.get("task") or "").strip()
+            prof_rem = prof_d or _resolve_user_profile(str(cid)) or {}
 
             if any(
                 w in raw_lower
                 for w in ("нет", "не надо", "не нужно", "ненадо")
             ):
                 pending_morning.pop(cid, None)
-                await _bot_reply(update.message, "Окей 💚")
+                msg = "Окей 💚"
+                await _bot_reply(update.message, msg)
+                _append_history_turn(cid, raw, msg)
+                if task_title and prof_rem:
+                    await _send_task_day_followup(
+                        context.bot, cid, prof_rem, model_chain, task_title
+                    )
                 return
 
             parsed = _extract_hhmm_from_text(raw) or _parse_daily_time(raw.strip())
             if parsed:
                 pending_morning.pop(cid, None)
-                task_title = str(morning_state.get("task") or "Задача на сегодня")
-                prof_rem = prof_d or _resolve_user_profile(str(cid)) or {}
+                task_title = task_title or "Задача на сегодня"
                 tz_name = _profile_timezone_name(prof_rem)
                 tz = _zone_or_default(tz_name)
                 today = datetime.now(tz).strftime("%Y-%m-%d")
@@ -3619,7 +3629,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                             "repeat": "none",
                         },
                     )
-                    await _bot_reply(update.message, f"Напомню в {parsed} 💚")
+                    msg = f"Напомню в {parsed} 💚"
+                    await _bot_reply(update.message, msg)
+                    _append_history_turn(cid, raw, msg)
+                    await _send_task_day_followup(
+                        context.bot, cid, prof_rem, model_chain, task_title
+                    )
                 except Exception as e:
                     log.warning("midday reminder create failed: %s", e)
                     await _bot_reply(
@@ -4138,6 +4153,109 @@ def _pending_morning_text(state: object | None) -> str:
     if isinstance(state, str):
         return state
     return ""
+
+
+def _recent_dialog_snippet(chat_id: int, *, ru: bool, max_turns: int = 10) -> str:
+    user_l = "Она" if ru else "User"
+    space_l = "Спейс" if ru else "Space"
+    lines: list[str] = []
+    for turn in (histories.get(chat_id, []) or [])[-max_turns:]:
+        role = turn.get("role")
+        content = turn.get("content") or (turn.get("parts") or [""])[0]
+        text = str(content or "").strip()
+        if not text:
+            continue
+        who = user_l if role == "user" else space_l
+        lines.append(f"{who}: {text[:300]}")
+    return "\n".join(lines) if lines else ("пока мало контекста" if ru else "little context yet")
+
+
+def _task_day_followup_fallback(profile: dict, today_task: str) -> str:
+    lang = str(profile.get("language_code") or "en")
+    ru = lang.lower().startswith("ru")
+    task = (today_task or "").strip() or ("задачу" if ru else "the task")
+    if ru:
+        return (
+            f"Про «{task}» — с чего начнёшь? "
+            f"Расскажи вслух, помогу разложить по шагам 💚"
+        )
+    return (
+        f"About «{task}» — where will you start? "
+        f"Talk me through it, I'll help you break it down 💚"
+    )
+
+
+async def _task_day_followup_text(
+    chat_id: int,
+    profile: dict,
+    model_names: list[str],
+    today_task: str,
+) -> str:
+    lang = str(profile.get("language_code") or "en")
+    ru = lang.lower().startswith("ru")
+    weekly_goal = str(profile.get("weekly_goal") or "").strip() or (
+        "не указана" if ru else "not specified"
+    )
+    prompt = post_task_followup_prompt(lang).format(
+        today_task=(today_task or "").strip() or ("не указана" if ru else "not set"),
+        weekly_goal=weekly_goal,
+        recent_dialog=_recent_dialog_snippet(chat_id, ru=ru),
+    )
+    system = prepend_user_time(
+        profile,
+        "Ты — Спейс. Коротко, тепло, без markdown."
+        if ru
+        else "You are Space. Short, warm, no markdown.",
+    )
+    if not ru:
+        system = (
+            "CRITICAL: Write ONLY in English. Not a single Russian word.\n\n"
+        ) + system
+
+    def call() -> str:
+        for mid in model_names:
+            try:
+                text = sanitize_bot_reply(
+                    claude_generate(
+                        mid,
+                        [{"role": "user", "content": prompt}],
+                        system=refresh_user_time_in_system(profile, system),
+                        max_tokens=200,
+                        cache_core=False,
+                    )
+                ).strip()
+                if text:
+                    return text
+            except Exception as e:
+                log.warning("task_day_followup %s: %s", mid, e)
+        return _task_day_followup_fallback(profile, today_task)
+
+    return await asyncio.to_thread(call)
+
+
+async def _send_task_day_followup(
+    bot,
+    chat_id: int,
+    profile: dict,
+    model_names: list[str],
+    today_task: str,
+) -> None:
+    """Keep conversation going after today's task (and optional reminder) is set."""
+    await asyncio.sleep(0.8)
+    try:
+        async with typing_while(bot, chat_id):
+            text = await _task_day_followup_text(
+                chat_id, profile, model_names, today_task
+            )
+        ulang = _user_lang(profile)
+        await bot.send_message(
+            chat_id=chat_id,
+            text=sanitize_bot_reply(text),
+            reply_markup=_webapp_keyboard(chat_id, ulang),
+        )
+        histories.setdefault(chat_id, []).append({"role": "model", "parts": [text]})
+    except Exception as e:
+        log.warning("send_task_day_followup failed cid=%s: %s", chat_id, e)
 
 
 async def _ask_midday_reminder(bot, chat_id: int, profile: dict, task: str) -> None:
