@@ -559,35 +559,19 @@ body.tg-app { background: var(--bg); }
   border: 1.5px solid #1e1e1e;
 }
 
-.streak-day.done {
-  background: #D4F26B;
-  border: 1.5px solid #D4F26B;
+.streak-day.active.done {
+  border-color: rgba(212, 242, 107, 0.85);
+  box-shadow: 0 0 12px rgba(212, 242, 107, 0.35);
+}
+
+.streak-day.active.partial {
+  border-color: rgba(212, 242, 107, 0.45);
+  background: linear-gradient(135deg, #161616 50%, #2a2a18 50%);
 }
 
 .streak-day.missed {
   background: #1A1A1A;
   border: 1.5px solid #1A1A1A;
-}
-
-.streak-day.partial {
-  background: linear-gradient(90deg, #D4F26B 50%, #1A1A1A 50%);
-  border: 1.5px solid #3a3a3a;
-}
-
-.streak-day.recap {
-  background: #1a1a22;
-  border: 1.5px dashed rgba(200, 191, 216, 0.55);
-}
-
-.streak-day.future {
-  background: #111;
-  border: 1.5px solid #1e1e1e;
-  opacity: 0.55;
-}
-
-.streak-day.today {
-  background: transparent;
-  border: 2px solid #D4F26B;
 }
 
 @keyframes starGlow {

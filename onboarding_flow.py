@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "goal-buttons-v7"
+BOT_BUILD = "week-flow-v8"
 
 OB_RETURNING = 0
 OB_NAME = 1
@@ -313,9 +313,13 @@ STRINGS: dict[str, dict[str, str]] = {
         "Что хочешь сделать на этой неделю вместо этого?"
     ),
     "new_week_opening": (
-        "Новая неделя 🌅\n\n"
-        "Цель на 12 недель: {main_goal}\n\n"
-        "Давай поставим цель на эту неделю — одним фокусом."
+        "Теперь поставим цель на следующую неделю 💚\n\n"
+        "Твоя цель на 12 недель: {main_goal}\n\n"
+        "Сейчас предложу варианты — выбери или напиши свой."
+    ),
+    "weekly_saved_evening": (
+        "Записала 💚 Цель на эту неделю: {weekly}. "
+        "Утром напишу как обычно — с задачей на день."
     ),
     "weekly_recap_opening": (
         "Последний вечер этой недели — давай подведём итоги.\n\n"
@@ -484,9 +488,13 @@ STRINGS: dict[str, dict[str, str]] = {
         "What do you want to do this week instead?"
     ),
     "new_week_opening": (
-        "New week 🌅\n\n"
+        "Let's set your goal for the coming week 💚\n\n"
         "12-week goal: {main_goal}\n\n"
-        "Let's set one clear focus for this week."
+        "I'll suggest a few options — pick one or write your own."
+    ),
+    "weekly_saved_evening": (
+        "Saved 💚 This week's goal: {weekly}. "
+        "Tomorrow morning I'll message you as usual with today's task."
     ),
     "weekly_recap_opening": (
         "Sunday evening — time to wrap up the week.\n\n"
@@ -718,6 +726,41 @@ def start_weekly_recap(
     }
     _seed_from_profile(st, profile)
     onboarding[cid] = st
+
+
+async def kickoff_new_week_goal_after_recap(
+    bot,
+    cid: int,
+    profile: dict,
+    onboarding: dict[int, dict],
+    model_names: list[str],
+) -> bool:
+    """Day 7 evening: after recap, help user set next week's goal (proactive dialog)."""
+    lang = _ob_lang(profile=profile)
+    start_change_weekly(onboarding, cid, profile, from_week_start=True)
+    try:
+        opening = new_week_opening(profile, lang)
+        await bot.send_message(chat_id=cid, text=opening)
+        st = onboarding[cid]
+        async with typing_while(bot, cid):
+            result = await _claude_weekly_tactics_dialog(
+                [],
+                model_names,
+                main_goal=str(st.get("main_goal") or ""),
+                user_message="",
+                lang=lang,
+            )
+        reply = (
+            result.get("message") or ob_text("weekly_dialog_fallback", lang)
+        ).strip()
+        st.setdefault("weekly_turns", []).append(
+            {"role": "assistant", "content": reply[:2000]}
+        )
+        await bot.send_message(chat_id=cid, text=reply)
+        return True
+    except Exception as e:
+        log.warning("kickoff_new_week_goal_after_recap cid=%s: %s", cid, e)
+        return False
 
 
 def start_change_weekly(
@@ -1317,12 +1360,35 @@ async def _dispatch_goal_confirm_after(
         done_msg = await _finish_change_weekly(
             cid, weekly, user_profiles, onboarding
         )
+        if from_week_start:
+            done_msg = ob_text("weekly_saved_evening", _ob_lang(st), weekly=weekly)
         await msg.reply_text(done_msg)
         if from_week_start:
-            cb = context.bot_data.get("post_weekly_goal_morning")
-            if cb:
-                prof = user_profiles.get(str(cid)) or db.get_profile(cid) or {}
-                await cb(context.bot, cid, prof, model_names)
+            prof = user_profiles.get(str(cid)) or db.get_profile(cid) or {}
+            tz_name = str(prof.get("timezone") or "Asia/Ho_Chi_Minh")
+            try:
+                tz = ZoneInfo(tz_name)
+            except Exception:
+                tz = ZoneInfo("Asia/Ho_Chi_Minh")
+            today_iso = datetime.now(tz).date().isoformat()
+            morning_not_sent = str(prof.get("last_morning_sent_date") or "") != today_iso
+            days_since = None
+            cycle_raw = str(prof.get("cycle_start_date") or "").strip()[:10]
+            if cycle_raw:
+                try:
+                    cycle_start = date.fromisoformat(cycle_raw)
+                    days_since = (datetime.now(tz).date() - cycle_start).days
+                except ValueError:
+                    pass
+            is_week_start_day = (
+                days_since is not None
+                and days_since >= 7
+                and days_since % 7 == 0
+            )
+            if is_week_start_day and morning_not_sent:
+                cb = context.bot_data.get("post_weekly_goal_morning")
+                if cb:
+                    await cb(context.bot, cid, prof, model_names)
         return
 
     if after == "finish_12w":

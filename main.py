@@ -2565,7 +2565,7 @@ async def _generate_weekly_recap_message(
 - Честно и тепло: где молодец — скажи прямо; где не дотянула — мягко, без стыда
 - Обязательно напомни цель на 12 недель одной фразой
 - Дай 2–3 конкретных шага на следующую неделю (формулируй как предложения, не вопросы)
-- В конце одна фраза: завтра утром вместе поставим новую цель на неделю
+- ЗАПРЕЩЕНО писать «завтра утром поставим цель» / «сама поставь цель» — цель на неделю вы сразу после этого сообщения обсудите в чате
 - 5–7 предложений, без markdown, без списков и буллетов
 - Не упоминай воскресенье/понедельник как дни недели
 - Обращайся по имени {name}"""
@@ -2611,12 +2611,11 @@ Rules:
         if lang.startswith("ru"):
             return (
                 f"{name}, неделя позади 💙 "
-                f"Ты держала фокус на «{weekly_goal or main_goal}». "
-                f"Завтра утром поставим новую цель на неделю."
+                f"Ты держала фокус на «{weekly_goal or main_goal}»."
             )
         return (
             f"{name}, week {week_number} is behind you 💙 "
-            f"Tomorrow morning we'll set a new weekly goal."
+            f"You stayed focused on «{weekly_goal or main_goal}»."
         )
 
     return await asyncio.to_thread(gen)
@@ -2632,6 +2631,7 @@ async def _deliver_weekly_recap_evening(
     today: str,
     user_profiles: dict[str, dict],
     claim_evening_slot: bool = True,
+    kickoff_new_week_goal: bool = True,
 ) -> bool:
     """Send one-way week recap letter (no Q&A). Returns True if sent."""
     weekly_sent_key = f"weekly_sent_day_{days_since_start}"
@@ -2656,12 +2656,24 @@ async def _deliver_weekly_recap_evening(
                 patch["last_evening_sent_date"] = today
         profile = db_store.update_profile(cid, patch)
         user_profiles[str(cid)] = profile
-        onboarding.pop(cid, None)
         log.info(
             "weekly recap letter sent cid=%s day=%s",
             cid,
             days_since_start,
         )
+        if kickoff_new_week_goal and _is_program_week_end(days_since_start):
+            dialog_key = f"new_week_dialog_day_{days_since_start}"
+            if not db_store.cycle_flag_sent(profile, dialog_key):
+                kicked = await ob.kickoff_new_week_goal_after_recap(
+                    bot,
+                    cid,
+                    profile,
+                    onboarding,
+                    model_chain,
+                )
+                if kicked:
+                    profile = db_store.mark_cycle_flag(cid, dialog_key)
+                    user_profiles[str(cid)] = profile
         return True
     except Exception as e:
         log.warning("weekly recap deliver failed cid=%s: %s", cid, e)
@@ -4708,7 +4720,6 @@ async def _bootstrap_bot() -> None:
                     profile, now_local.date()
                 )
                 is_week_end = _is_program_week_end(days_since_start)
-                is_week_start = _is_program_week_start(days_since_start)
                 current_week = int(profile.get("current_week") or 1)
                 if days_since_start is not None:
                     current_week = max(
@@ -4727,66 +4738,6 @@ async def _bootstrap_bot() -> None:
 
                 if in_morning:
                     skip_regular_morning = _in_weekly_special_flow(cid)
-                    if (
-                        is_week_start
-                        and days_since_start is not None
-                        and not skip_regular_morning
-                    ):
-                        prev_recap_key = (
-                            f"weekly_sent_day_{days_since_start - 1}"
-                        )
-                        new_week_sent_key = (
-                            f"new_week_sent_day_{days_since_start}"
-                        )
-                        plang = str(profile.get("language_code") or "en")
-                        if not db_store.cycle_flag_sent(
-                            profile, prev_recap_key
-                        ):
-                            sent = await _deliver_weekly_recap_evening(
-                                bot,
-                                cid,
-                                profile,
-                                model_chain,
-                                days_since_start=days_since_start - 1,
-                                today=today,
-                                user_profiles=user_profiles,
-                                claim_evening_slot=False,
-                            )
-                            if sent:
-                                skip_regular_morning = True
-                        elif not db_store.cycle_flag_sent(
-                            profile, new_week_sent_key
-                        ):
-                            try:
-                                ob.start_change_weekly(
-                                    onboarding,
-                                    cid,
-                                    profile,
-                                    from_week_start=True,
-                                )
-                                opening = ob.new_week_opening(profile, plang)
-                                await bot.send_message(
-                                    chat_id=cid,
-                                    text=sanitize_bot_reply(opening),
-                                )
-                                profile = db_store.mark_cycle_flag(
-                                    cid, new_week_sent_key
-                                )
-                                user_profiles[key] = profile
-                                skip_regular_morning = True
-                                log.info(
-                                    "new week dialog started cid=%s day=%s",
-                                    cid,
-                                    days_since_start,
-                                )
-                            except Exception as e:
-                                log.warning(
-                                    "New week prompt failed for %s: %s",
-                                    cid,
-                                    e,
-                                )
-                    elif _in_weekly_special_flow(cid):
-                        skip_regular_morning = True
 
                     if skip_regular_morning:
                         log.info(

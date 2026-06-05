@@ -900,10 +900,19 @@
         const status = cycleDayStatus(d);
         const wrap = document.createElement('div');
         wrap.className = 'streak-day-wrap';
-        const todayCls = d.is_today && status !== 'done' && status !== 'missed' && status !== 'partial'
-          ? ' is-today'
-          : '';
-        wrap.innerHTML = `<div class="streak-day ${status}${todayCls}" title="${escapeHtml(d.date || '')}"></div>`;
+        if (status === 'future' || status === 'empty') {
+          wrap.innerHTML = '<div class="streak-day empty"></div>';
+        } else if (status === 'missed') {
+          wrap.innerHTML = `<div class="streak-day missed" title="${escapeHtml(d.date || '')}"></div>`;
+        } else {
+          const todayCls = d.is_today ? ' is-today' : '';
+          const statusCls = status === 'done' ? ' done' : status === 'partial' ? ' partial' : '';
+          wrap.innerHTML = (
+            `<div class="streak-day active${todayCls}${statusCls}" title="${escapeHtml(d.date || '')}">` +
+            `<img src="./spicespace-logo.jpg" alt="✦" class="streak-logo-icon"/>` +
+            `</div>`
+          );
+        }
         container.appendChild(wrap);
       });
       return;
