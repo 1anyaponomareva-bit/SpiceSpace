@@ -659,43 +659,6 @@ body.tg-app { background: var(--bg); }
   100% { transform: scale(1); opacity: 1; }
 }
 
-.goal-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 4px;
-  padding: 0 20px 8px;
-}
-
-.goal-actions[hidden] {
-  display: none !important;
-}
-
-.goal-actions__btn {
-  width: 100%;
-  background: #fff;
-  border: 1px solid #E8E6E0;
-  border-radius: 14px;
-  padding: 14px 16px;
-  font-family: 'Inter', sans-serif;
-  font-size: 14px;
-  font-weight: 500;
-  color: #2C2C2C;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.15s ease, border-color 0.15s ease;
-}
-
-.goal-actions__btn:active {
-  background: #f7f6f2;
-  border-color: #d8d6d0;
-}
-
-.goal-actions__btn:disabled {
-  opacity: 0.55;
-  cursor: wait;
-}
-
 .settings-block {
   display: flex;
   flex-direction: column;
@@ -707,8 +670,14 @@ body.tg-app { background: var(--bg); }
   transition: opacity 0.3s;
 }
 
+.settings-btn[hidden],
 .settings-btn--fortune-test[hidden] {
   display: none !important;
+}
+
+.settings-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .settings-block.loaded {

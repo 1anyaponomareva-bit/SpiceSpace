@@ -285,8 +285,10 @@
   }
 
   function setGoalActionsVisible(visible) {
-    const block = document.getElementById('goal-actions');
-    if (block) block.hidden = !visible;
+    ['btn-change-12w', 'btn-change-weekly'].forEach((id) => {
+      const btn = document.getElementById(id);
+      if (btn) btn.hidden = !visible;
+    });
   }
 
   function setCanEditTimes(enabled) {
@@ -1315,6 +1317,13 @@
       if (!confirm(t('confirm_reset'))) return;
       await apiFetch('/api/profile/reset', { method: 'POST' });
       if (tg) tg.close();
+    });
+
+    document.getElementById('btn-change-12w')?.addEventListener('click', () => {
+      startGoalChange('12w');
+    });
+    document.getElementById('btn-change-weekly')?.addEventListener('click', () => {
+      startGoalChange('weekly');
     });
 
     document.getElementById('btn-subscription')?.addEventListener('click', () => {

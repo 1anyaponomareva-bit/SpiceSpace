@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "streak-logo-v11"
+BOT_BUILD = "goal-buttons-fix-v12"
 
 OB_RETURNING = 0
 OB_NAME = 1
