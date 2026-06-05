@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "weekly-change-flow-v16"
+BOT_BUILD = "weekly-change-flow-v17"
 
 OB_RETURNING = 0
 OB_NAME = 1
