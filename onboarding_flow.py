@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "weekly-change-flow-v13"
+BOT_BUILD = "weekly-change-flow-v14"
 
 OB_RETURNING = 0
 OB_NAME = 1
@@ -1349,31 +1349,33 @@ async def _complete_change_weekly_from_dialog(
     if from_week_start:
         done_msg = ob_text("weekly_saved_evening", lang, weekly=weekly)
     await msg.reply_text(done_msg)
-    if not from_week_start:
-        return
     prof = user_profiles.get(str(cid)) or db.get_profile(cid) or {}
-    tz_name = str(prof.get("timezone") or "Asia/Ho_Chi_Minh")
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception:
-        tz = ZoneInfo("Asia/Ho_Chi_Minh")
-    today_iso = datetime.now(tz).date().isoformat()
-    morning_not_sent = str(prof.get("last_morning_sent_date") or "") != today_iso
-    cycle_raw = str(prof.get("cycle_start_date") or "").strip()[:10]
-    days_since = None
-    if cycle_raw:
+    cb = context.bot_data.get("post_weekly_goal_morning")
+    if not cb:
+        return
+    if from_week_start:
+        tz_name = str(prof.get("timezone") or "Asia/Ho_Chi_Minh")
         try:
-            cycle_start = date.fromisoformat(cycle_raw)
-            days_since = (datetime.now(tz).date() - cycle_start).days
-        except ValueError:
-            pass
-    is_week_start_day = (
-        days_since is not None and days_since >= 7 and days_since % 7 == 0
-    )
-    if is_week_start_day and morning_not_sent:
-        cb = context.bot_data.get("post_weekly_goal_morning")
-        if cb:
-            await cb(context.bot, cid, prof, model_names)
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = ZoneInfo("Asia/Ho_Chi_Minh")
+        today_iso = datetime.now(tz).date().isoformat()
+        morning_not_sent = str(prof.get("last_morning_sent_date") or "") != today_iso
+        cycle_raw = str(prof.get("cycle_start_date") or "").strip()[:10]
+        days_since = None
+        if cycle_raw:
+            try:
+                cycle_start = date.fromisoformat(cycle_raw)
+                days_since = (datetime.now(tz).date() - cycle_start).days
+            except ValueError:
+                pass
+        is_week_start_day = (
+            days_since is not None and days_since >= 7 and days_since % 7 == 0
+        )
+        if is_week_start_day and morning_not_sent:
+            await cb(context.bot, cid, prof, model_names, after_weekly_change=True)
+        return
+    await cb(context.bot, cid, prof, model_names, after_weekly_change=True)
 
 
 async def _finish_change_weekly(
@@ -1436,32 +1438,48 @@ async def _dispatch_goal_confirm_after(
         if from_week_start:
             done_msg = ob_text("weekly_saved_evening", _ob_lang(st), weekly=weekly)
         await msg.reply_text(done_msg)
-        if from_week_start:
-            prof = user_profiles.get(str(cid)) or db.get_profile(cid) or {}
-            tz_name = str(prof.get("timezone") or "Asia/Ho_Chi_Minh")
-            try:
-                tz = ZoneInfo(tz_name)
-            except Exception:
-                tz = ZoneInfo("Asia/Ho_Chi_Minh")
-            today_iso = datetime.now(tz).date().isoformat()
-            morning_not_sent = str(prof.get("last_morning_sent_date") or "") != today_iso
-            days_since = None
-            cycle_raw = str(prof.get("cycle_start_date") or "").strip()[:10]
-            if cycle_raw:
+        prof = user_profiles.get(str(cid)) or db.get_profile(cid) or {}
+        cb = context.bot_data.get("post_weekly_goal_morning")
+        if cb:
+            if from_week_start:
+                tz_name = str(prof.get("timezone") or "Asia/Ho_Chi_Minh")
                 try:
-                    cycle_start = date.fromisoformat(cycle_raw)
-                    days_since = (datetime.now(tz).date() - cycle_start).days
-                except ValueError:
-                    pass
-            is_week_start_day = (
-                days_since is not None
-                and days_since >= 7
-                and days_since % 7 == 0
-            )
-            if is_week_start_day and morning_not_sent:
-                cb = context.bot_data.get("post_weekly_goal_morning")
-                if cb:
-                    await cb(context.bot, cid, prof, model_names)
+                    tz = ZoneInfo(tz_name)
+                except Exception:
+                    tz = ZoneInfo("Asia/Ho_Chi_Minh")
+                today_iso = datetime.now(tz).date().isoformat()
+                morning_not_sent = (
+                    str(prof.get("last_morning_sent_date") or "") != today_iso
+                )
+                days_since = None
+                cycle_raw = str(prof.get("cycle_start_date") or "").strip()[:10]
+                if cycle_raw:
+                    try:
+                        cycle_start = date.fromisoformat(cycle_raw)
+                        days_since = (datetime.now(tz).date() - cycle_start).days
+                    except ValueError:
+                        pass
+                is_week_start_day = (
+                    days_since is not None
+                    and days_since >= 7
+                    and days_since % 7 == 0
+                )
+                if is_week_start_day and morning_not_sent:
+                    await cb(
+                        context.bot,
+                        cid,
+                        prof,
+                        model_names,
+                        after_weekly_change=True,
+                    )
+            else:
+                await cb(
+                    context.bot,
+                    cid,
+                    prof,
+                    model_names,
+                    after_weekly_change=True,
+                )
         return
 
     if after == "finish_12w":

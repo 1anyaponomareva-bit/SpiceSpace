@@ -1779,6 +1779,8 @@ async def _morning_message_text(
     chat_id: int,
     profile: dict,
     model_names: list[str],
+    *,
+    after_weekly_change: bool = False,
 ) -> str:
     lang = str(profile.get("language_code") or "en")
     ru = lang.lower().startswith("ru")
@@ -1822,6 +1824,21 @@ async def _morning_message_text(
     personality_block = _personality_block_for_prompt(chat_id)
     yctx_label = "Вчерашний контекст" if ru else "Yesterday's context"
 
+    weekly_change_note = ""
+    if after_weekly_change:
+        weekly_change_note = (
+            "\n\nВАЖНО: пользователь только что записала новую цель на эту неделю. "
+            "Не ссылайся на вчера и не спрашивай про прошлый день. "
+            "Сразу предложи 2-3 конкретных шага на СЕГОДНЯ как первый шаг к новой недельной цели. "
+            "Не обязательно «доброе утро» — продолжи разговор естественно."
+            if ru
+            else (
+                "\n\nIMPORTANT: the user just saved a new weekly goal. "
+                "Do not reference yesterday or ask about the past day. "
+                "Offer 2-3 concrete steps for TODAY as the first move toward the new weekly goal. "
+                "No need for «good morning» — continue the conversation naturally."
+            )
+        )
     user_content = (
         f"{name_instruction}\n\n"
         f"{yctx_label}:\n{yesterday_context or none_word}\n\n"
@@ -1830,11 +1847,12 @@ async def _morning_message_text(
             vision=vision,
             main_goal=main_goal,
             weekly_goal=weekly_goal,
-            last_summary=last_summary,
+            last_summary=last_summary if not after_weekly_change else none_word,
             time_per_day=time_per_day,
             facts_block=facts_block,
             personality_block=personality_block,
         )
+        + weekly_change_note
     )
 
     morning_body = _morning_personal_system(lang) + f"{name_instruction}"
@@ -3586,51 +3604,72 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _touch_streak_for_activity(cid, prof_d)
 
     morning_state = pending_morning.get(cid)
-    if isinstance(morning_state, dict) and morning_state.get("awaiting_reminder"):
-        raw_lower = raw.strip().lower()
+    if isinstance(morning_state, dict):
+        if morning_state.get("awaiting_reminder"):
+            raw_lower = raw.strip().lower()
 
-        if any(
-            w in raw_lower
-            for w in ("нет", "не надо", "не нужно", "ненадо")
-        ):
-            pending_morning.pop(cid, None)
-            await _bot_reply(update.message, "Окей 💚")
+            if any(
+                w in raw_lower
+                for w in ("нет", "не надо", "не нужно", "ненадо")
+            ):
+                pending_morning.pop(cid, None)
+                await _bot_reply(update.message, "Окей 💚")
+                return
+
+            parsed = _extract_hhmm_from_text(raw) or _parse_daily_time(raw.strip())
+            if parsed:
+                pending_morning.pop(cid, None)
+                task_title = str(morning_state.get("task") or "Задача на сегодня")
+                prof_rem = prof_d or _resolve_user_profile(str(cid)) or {}
+                tz_name = _profile_timezone_name(prof_rem)
+                tz = _zone_or_default(tz_name)
+                today = datetime.now(tz).strftime("%Y-%m-%d")
+                try:
+                    _create_task_from_payload(
+                        cid,
+                        prof_rem,
+                        {
+                            "title": task_title[:200],
+                            "date": today,
+                            "time": parsed,
+                            "timezone": tz_name,
+                            "repeat": "none",
+                        },
+                    )
+                    await _bot_reply(update.message, f"Напомню в {parsed} 💚")
+                except Exception as e:
+                    log.warning("midday reminder create failed: %s", e)
+                    await _bot_reply(
+                        update.message,
+                        "Не вышло сохранить напоминание — попробуй ещё раз.",
+                    )
+                return
+
+            await _bot_reply(
+                update.message,
+                "Напиши время — например, 14:00 или «напомни в 12:00». Или «нет».",
+            )
             return
 
-        parsed = _extract_hhmm_from_text(raw) or _parse_daily_time(raw.strip())
-        if parsed:
-            pending_morning.pop(cid, None)
-            task_title = str(morning_state.get("task") or "Задача на сегодня")
-            prof_rem = prof_d or _resolve_user_profile(str(cid)) or {}
-            tz_name = _profile_timezone_name(prof_rem)
-            tz = _zone_or_default(tz_name)
-            today = datetime.now(tz).strftime("%Y-%m-%d")
-            try:
-                _create_task_from_payload(
-                    cid,
-                    prof_rem,
-                    {
-                        "title": task_title[:200],
-                        "date": today,
-                        "time": parsed,
-                        "timezone": tz_name,
-                        "repeat": "none",
-                    },
+        morning_text = _pending_morning_text(morning_state)
+        if morning_text and prof_d:
+            picked = _maybe_save_task_from_user_reply(cid, prof_d, raw)
+            if picked:
+                msg = f"Записала — на сегодня: {picked} 💚"
+                await _bot_reply(update.message, msg)
+                _append_history_turn(cid, raw, msg)
+                asyncio.create_task(
+                    _ask_midday_reminder(context.bot, cid, prof_d, picked)
                 )
-                await _bot_reply(update.message, f"Напомню в {parsed} 💚")
-            except Exception as e:
-                log.warning("midday reminder create failed: %s", e)
-                await _bot_reply(
-                    update.message,
-                    "Не вышло сохранить напоминание — попробуй ещё раз.",
+                return
+            if _looks_like_short_ack(raw):
+                nudge = (
+                    "Выбери задачу на сегодня из вариантов выше — "
+                    "или напиши свою 💚"
                 )
-            return
-
-        await _bot_reply(
-            update.message,
-            "Напиши время — например, 14:00 или «напомни в 12:00». Или «нет».",
-        )
-        return
+                await _bot_reply(update.message, nudge)
+                _append_history_turn(cid, raw, nudge)
+                return
 
     if cid in pending_natural_reminder and prof_d:
         if not _looks_like_reminder_command(raw):
@@ -3670,11 +3709,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if prof_d:
         if _wants_to_change_weekly_goal(raw):
-            ob.start_change_weekly(onboarding, cid, prof_d)
-            plang = str(prof_d.get("language_code") or "en")
-            opening = ob.change_weekly_opening(prof_d, plang)
-            await _bot_reply(update.message, opening)
-            _append_history_turn(cid, raw, opening)
+            await ob.kickoff_change_weekly_dialog(
+                context.bot, cid, prof_d, onboarding, model_names
+            )
             return
         if _wants_to_change_12w_goal(raw):
             ob.start_change_12w(onboarding, cid, prof_d)
@@ -4112,6 +4149,33 @@ _GREETING_TASK_MARKERS = (
 )
 
 
+_SHORT_ACK_MARKERS = (
+    "ок",
+    "ok",
+    "okay",
+    "да",
+    "ага",
+    "угу",
+    "yes",
+    "yep",
+    "хорошо",
+    "ладно",
+    "понятно",
+    "супер",
+    "класс",
+    "отлично",
+    "верно",
+)
+
+
+def _looks_like_short_ack(text: str) -> bool:
+    low = re.sub(r"[^\w\s]", "", (text or "").strip().lower())
+    low = re.sub(r"\s+", " ", low).strip()
+    if not low or len(low) > 24:
+        return False
+    return low in _SHORT_ACK_MARKERS
+
+
 def _looks_like_greeting_or_chat(text: str) -> bool:
     low = (text or "").strip().lower()
     if not low:
@@ -4465,13 +4529,20 @@ async def _post_weekly_goal_morning(
     cid: int,
     profile: dict,
     model_names: list[str],
+    *,
+    after_weekly_change: bool = False,
 ) -> None:
     """After a new weekly goal is set — morning task options for today."""
     ulang = _user_lang(profile)
     try:
         await _restore_history_from_db(cid, "morning after weekly goal")
         async with typing_while(bot, cid):
-            text = await _morning_message_text(cid, profile, model_names)
+            text = await _morning_message_text(
+                cid,
+                profile,
+                model_names,
+                after_weekly_change=after_weekly_change,
+            )
         histories.setdefault(cid, []).append({"role": "model", "parts": [text]})
         keyboard = _webapp_keyboard(cid, ulang)
         await bot.send_message(
@@ -5291,21 +5362,28 @@ async def _begin_goal_change_from_webapp(tid: str, mode: str) -> dict:
 
     cid = int(tid)
     plang = str(profile.get("language_code") or "en")
+    bot = telegram_app.bot if telegram_app else None
+    model_chain = build_model_chain(select_model_id())
+
     if mode == "weekly":
-        ob.start_change_weekly(onboarding, cid, profile)
-        message = ob.change_weekly_opening(profile, plang)
+        if bot:
+            await ob.kickoff_change_weekly_dialog(
+                bot, cid, profile, onboarding, model_chain
+            )
     elif mode == "12w":
         ob.start_change_12w(onboarding, cid, profile)
         message = ob.change_12w_choice_prompt(plang)
+        if bot:
+            try:
+                await bot.send_message(
+                    chat_id=cid, text=sanitize_bot_reply(message)
+                )
+            except Exception as e:
+                log.warning(
+                    "goal_change send failed cid=%s mode=%s: %s", cid, mode, e
+                )
     else:
         raise HTTPException(status_code=400, detail="invalid mode")
-
-    bot = telegram_app.bot if telegram_app else None
-    if bot:
-        try:
-            await bot.send_message(chat_id=cid, text=sanitize_bot_reply(message))
-        except Exception as e:
-            log.warning("goal_change send failed cid=%s mode=%s: %s", cid, mode, e)
 
     return {"ok": True, "mode": mode}
 
