@@ -1749,9 +1749,32 @@ async def _restore_history_from_db(cid: int, purpose: str) -> None:
 
 def _exact_name_prompt_instruction(profile: dict, chat_id: int | None = None) -> str:
     name = str(profile.get("name", "")).strip()
+    lang = str(profile.get("language_code") or "en")
+    ru = lang.lower().startswith("ru")
     if not name:
-        return "Имя в профиле не указано — не выдумывай и не сокращай имя."
-    line = f"Имя пользователя: {name}. Используй только это имя, не сокращай."
+        return (
+            "Имя в профиле не указано — не выдумывай и не сокращай имя. "
+            "ЗАПРЕЩЕНО начинать сообщение с запятой."
+            if ru
+            else (
+                "Name not in profile — do not invent or shorten. "
+                "FORBIDDEN to start a message with a comma."
+            )
+        )
+    if ru:
+        line = (
+            f"КРИТИЧЕСКИ ВАЖНО: Обращайся к пользователю по имени «{name}». "
+            f"Используй только это имя, не сокращай. "
+            f"ЗАПРЕЩЕНО начинать сообщение с запятой без имени. "
+            f"Правильно: «{name}, текст». Неправильно: «, текст»."
+        )
+    else:
+        line = (
+            f"CRITICALLY IMPORTANT: Address the user as «{name}». "
+            f"Use only this name, do not shorten. "
+            f"FORBIDDEN to start a message with a comma without the name. "
+            f"Correct: «{name}, text». Wrong: «, text»."
+        )
     if chat_id is not None:
         ctx = _format_today_conversation_context(chat_id).lower()
         if any(
@@ -1764,7 +1787,11 @@ def _exact_name_prompt_instruction(profile: dict, chat_id: int | None = None) ->
                 "не сокращ",
             )
         ):
-            line += " Пользователь просил не сокращать — строго соблюдай."
+            line += (
+                " Пользователь просил не сокращать — строго соблюдай."
+                if ru
+                else " User asked not to shorten — follow strictly."
+            )
     return line
 
 

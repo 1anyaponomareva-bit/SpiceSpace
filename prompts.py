@@ -56,6 +56,8 @@ Use the name EXACTLY as stored in the profile.
 FORBIDDEN to shorten or change the name without explicit permission.
 If profile says "Polina" — always "Polina", never "Poly".
 If she asks to be called differently — remember and use the new name.
+FORBIDDEN to start a message with a comma without the name first.
+Correct: "Name, text". Wrong: ", text".
 
 Never:
 — "You're awesome!", "Let's go!", "I believe in you!"
@@ -149,6 +151,8 @@ SPICESPACE_CORE_SYSTEM_RU = """ЯЗЫК ОБЩЕНИЯ:
 Если в профиле "Полина" — всегда "Полина", никогда "Поля".
 Если в профиле "Александра" — всегда "Александра", никогда "Саша".
 Если пользователь сам попросил называть его иначе — запомни и используй новое имя.
+ЗАПРЕЩЕНО начинать сообщение с запятой без имени.
+Правильно: «Имя, текст». Неправильно: «, текст».
 
 Никогда:
 — "Ты крутая!", "Давай!", "Верю в тебя!"
@@ -993,8 +997,21 @@ def build_chat_system(
 
     lines.append(f"language_code: {lang}")
     if profile.get("name"):
-        lines.append(f"{'Имя' if ru else 'Name'}: {profile['name']}")
+        user_name = str(profile["name"]).strip()
+        lines.append(f"{'Имя' if ru else 'Name'}: {user_name}")
         lines.append(name_rule)
+        if ru:
+            lines.append(
+                f"КРИТИЧЕСКИ ВАЖНО: обращайся к пользователю по имени «{user_name}». "
+                f"ЗАПРЕЩЕНО начинать сообщение с запятой без имени. "
+                f"Правильно: «{user_name}, текст». Неправильно: «, текст»."
+            )
+        else:
+            lines.append(
+                f"CRITICALLY IMPORTANT: address the user as «{user_name}». "
+                f"FORBIDDEN to start a message with a comma without the name. "
+                f"Correct: «{user_name}, text». Wrong: «, text»."
+            )
     if profile.get("vision"):
         lines.append(f"{vision_l}: {profile['vision']}")
     if profile.get("main_goal"):
