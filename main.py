@@ -3528,6 +3528,32 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     st_ob = onboarding.get(cid)
     if st_ob is not None:
+        if int(st_ob.get("step") or -1) == ob.OB_CHANGE_WEEKLY:
+            if _wants_escape_change_weekly(st_ob, raw):
+                onboarding.pop(cid, None)
+                model_names: list[str] = context.bot_data["claude_model_names"]
+                try:
+                    async with typing_while(context.bot, cid):
+                        reply = await _coach_reply(
+                            cid, raw, model_names, reply_context=reply_ctx
+                        )
+                except anthropic.RateLimitError:
+                    log.exception("Claude quota exhausted")
+                    await _bot_reply(
+                        update.message,
+                        "У Claude API сейчас лимит запросов (ошибка 429): слишком частые "
+                        "сообщения или дневная квота исчерпана. Подожди 1–2 минуты и напиши снова.",
+                    )
+                    return
+                except Exception as e:
+                    log.exception("Claude error after weekly escape: %s", e)
+                    await _bot_reply(
+                        update.message,
+                        "Сейчас не получилось связаться с моделью. Попробуй ещё раз через минуту.",
+                    )
+                    return
+                await _bot_reply(update.message, sanitize_bot_reply(reply))
+                return
         await handle_onboarding_turn(update, context, raw)
         return
 
@@ -4377,6 +4403,61 @@ _SHORT_ACK_MARKERS = (
     "отлично",
     "верно",
 )
+
+
+_CHANGE_WEEKLY_ESCAPE_PHRASES = (
+    "стоп",
+    "хватит",
+    "выход",
+    "отмена",
+    "ничего",
+    "stop",
+    "cancel",
+    "nothing",
+)
+
+_CHANGE_WEEKLY_ESCAPE_EXACT = frozenset(
+    {
+        "нет",
+        "no",
+        "nope",
+        "ничего",
+        "nothing",
+    }
+)
+
+
+def _weekly_change_awaiting_confirm(st: dict) -> bool:
+    turns = st.get("weekly_turns") or []
+    for turn in reversed(turns):
+        if turn.get("role") != "assistant":
+            continue
+        last = str(turn.get("content") or "").lower()
+        return "верно?" in last or "записываю:" in last
+    return False
+
+
+def _wants_escape_change_weekly(st: dict, raw: str) -> bool:
+    """Exit manual weekly-goal dialog on explicit stop / unrelated short replies."""
+    low = re.sub(r"[^\w\s]", "", (raw or "").strip().lower())
+    low = re.sub(r"\s+", " ", low).strip()
+    if not low:
+        return False
+    if _weekly_change_awaiting_confirm(st) and low in ("нет", "no", "nope"):
+        return False
+    if any(p in low for p in _CHANGE_WEEKLY_ESCAPE_PHRASES):
+        return True
+    if low in _CHANGE_WEEKLY_ESCAPE_EXACT:
+        return True
+    off_topic = int(st.get("weekly_off_topic") or 0)
+    if _looks_like_greeting_or_chat(raw):
+        off_topic += 1
+        st["weekly_off_topic"] = off_topic
+        if off_topic >= 3:
+            return True
+    else:
+        st["weekly_off_topic"] = 0
+    return False
 
 
 def _looks_like_short_ack(text: str) -> bool:
