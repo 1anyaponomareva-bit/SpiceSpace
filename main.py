@@ -2357,21 +2357,24 @@ def _detect_evening_task_completed(text: str) -> str | None:
     if not low:
         return None
 
-    if any(
-        w in low
-        for w in (
-            "частич",
-            "немного",
-            "половин",
-            "чуть",
-            "не всё",
-            "не все",
-            "наполовину",
-        )
-    ):
+    partial_words = [
+        "частично",
+        "частич",
+        "наполовину",
+        "половину",
+        "половина",
+        "немного сделала",
+        "не всё",
+        "не все",
+        "почти",
+    ]
+    if any(w in low for w in partial_words):
         return "partial"
 
-    done_words = (
+    if re.search(r"\bчуть\b", low) and "сделала" not in low and "получилось" not in low:
+        return "partial"
+
+    done_words = [
         "сделала",
         "получилось",
         "успела",
@@ -2380,27 +2383,40 @@ def _detect_evening_task_completed(text: str) -> str | None:
         "закрыла",
         "закрыл",
         "готово",
-        "да",
-        "все задачи",
         "всё закрыла",
         "всё сделала",
         "все сделала",
         "справилась",
         "закончила",
-    )
-    miss_words = (
-        "нет",
+        "пофиксила",
+        "сделал",
+        "yes",
+        "done",
+        "completed",
+        "finished",
+        "yep",
+        "yup",
+    ]
+    miss_words = [
         "не получилось",
         "не сделала",
         "не успела",
         "не вышло",
-        "сорвал",
         "не смогла",
         "не закрыла",
-    )
+        "не сделал",
+        "не выполнила",
+        "no",
+        "nope",
+        "didn't",
+        "not done",
+    ]
 
-    if re.fullmatch(r"да[\s!\.?]*", low):
+    if re.fullmatch(r"(да|yes|yep|yup)[\s!\.?]*", low):
         return "true"
+
+    if re.fullmatch(r"(нет|no|nope)[\s!\.?]*", low):
+        return "false"
 
     done = any(w in low for w in done_words)
     missed = any(w in low for w in miss_words)
