@@ -991,6 +991,46 @@ def _webapp_keyboard(
     ])
 
 
+def _task_completion_callback_label(callback_data: str, profile: dict) -> str:
+    lang = str(profile.get("language_code") or "en")
+    ru = lang.lower().startswith("ru")
+    labels = {
+        "task_done": "Выполнила ✅" if ru else "Done ✅",
+        "task_partial": "Частично 🌓" if ru else "Partly 🌓",
+        "task_missed": "Не вышло ❌" if ru else "Didn't ❌",
+    }
+    return labels.get(callback_data, callback_data)
+
+
+def _evening_message_keyboard(cid: int, profile: dict) -> InlineKeyboardMarkup:
+    lang = _user_lang(profile)
+    ru = lang.lower().startswith("ru")
+    rows: list[list[InlineKeyboardButton]] = []
+    if _today_has_task(cid, profile):
+        rows.append([
+            InlineKeyboardButton(
+                "✅ Выполнила" if ru else "✅ Done",
+                callback_data="task_done",
+            ),
+            InlineKeyboardButton(
+                "🌓 Частично" if ru else "🌓 Partly",
+                callback_data="task_partial",
+            ),
+            InlineKeyboardButton(
+                "❌ Не вышло" if ru else "❌ Didn't",
+                callback_data="task_missed",
+            ),
+        ])
+    url = ob.mini_app_webapp_url(_mini_app_url(), cid, lang)
+    rows.append([
+        InlineKeyboardButton(
+            ob.open_spicespace_button_label(lang),
+            web_app=WebAppInfo(url=url),
+        )
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
 def _sync_profile_language_code(
     cid: int,
     update: Update,
@@ -2518,6 +2558,69 @@ async def _handle_evening_reply(
             )
 
     return reply
+
+
+async def handle_task_completion_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    await query.answer()
+
+    if not query.message:
+        return
+    cid = query.message.chat_id
+
+    outcome_map = {
+        "task_done": "true",
+        "task_partial": "partial",
+        "task_missed": "false",
+    }
+    outcome = outcome_map.get(query.data)
+    if not outcome:
+        return
+
+    prof = user_profiles.get(str(cid)) or db_store.get_profile(cid) or {}
+    if not isinstance(prof, dict):
+        return
+
+    _apply_task_outcome_to_profile(cid, prof, outcome, telegram_id=str(cid))
+    pending_evening.pop(cid, None)
+
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception as e:
+        log.warning("task completion edit_markup failed cid=%s: %s", cid, e)
+
+    model_names: list[str] = context.bot_data.get("claude_model_names") or []
+    label = _task_completion_callback_label(query.data, prof)
+    try:
+        async with typing_while(context.bot, cid):
+            reply = await _coach_reply(cid, label, model_names)
+    except anthropic.RateLimitError:
+        log.exception("Claude quota exhausted on task completion callback")
+        await context.bot.send_message(
+            chat_id=cid,
+            text=(
+                "У Claude API сейчас лимит запросов. Подожди 1–2 минуты и напиши снова."
+            ),
+        )
+        return
+    except Exception as e:
+        log.exception("task completion callback coach error: %s", e)
+        await context.bot.send_message(
+            chat_id=cid,
+            text="Сейчас не получилось связаться с моделью. Попробуй ещё раз через минуту.",
+        )
+        return
+
+    await _save_conversation_turn(cid, prof, label, reply)
+    await context.bot.send_message(
+        chat_id=cid,
+        text=sanitize_bot_reply(reply),
+        reply_markup=_webapp_keyboard(cid, _user_lang(prof)),
+    )
 
 
 def _week_date_range_for_recap(
@@ -5050,6 +5153,12 @@ def _register_telegram_handlers(app_: Application) -> None:
     app_.add_handler(CommandHandler("weektest", cmd_weektest))
     app_.add_handler(MessageHandler(filters.VOICE, on_voice))
     app_.add_handler(MessageHandler(filters.PHOTO, on_photo))
+    app_.add_handler(
+        CallbackQueryHandler(
+            handle_task_completion_callback,
+            pattern=r"^task_(done|partial|missed)$",
+        )
+    )
     app_.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
 
@@ -5304,7 +5413,7 @@ async def _bootstrap_bot() -> None:
                                     evening_text = await _evening_message_text(
                                         cid, profile, model_chain
                                     )
-                                keyboard = _webapp_keyboard(cid, ulang)
+                                keyboard = _evening_message_keyboard(cid, profile)
                                 await bot.send_message(
                                     chat_id=cid,
                                     text=sanitize_bot_reply(evening_text),
