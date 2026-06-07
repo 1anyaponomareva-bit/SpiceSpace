@@ -12,10 +12,7 @@ body.fortune-open {
   display: flex;
   flex-direction: column;
   align-items: center;
-  background:
-    radial-gradient(circle at 50% 32%, rgba(212, 242, 107, 0.1), transparent 34%),
-    rgba(5, 5, 5, 0.88);
-  backdrop-filter: blur(10px);
+  background: rgba(10, 10, 10, 0.92);
   padding: calc(20px + env(safe-area-inset-top, 0)) 16px calc(20px + env(safe-area-inset-bottom, 0));
   color: #fff;
   font-family: Inter, system-ui, sans-serif;
