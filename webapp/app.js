@@ -260,6 +260,7 @@
     }
     document.documentElement.lang = window.userLang;
     applyStaticI18n();
+    if (window.SpiceFortune?.applyI18n) window.SpiceFortune.applyI18n();
   }
 
   function syncLanguageCode() {

@@ -37,6 +37,7 @@ import uvicorn
 
 import db as db_store
 import onboarding_flow as ob
+from bot_ui import ui_lang, ui_text
 from bot_typing import typing_while
 from claude_client import build_model_chain, configure as configure_claude, generate as claude_generate
 from claude_client import select_model_id
@@ -122,12 +123,54 @@ def strip_closing_phrases(text: str) -> str:
     for pat in _CLOSING_PHRASE_PATTERNS:
         text = re.sub(pat, "", text, flags=re.IGNORECASE)
     text = re.sub(r"([.!?…])\s*([.!?…])+", r"\1", text)
-    text = re.sub(r"\s{2,}", " ", text)
+    # Collapse horizontal whitespace only — keep paragraph breaks intact.
+    text = re.sub(r"[^\S\n]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
 
+_VIDEO_SECTION_RE = re.compile(
+    r"(?<!\n)\s*(?="
+    r"(?:ПЕРВОЕ|ВТОРОЕ|ТРЕТЬЕ|ЧЕТВ[ЁЕ]РТОЕ|ПЯТОЕ)\s+ВИДЕО"
+    r"|(?:FIRST|SECOND|THIRD|FOURTH|FIFTH)\s+VIDEO"
+    r")",
+    re.IGNORECASE,
+)
+
+_FIELD_LABEL_RE = re.compile(
+    r"(?<!\n)\s*(?=(?:"
+    r"Кадры|Закадровый голос(?: или текст)?|Описание|Говоришь|На экране|Бот нативно"
+    r"|Frames|Voiceover|Voice-over|Voiceover or text|Description|You say|On screen|Native bot"
+    r")\s*:)",
+    re.IGNORECASE,
+)
+
+_EMOJI_SECTION_RE = re.compile(r"(?<!\n)\s*(?=[1-9]️⃣)")
+
+
+def format_telegram_text(text: str) -> str:
+    """Restore readable structure for long replies (scripts, scenarios, lists)."""
+    if not text:
+        return text
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\s*---\s*", "\n\n---\n\n", text)
+    text = _VIDEO_SECTION_RE.sub("\n\n", text)
+    text = _FIELD_LABEL_RE.sub("\n", text)
+    text = _EMOJI_SECTION_RE.sub("\n\n", text)
+    text = re.sub(r"[^\S\n]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    out: list[str] = []
+    for ln in text.split("\n"):
+        stripped = ln.strip()
+        if not stripped and out and not out[-1]:
+            continue
+        out.append(stripped)
+    return "\n".join(out).strip()
+
+
 def sanitize_bot_reply(text: str) -> str:
-    return strip_closing_phrases(strip_profanity(strip_markdown(text)))
+    text = strip_closing_phrases(strip_profanity(strip_markdown(text)))
+    return format_telegram_text(text)
 
 
 async def _bot_reply(message, text: str) -> None:
@@ -510,7 +553,10 @@ COACH_STYLE_INSTRUCTION = """Ты ведёшь диалог на русском 
 говори про состояние и наблюдаемые признаки прогресса.
 
 ЗАПРЕЩЕНО использовать markdown разметку: никаких **жирных**, никаких _курсивов_, никаких # заголовков, никаких - списков с дефисом.
-Пиши plain text. Если нужно выделить — используй эмодзи."""
+Пиши plain text. Если нужно выделить — используй эмодзи.
+
+Длинные структурированные ответы (сценарии, планы, меню): пустая строка между блоками;
+метки Кадры / Закадровый голос / Описание — с отдельной строки; не склеивай всё в один абзац."""
 
 SYSTEM_INSTRUCTION = SPICESPACE_GLOBAL_SYSTEM + "\n\n" + COACH_STYLE_INSTRUCTION
 
@@ -1036,18 +1082,19 @@ def _sync_profile_language_code(
     update: Update,
     profile: dict | None,
 ) -> dict | None:
-    """Сохранить language_code из Telegram в профиль."""
+    """Set language_code from Telegram only when profile has none yet."""
     prof = profile
     if not isinstance(prof, dict):
         prof = db_store.get_profile(cid) or user_profiles.get(str(cid))
     if not isinstance(prof, dict):
         return None
+    if str(prof.get("language_code") or "").strip():
+        return prof
     user = update.effective_user
     lang = (user.language_code if user else None) or "en"
-    if prof.get("language_code") != lang:
-        prof["language_code"] = lang
-        db_store.update_profile(cid, {"language_code": lang})
-        user_profiles[str(cid)] = prof
+    prof["language_code"] = lang
+    db_store.update_profile(cid, {"language_code": lang})
+    user_profiles[str(cid)] = prof
     return prof
 
 
@@ -1560,11 +1607,44 @@ def _is_gotovo_message(text: str) -> bool:
     t = text.strip().lower()
     if not t:
         return False
-    if t in ("готово", "готово!", "готово.", "сделано", "сделано!", "✓", "✅"):
+    if t in (
+        "готово",
+        "готово!",
+        "готово.",
+        "сделано",
+        "сделано!",
+        "done",
+        "done!",
+        "done.",
+        "finished",
+        "finished!",
+        "✓",
+        "✅",
+    ):
         return True
     if t.startswith("готово ") or t.startswith("готово,"):
         return True
+    if t.startswith("done ") or t.startswith("done,"):
+        return True
     return False
+
+
+def _user_declined(raw_lower: str) -> bool:
+    return any(
+        w in raw_lower
+        for w in (
+            "нет",
+            "не надо",
+            "не нужно",
+            "ненадо",
+            "no",
+            "nope",
+            "not needed",
+            "don't need",
+            "dont need",
+            "no thanks",
+        )
+    )
 
 
 def _auth_telegram_id(request: Request, telegram_id: str | None) -> str:
@@ -2483,12 +2563,12 @@ async def _handle_evening_reply(
         if len(task) >= 5:
             pending_evening.pop(chat_id, None)
             _save_tomorrows_task(chat_id, profile, task)
-            return f"Записала ✨ На завтра: {task[:200]}"
-        return "Что конкретно сделаешь завтра?"
+            return ui_text("tomorrow_saved", profile=profile, task=task[:200])
+        return ui_text("tomorrow_ask", profile=profile)
 
     if _wants_evening_task_planning(user_text):
         state["awaiting_tomorrow_task"] = True
-        return "Что конкретно сделаешь завтра?"
+        return ui_text("tomorrow_ask", profile=profile)
 
     outcome = _detect_evening_task_completed(user_text)
 
@@ -2602,16 +2682,14 @@ async def handle_task_completion_callback(
         log.exception("Claude quota exhausted on task completion callback")
         await context.bot.send_message(
             chat_id=cid,
-            text=(
-                "У Claude API сейчас лимит запросов. Подожди 1–2 минуты и напиши снова."
-            ),
+            text=ui_text("claude_quota_short", profile=prof),
         )
         return
     except Exception as e:
         log.exception("task completion callback coach error: %s", e)
         await context.bot.send_message(
             chat_id=cid,
-            text="Сейчас не получилось связаться с моделью. Попробуй ещё раз через минуту.",
+            text=ui_text("claude_error", profile=prof),
         )
         return
 
@@ -3109,14 +3187,15 @@ def _parse_daily_time(raw: str) -> str | None:
     return f"{h:02d}:{mi:02d}"
 
 
-def _reminder_created_message(task: dict) -> str:
-    tail = f"в {task['time']}"
+def _reminder_created_message(task: dict, profile: dict | None = None) -> str:
+    lang = ui_lang(profile)
+    tail = ui_text("reminder_tail_at", lang, time=task["time"])
     if task.get("repeat") == "daily":
-        tail += ", каждый день"
+        tail += ui_text("reminder_tail_daily", lang)
     elif task.get("repeat") == "weekly" and task.get("days_of_week"):
         days_str = ", ".join(str(d) for d in task["days_of_week"])
-        tail += f", по {days_str}"
-    return f"Окей ✨ Напомню про «{task['title']}» {tail}."
+        tail += ui_text("reminder_tail_weekly", lang, days=days_str)
+    return ui_text("reminder_created", lang, title=task["title"], tail=tail)
 
 
 async def _try_handle_natural_reminder(
@@ -3140,7 +3219,7 @@ async def _try_handle_natural_reminder(
     ).strip()
     if need_title:
         pending_natural_reminder[cid] = dict(parsed)
-        msg = "Что напомнить?"
+        msg = ui_text("reminder_what", profile=prof_d)
         await _bot_reply(message, msg)
         _append_history_turn(cid, raw, msg)
         return True
@@ -3148,7 +3227,7 @@ async def _try_handle_natural_reminder(
         task = _create_task_from_payload(cid, prof_d, parsed)
     except ValueError:
         return False
-    msg = _reminder_created_message(task)
+    msg = _reminder_created_message(task, prof_d)
     await _bot_reply(message, msg)
     _append_history_turn(cid, raw, msg)
     return True
@@ -3685,17 +3764,18 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                         )
                 except anthropic.RateLimitError:
                     log.exception("Claude quota exhausted")
+                    prof_esc = user_profiles.get(str(cid)) or {}
                     await _bot_reply(
                         update.message,
-                        "У Claude API сейчас лимит запросов (ошибка 429): слишком частые "
-                        "сообщения или дневная квота исчерпана. Подожди 1–2 минуты и напиши снова.",
+                        ui_text("claude_quota", profile=prof_esc),
                     )
                     return
                 except Exception as e:
                     log.exception("Claude error after weekly escape: %s", e)
+                    prof_esc = user_profiles.get(str(cid)) or {}
                     await _bot_reply(
                         update.message,
-                        "Сейчас не получилось связаться с моделью. Попробуй ещё раз через минуту.",
+                        ui_text("claude_error", profile=prof_esc),
                     )
                     return
                 await _bot_reply(update.message, sanitize_bot_reply(reply))
@@ -3768,11 +3848,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             task_title = str(morning_state.get("task") or "").strip()
             prof_rem = prof_d or _resolve_user_profile(str(cid)) or {}
 
-            if any(
-                w in raw_lower
-                for w in ("нет", "не надо", "не нужно", "ненадо")
-            ):
+            if _user_declined(raw_lower):
                 pending_morning.pop(cid, None)
+                lang = ui_lang(prof_rem)
                 if task_title and prof_rem and model_chain:
                     async with typing_while(context.bot, cid):
                         followup = await _task_day_followup_text(
@@ -3782,9 +3860,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                             task_title,
                             reminder_declined=True,
                         )
-                    msg = f"Окей 💚\n\n{followup}"
+                    msg = f"{ui_text('ok_short', lang)}\n\n{followup}"
                 else:
-                    msg = "Окей 💚"
+                    msg = ui_text("ok_short", lang)
                 await _bot_reply(update.message, msg)
                 _append_history_turn(cid, raw, msg)
                 return
@@ -3792,7 +3870,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             parsed = _extract_hhmm_from_text(raw) or _parse_daily_time(raw.strip())
             if parsed:
                 pending_morning.pop(cid, None)
-                task_title = task_title or "Задача на сегодня"
+                task_title = task_title or ui_text(
+                    "task_default_title", profile=prof_rem
+                )
                 tz_name = _profile_timezone_name(prof_rem)
                 tz = _zone_or_default(tz_name)
                 today = datetime.now(tz).strftime("%Y-%m-%d")
@@ -3808,7 +3888,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                             "repeat": "none",
                         },
                     )
-                    ack = f"Напомню в {parsed} 💚"
+                    ack = ui_text(
+                        "reminder_at", profile=prof_rem, time=parsed
+                    )
                     if model_chain:
                         async with typing_while(context.bot, cid):
                             followup = await _task_day_followup_text(
@@ -3827,13 +3909,13 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     log.warning("midday reminder create failed: %s", e)
                     await _bot_reply(
                         update.message,
-                        "Не вышло сохранить напоминание — попробуй ещё раз.",
+                        ui_text("reminder_save_failed", profile=prof_rem),
                     )
                 return
 
             await _bot_reply(
                 update.message,
-                "Напиши время — например, 14:00 или «напомни в 12:00». Или «нет».",
+                ui_text("reminder_time_prompt", profile=prof_rem),
             )
             return
 
@@ -3841,7 +3923,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if morning_text and prof_d:
             picked = _maybe_save_task_from_user_reply(cid, prof_d, raw)
             if picked:
-                msg = f"Записала — на сегодня: {picked} 💚"
+                msg = ui_text(
+                    "task_saved_today", profile=prof_d, task=picked
+                )
                 await _bot_reply(update.message, msg)
                 _append_history_turn(cid, raw, msg)
                 asyncio.create_task(
@@ -3849,10 +3933,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 )
                 return
             if _looks_like_short_ack(raw):
-                nudge = (
-                    "Выбери задачу на сегодня из вариантов выше — "
-                    "или напиши свою 💚"
-                )
+                nudge = ui_text("task_pick_nudge", profile=prof_d)
                 await _bot_reply(update.message, nudge)
                 _append_history_turn(cid, raw, nudge)
                 return
@@ -3868,10 +3949,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 except ValueError:
                     await _bot_reply(
                         update.message,
-                        "Не вышло сохранить напоминание — проверь дату и время в сообщении.",
+                        ui_text("reminder_save_check", profile=prof_d),
                     )
                     return
-                msg = _reminder_created_message(task)
+                msg = _reminder_created_message(task, prof_d)
                 await _bot_reply(update.message, msg)
                 _append_history_turn(cid, raw, msg)
                 return
@@ -3927,14 +4008,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         tid_key = last_reminder_task_id.get(cid)
         if tid_key and _mark_task_done_by_id(tid_key, cid):
             last_reminder_task_id.pop(cid, None)
-            msg = "Записала ✨ Красота."
+            msg = ui_text("gotovo_done", profile=prof_d)
             await _bot_reply(update.message, msg)
             _append_history_turn(cid, raw, msg)
             return
-        msg = (
-            "Отметь в Mini App в разделе «План» или дождись напоминания от меня — "
-            "тогда «готово» сработает сразу."
-        )
+        msg = ui_text("gotovo_hint", profile=prof_d)
         await _bot_reply(update.message, msg)
         _append_history_turn(cid, raw, msg)
         return
@@ -3960,17 +4038,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         log.exception("Claude quota exhausted")
         await _bot_reply(
             update.message,
-            "У Claude API сейчас лимит запросов (ошибка 429): слишком частые сообщения "
-            "или дневная квота исчерпана. Подожди 1–2 минуты и напиши снова.\n\n"
-            "Если так постоянно: проверь ключ и лимиты в консоли Anthropic "
-            "(https://console.anthropic.com) — при необходимости смени модель в .env (CLAUDE_MODEL).",
+            ui_text("claude_quota", profile=prof_d),
         )
         return
     except Exception as e:
         log.exception("Claude error: %s", e)
         await _bot_reply(
             update.message,
-            "Сейчас не получилось связаться с моделью. Попробуй ещё раз через минуту.",
+            ui_text("claude_error", profile=prof_d),
         )
         return
 
@@ -4466,10 +4541,7 @@ async def _ask_midday_reminder(bot, chat_id: int, profile: dict, task: str) -> N
     try:
         await bot.send_message(
             chat_id=chat_id,
-            text=(
-                "Напомнить тебе про задачу днём? "
-                "Напиши время — например, 14:00. Или «нет» если не нужно."
-            ),
+            text=ui_text("midday_reminder_ask", profile=profile),
         )
     except Exception as e:
         log.warning("midday reminder ask failed cid=%s: %s", chat_id, e)
@@ -6277,18 +6349,24 @@ _FORTUNE_FALLBACKS_EN = [
 
 
 def _fortune_fallback(lang: str) -> tuple[str, str]:
-    pool = _FORTUNE_FALLBACKS_EN if str(lang or "").startswith("en") else _FORTUNE_FALLBACKS_RU
+    pool = (
+        _FORTUNE_FALLBACKS_RU
+        if str(lang or "en").startswith("ru")
+        else _FORTUNE_FALLBACKS_EN
+    )
     idx = abs(hash(datetime.now().strftime("%Y-%m-%d"))) % len(pool)
     return pool[idx]
 
 
 def _generate_fortune_message(profile: dict, model_chain: list[str]) -> tuple[str, str]:
     """Daily fortune cookie: main line + short subline."""
-    name = str(profile.get("name") or "").strip() or "друг"
+    lang = str(profile.get("language_code") or "en")
+    name = str(profile.get("name") or "").strip() or (
+        "друг" if lang.startswith("ru") else "friend"
+    )
     main_goal = str(profile.get("main_goal") or "").strip()
     weekly_goal = str(profile.get("weekly_goal") or "").strip()
     vision = str(profile.get("vision") or "").strip()
-    lang = str(profile.get("language_code") or "ru")
     program_day = int(profile.get("program_day") or profile.get("streak") or 1)
 
     if lang.startswith("ru"):

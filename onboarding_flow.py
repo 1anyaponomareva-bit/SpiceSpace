@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "weekly-change-flow-v24"
+BOT_BUILD = "telegram-format-v26"
 
 OB_RETURNING = 0
 OB_NAME = 1

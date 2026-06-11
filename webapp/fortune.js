@@ -11,8 +11,6 @@
     .replace(/\/+$/, '');
 
   const FORTUNE_TEST_IDS = new Set(['8412438788']);
-  const FORTUNE_SIGNATURE =
-    'сохрани это предсказание что бы увидеть что я была права';
 
   const SPARK_OFFSETS = [
     [-118, -82],
@@ -28,6 +26,31 @@
   let opened = false;
   let sparksReady = false;
   let bound = false;
+
+  function fortuneT(key) {
+    return (typeof window.t === 'function' ? window.t(key) : null) || key;
+  }
+
+  function applyFortuneI18n() {
+    const title = document.querySelector('#fortune-overlay .fortune-title');
+    if (title) title.innerHTML = fortuneT('fortune_title_html');
+    const tap = document.querySelector('#fortune-overlay .tap-hint');
+    if (tap) tap.textContent = fortuneT('fortune_tap');
+    const hit = document.getElementById('fortune-cookie-hit');
+    if (hit) hit.setAttribute('aria-label', fortuneT('fortune_open_aria'));
+    const btnSave = document.getElementById('fortune-btn-save');
+    if (btnSave) btnSave.textContent = fortuneT('fortune_btn_save');
+    const btnGo = document.getElementById('fortune-btn-go');
+    if (btnGo) btnGo.textContent = fortuneT('fortune_btn_go');
+    const sigEl = document.getElementById('fortune-signature');
+    if (sigEl && sigEl.dataset.fromApi !== '1') {
+      sigEl.textContent = fortuneT('fortune_signature');
+    }
+    const testBtn = document.getElementById('btn-fortune-test');
+    if (testBtn && !testBtn.hidden) {
+      testBtn.textContent = fortuneT('fortune_test_btn');
+    }
+  }
 
   function getTelegramId() {
     const fromUrl = new URLSearchParams(window.location.search).get('telegram_id');
@@ -135,7 +158,15 @@
     const textEl = document.getElementById('fortune-text');
     const sigEl = document.getElementById('fortune-signature');
     if (textEl && data?.text) textEl.textContent = data.text;
-    if (sigEl) sigEl.textContent = FORTUNE_SIGNATURE;
+    if (sigEl) {
+      if (data?.sub) {
+        sigEl.textContent = data.sub;
+        sigEl.dataset.fromApi = '1';
+      } else {
+        delete sigEl.dataset.fromApi;
+        sigEl.textContent = fortuneT('fortune_signature');
+      }
+    }
   }
 
   function wrapCanvasLines(ctx, text, x, y, maxWidth, lineHeight) {
@@ -272,7 +303,7 @@
     const text = document.getElementById('fortune-text')?.textContent?.trim() || '';
     const signature =
       document.getElementById('fortune-signature')?.textContent?.trim() ||
-      FORTUNE_SIGNATURE;
+      fortuneT('fortune_signature');
     const btn = document.getElementById('fortune-btn-save');
     if (btn) btn.disabled = true;
     try {
@@ -315,13 +346,12 @@
     if (!overlay) return;
     if (!force && wasSeenToday()) return;
 
+    applyFortuneI18n();
     prepareOverlay(overlay);
     const path = force ? '/api/fortune/today?force=1' : '/api/fortune/today';
     let data = await apiFetch(path);
     if (!data?.text) {
-      data = {
-        text: 'Скоро твоя цель станет ближе — если сделаешь один честный шаг на этой неделе.',
-      };
+      data = { text: fortuneT('fortune_fallback') };
     }
 
     setFortuneText(data);
@@ -344,12 +374,19 @@
     const btn = document.getElementById('btn-fortune-test');
     if (!btn || !isFortuneTester()) return;
     btn.hidden = false;
+    btn.textContent = fortuneT('fortune_test_btn');
     btn.addEventListener('click', () => {
       tryShowForce();
     });
   }
 
-  window.SpiceFortune = { tryShow, tryShowForce, markSeenToday, initFortuneTestButton };
+  window.SpiceFortune = {
+    tryShow,
+    tryShowForce,
+    markSeenToday,
+    initFortuneTestButton,
+    applyI18n: applyFortuneI18n,
+  };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initFortuneTestButton, { once: true });
