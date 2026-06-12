@@ -3255,6 +3255,19 @@ def _daily_slot_sent_today(profile: dict, field: str, today: str) -> bool:
     return str(profile.get(field) or "").strip() == today
 
 
+MORNING_CATCHUP_MINUTES = 480
+
+
+def _minutes_after_target(target_hm: str, now_hm: str) -> int | None:
+    try:
+        target = _normalize_profile_hm(target_hm, "00:00")
+        th, tm = map(int, target.split(":"))
+        nh, nm = map(int, now_hm.split(":"))
+        return (nh * 60 + nm) - (th * 60 + tm)
+    except Exception:
+        return None
+
+
 def _time_ready_for_daily_send(
     target_hm: str,
     now_hm: str,
@@ -3723,6 +3736,113 @@ async def cmd_weektest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         update.message,
         "Использование: /weektest status | end | start | recap | reset",
     )
+
+
+async def _deliver_scheduled_morning(
+    bot,
+    cid: int,
+    profile: dict,
+    model_chain: list[str],
+    *,
+    today: str,
+    user_profiles: dict[str, dict],
+    force: bool = False,
+) -> bool:
+    """Send morning message. Returns True if delivered."""
+    key = str(cid)
+    if not force:
+        claimed = db_store.claim_send_slot(cid, "last_morning_sent_date", today)
+        if not claimed:
+            return False
+    else:
+        db_store.update_profile(
+            cid,
+            {"last_morning_sent_date": None, "last_daily_sent_date": None},
+        )
+        profile = db_store.get_profile(cid) or profile
+        db_store.claim_send_slot(cid, "last_morning_sent_date", today)
+
+    profile["last_morning_sent_date"] = today
+    profile["last_daily_sent_date"] = today
+    user_profiles[key] = profile
+    db_store.update_profile(
+        cid,
+        {"last_morning_sent_date": today, "last_daily_sent_date": today},
+    )
+    ulang = _user_lang(profile)
+    try:
+        await _restore_history_from_db(cid, "morning message")
+        async with typing_while(bot, cid):
+            text = await _morning_message_text(cid, profile, model_chain)
+        histories.setdefault(cid, []).append({"role": "model", "parts": [text]})
+        await bot.send_message(
+            chat_id=cid,
+            text=sanitize_bot_reply(text),
+            reply_markup=_webapp_keyboard(cid, ulang),
+        )
+        pending_morning[cid] = {
+            "task": "",
+            "text": text,
+            "awaiting_reminder": False,
+        }
+        asyncio.create_task(_check_and_send_milestone(bot, cid, profile, model_chain))
+        return True
+    except Exception as e:
+        log.warning("Morning message failed for %s: %s", cid, e)
+        db_store.update_profile(
+            cid,
+            {"last_morning_sent_date": None, "last_daily_sent_date": None},
+        )
+        profile["last_morning_sent_date"] = None
+        profile["last_daily_sent_date"] = None
+        user_profiles[key] = profile
+        return False
+
+
+async def cmd_sendmorning(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin: force morning message to a user (e.g. /sendmorning 802927717)."""
+    if not update.effective_chat or not update.message:
+        return
+    admin_cid = update.effective_chat.id
+    if str(admin_cid) not in _WEEKTEST_ADMINS:
+        await _bot_reply(update.message, "Команда только для тестового аккаунта.")
+        return
+    if not context.args or not str(context.args[0]).isdigit():
+        await _bot_reply(
+            update.message,
+            "Использование: /sendmorning <telegram_id>",
+        )
+        return
+    target = int(context.args[0])
+    prof = db_store.get_profile(target)
+    if not isinstance(prof, dict):
+        await _bot_reply(update.message, f"Профиль {target} не найден.")
+        return
+    tz_name = _profile_timezone_name(prof)
+    try:
+        user_tz = ZoneInfo(tz_name)
+    except Exception:
+        user_tz = _get_timezone()
+    today = datetime.now(user_tz).strftime("%Y-%m-%d")
+    onboarding.pop(target, None)
+    model_chain = context.bot_data.get("claude_model_names") or []
+    ok = await _deliver_scheduled_morning(
+        context.bot,
+        target,
+        prof,
+        model_chain,
+        today=today,
+        user_profiles=user_profiles,
+        force=True,
+    )
+    if ok:
+        user_profiles[str(target)] = db_store.get_profile(target) or prof
+        await _bot_reply(update.message, f"Утро отправлено пользователю {target} ✓")
+    else:
+        await _bot_reply(
+            update.message,
+            f"Не удалось отправить утро пользователю {target}.",
+        )
 
 
 async def cmd_reonboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -5279,6 +5399,7 @@ def _register_telegram_handlers(app_: Application) -> None:
     app_.add_handler(CommandHandler("reonboard", cmd_reonboard))
     app_.add_handler(CommandHandler("setup", cmd_reonboard))
     app_.add_handler(CommandHandler("weektest", cmd_weektest))
+    app_.add_handler(CommandHandler("sendmorning", cmd_sendmorning))
     app_.add_handler(MessageHandler(filters.VOICE, on_voice))
     app_.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app_.add_handler(
@@ -5369,6 +5490,7 @@ async def _bootstrap_bot() -> None:
                     morning_time,
                     now_hm,
                     already_sent_today=morning_sent,
+                    catchup_minutes=MORNING_CATCHUP_MINUTES,
                 )
                 in_evening = _time_ready_for_daily_send(
                     evening_time,
@@ -5411,79 +5533,56 @@ async def _bootstrap_bot() -> None:
                             cid,
                         )
                     else:
-                        claimed = db_store.claim_send_slot(
-                            cid, "last_morning_sent_date", today
-                        )
                         log.info(
                             "daily_check morning cid=%s now=%s target=%s tz=%s "
-                            "already_sent=%s claimed=%s",
+                            "already_sent=%s",
                             cid,
                             now_hm,
                             morning_time,
                             tz_name,
                             morning_sent,
-                            claimed,
                         )
-                        if not claimed and not morning_sent:
+                        sent = await _deliver_scheduled_morning(
+                            bot,
+                            cid,
+                            profile,
+                            model_chain,
+                            today=today,
+                            user_profiles=user_profiles,
+                        )
+                        if not sent and not morning_sent:
                             log.warning(
                                 "daily_check morning cid=%s: slot blocked in DB "
                                 "(last_morning_sent_date may be stuck on %s)",
                                 cid,
                                 today,
                             )
-                        if claimed:
-                            profile["last_morning_sent_date"] = today
-                            profile["last_daily_sent_date"] = today
-                            user_profiles[key] = profile
-                            db_store.update_profile(
-                                cid,
-                                {
-                                    "last_morning_sent_date": today,
-                                    "last_daily_sent_date": today,
-                                },
-                            )
+                        elif sent:
+                            profile = user_profiles.get(key) or profile
 
-                            try:
-                                await _restore_history_from_db(
-                                    cid, "morning message"
-                                )
-                                async with typing_while(bot, cid):
-                                    text = await _morning_message_text(
-                                        cid, profile, model_chain
-                                    )
-                                histories.setdefault(cid, []).append(
-                                    {"role": "model", "parts": [text]}
-                                )
-                                keyboard = _webapp_keyboard(cid, ulang)
-                                await bot.send_message(
-                                    chat_id=cid,
-                                    text=sanitize_bot_reply(text),
-                                    reply_markup=keyboard,
-                                )
-                                pending_morning[cid] = {
-                                    "task": "",
-                                    "text": text,
-                                    "awaiting_reminder": False,
-                                }
-                                asyncio.create_task(
-                                    _check_and_send_milestone(
-                                        bot, cid, profile, model_chain
-                                    )
-                                )
-                            except Exception as e:
-                                log.warning(
-                                    "Morning message failed for %s: %s", cid, e
-                                )
-                                db_store.update_profile(
-                                    cid,
-                                    {
-                                        "last_morning_sent_date": None,
-                                        "last_daily_sent_date": None,
-                                    },
-                                )
-                                profile["last_morning_sent_date"] = None
-                                profile["last_daily_sent_date"] = None
-                                user_profiles[key] = profile
+                elif not morning_sent:
+                    mins_after = _minutes_after_target(morning_time, now_hm)
+                    if (
+                        mins_after is not None
+                        and mins_after >= MORNING_CATCHUP_MINUTES
+                    ):
+                        missed_logged = telegram_app.bot_data.setdefault(
+                            "morning_missed_logged", set()
+                        )
+                        miss_key = f"{cid}:{today}"
+                        if miss_key not in missed_logged:
+                            missed_logged.add(miss_key)
+                            log.warning(
+                                "daily_check morning missed cid=%s now=%s "
+                                "target=%s tz=%s mins_after=%s "
+                                "weekly_flow=%s",
+                                cid,
+                                now_hm,
+                                morning_time,
+                                tz_name,
+                                mins_after,
+                                _in_weekly_special_flow(cid, profile, today),
+                            )
 
                 if in_evening:
                     send_regular_evening = True
