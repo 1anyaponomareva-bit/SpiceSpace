@@ -5026,12 +5026,68 @@ def _ensure_cycle_start_date(
     return profile
 
 
-def _in_weekly_special_flow(cid: int) -> bool:
+def _weekly_flow_started_local_date(st: dict, tz_name: str) -> str | None:
+    raw = str(st.get("weekly_flow_started_at") or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_zone_or_default(tz_name)).strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def _clear_stale_weekly_onboarding(cid: int, profile: dict, today: str) -> None:
+    """Drop abandoned manual weekly-change state; never block mornings forever."""
+    st = onboarding.get(cid)
+    if not isinstance(st, dict):
+        return
+    if int(st.get("step") or -1) != ob.OB_CHANGE_WEEKLY:
+        return
+    if st.get("from_week_start"):
+        return
+    tz_name = _profile_timezone_name(profile)
+    started_day = _weekly_flow_started_local_date(st, tz_name)
+    if started_day is None or started_day < today:
+        onboarding.pop(cid, None)
+        log.info(
+            "cleared stale weekly onboarding cid=%s started=%s today=%s",
+            cid,
+            started_day,
+            today,
+        )
+
+
+def _should_skip_morning_for_weekly_flow(
+    cid: int, profile: dict, today: str
+) -> bool:
+    """Skip regular morning only during same-day manual weekly goal change."""
+    _clear_stale_weekly_onboarding(cid, profile, today)
     st = onboarding.get(cid)
     if not isinstance(st, dict):
         return False
-    step = int(st.get("step") or -1)
-    return step == ob.OB_CHANGE_WEEKLY
+    if int(st.get("step") or -1) != ob.OB_CHANGE_WEEKLY:
+        return False
+    if st.get("from_week_start"):
+        return False
+    tz_name = _profile_timezone_name(profile)
+    started_day = _weekly_flow_started_local_date(st, tz_name)
+    if not started_day:
+        return False
+    return started_day == today
+
+
+def _in_weekly_special_flow(cid: int, profile: dict | None = None, today: str = "") -> bool:
+    if profile and today:
+        _clear_stale_weekly_onboarding(cid, profile, today)
+    st = onboarding.get(cid)
+    if not isinstance(st, dict):
+        return False
+    return int(st.get("step") or -1) == ob.OB_CHANGE_WEEKLY
 
 
 async def _post_today_task_after_weekly(
@@ -5345,11 +5401,13 @@ async def _bootstrap_bot() -> None:
                         user_profiles[key] = profile
 
                 if in_morning:
-                    skip_regular_morning = _in_weekly_special_flow(cid)
+                    skip_regular_morning = _should_skip_morning_for_weekly_flow(
+                        cid, profile, today
+                    )
 
                     if skip_regular_morning:
                         log.info(
-                            "daily_check morning skipped (weekly flow) cid=%s",
+                            "daily_check morning skipped (same-day weekly change) cid=%s",
                             cid,
                         )
                     else:
@@ -5433,7 +5491,7 @@ async def _bootstrap_bot() -> None:
                         weekly_sent_key = f"weekly_sent_day_{days_since_start}"
                         if not db_store.cycle_flag_sent(
                             profile, weekly_sent_key
-                        ) and not _in_weekly_special_flow(cid):
+                        ) and not _in_weekly_special_flow(cid, profile, today):
                             sent = await _deliver_weekly_recap_evening(
                                 bot,
                                 cid,

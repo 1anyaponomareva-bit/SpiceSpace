@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "telegram-format-v26"
+BOT_BUILD = "morning-weekly-flow-v27"
 
 OB_RETURNING = 0
 OB_NAME = 1
@@ -803,6 +803,7 @@ def start_change_weekly(
         "change_mode": "weekly_only",
         "weekly_turns": [],
         "from_week_start": bool(from_week_start),
+        "weekly_flow_started_at": datetime.now(timezone.utc).isoformat(),
         "lang": lang,
         "language_code": lang,
     }
