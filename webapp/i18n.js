@@ -163,20 +163,28 @@ const translations = {
   },
 };
 
-const urlLang = new URLSearchParams(window.location.search).get('lang');
-const tgLang = window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code;
-const userLang = urlLang || (tgLang?.startsWith('ru') ? 'ru' : 'en');
+function resolveUserLang() {
+  const urlLang = new URLSearchParams(window.location.search).get('lang');
+  if (urlLang === 'ru' || urlLang === 'en') return urlLang;
+  const fromWindow = window.userLang;
+  if (fromWindow === 'ru' || fromWindow === 'en') return fromWindow;
+  const tgLang = window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code;
+  return tgLang?.startsWith('ru') ? 'ru' : 'en';
+}
 
 function t(key) {
-  return translations[userLang]?.[key] || translations.en[key] || key;
+  const lang = resolveUserLang();
+  return translations[lang]?.[key] || translations.en[key] || key;
 }
 
 function levelName(level) {
+  const lang = resolveUserLang();
   const key = level?.key ? `level_${level.key}` : '';
-  if (key && translations[userLang]?.[key]) return t(key);
+  if (key && translations[lang]?.[key]) return t(key);
   return level?.name || t('level_spark');
 }
 
 window.t = t;
-window.userLang = userLang;
+window.userLang = resolveUserLang();
 window.levelName = levelName;
+window.resolveUserLang = resolveUserLang;

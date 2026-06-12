@@ -260,6 +260,7 @@
     }
     document.documentElement.lang = window.userLang;
     applyStaticI18n();
+    applyGreeting();
     if (window.SpiceFortune?.applyI18n) window.SpiceFortune.applyI18n();
   }
 
@@ -1339,7 +1340,6 @@
   }
 
   async function start() {
-    applyStaticI18n();
     initTelegram();
     BACKEND_TELEGRAM_ID = getTelegramId();
     bindEvents();
@@ -1348,7 +1348,16 @@
 
     const tgUser = tg?.initDataUnsafe?.user || null;
 
+    function applyFallbackI18n() {
+      if (typeof window.resolveUserLang === 'function') {
+        window.userLang = window.resolveUserLang();
+      }
+      applyStaticI18n();
+      applyGreeting();
+    }
+
     if (!BACKEND_URL) {
+      applyFallbackI18n();
       document.getElementById('screen-home').hidden = false;
       return;
     }
@@ -1356,6 +1365,7 @@
     const result = await loadProfile();
 
     if (!result.ok) {
+      applyFallbackI18n();
       showSyncBanner();
       showMain();
       return;
