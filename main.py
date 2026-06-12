@@ -4084,6 +4084,40 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ):
         return
 
+    if prof_d and (
+        _user_says_already_morning(raw) or _looks_like_waiting_for_task(raw)
+    ):
+        tz_name = _profile_timezone_name(prof_d)
+        now_local = datetime.now(_zone_or_default(tz_name))
+        today = now_local.strftime("%Y-%m-%d")
+        morning_sent = _daily_slot_sent_today(
+            prof_d, "last_morning_sent_date", today
+        )
+        if not morning_sent and (
+            _user_says_already_morning(raw)
+            or _morning_slot_due_now(prof_d, now_local)
+        ):
+            onboarding.pop(cid, None)
+            sent = await _deliver_scheduled_morning(
+                context.bot,
+                cid,
+                prof_d,
+                model_chain,
+                today=today,
+                user_profiles=user_profiles,
+                force=True,
+            )
+            if sent:
+                prof_d = user_profiles.get(str(cid)) or prof_d
+                _append_history_turn(cid, raw, "[morning sent on user request]")
+                return
+        morning_state = pending_morning.get(cid)
+        if isinstance(morning_state, dict) and _pending_morning_text(morning_state):
+            nudge = ui_text("task_pick_nudge", profile=prof_d)
+            await _bot_reply(update.message, nudge)
+            _append_history_turn(cid, raw, nudge)
+            return
+
     if _looks_like_reminder_capability_question(raw):
         prof_raw = user_profiles.get(str(cid))
         prof_d = prof_raw if isinstance(prof_raw, dict) else None
@@ -5210,6 +5244,97 @@ def _in_weekly_special_flow(cid: int, profile: dict | None = None, today: str = 
     return int(st.get("step") or -1) == ob.OB_CHANGE_WEEKLY
 
 
+def _morning_slot_due_now(profile: dict, now_local: datetime) -> bool:
+    """True if scheduled morning for today has not been sent and window is open."""
+    today = now_local.strftime("%Y-%m-%d")
+    if _daily_slot_sent_today(profile, "last_morning_sent_date", today):
+        return False
+    now_hm = now_local.strftime("%H:%M")
+    morning_time = _normalize_profile_hm(
+        profile.get("morning_time") or profile.get("daily_time"),
+        "09:30",
+    )
+    mins_after = _minutes_after_target(morning_time, now_hm)
+    if mins_after is None:
+        return False
+    if mins_after < -30:
+        return False
+    return mins_after < MORNING_CATCHUP_MINUTES
+
+
+def _user_says_already_morning(text: str) -> bool:
+    low = (text or "").strip().lower()
+    return any(
+        m in low
+        for m in (
+            "уже утро",
+            "сегодня уже утро",
+            "уже morning",
+            "already morning",
+            "it's morning",
+            "its morning",
+        )
+    )
+
+
+def _looks_like_waiting_for_task(text: str) -> bool:
+    low = (text or "").strip().lower().rstrip("!.,")
+    return low in (
+        "жду",
+        "окей, жду",
+        "окей жду",
+        "waiting",
+        "okay waiting",
+        "ok waiting",
+        "okay, waiting",
+        "ok, waiting",
+    )
+
+
+async def _after_weekly_goal_saved(
+    bot,
+    cid: int,
+    profile: dict,
+    model_names: list[str],
+    weekly: str,
+    from_week_start: bool,
+) -> str:
+    """Pick confirmation text and send today's task/morning immediately when due."""
+    lang = _user_lang(profile)
+    tz_name = _profile_timezone_name(profile)
+    now_local = datetime.now(_zone_or_default(tz_name))
+    due_now = _morning_slot_due_now(profile, now_local)
+
+    if due_now:
+        if from_week_start:
+            await _post_weekly_goal_morning(bot, cid, profile, model_names)
+        else:
+            await _post_today_task_after_weekly(bot, cid, profile, model_names)
+        return ob.ob_text("weekly_saved_morning_now", lang, weekly=weekly)
+
+    if from_week_start:
+        return ob.ob_text("weekly_saved_evening", lang, weekly=weekly)
+
+    await _post_today_task_after_weekly(bot, cid, profile, model_names)
+    return ob.ob_text("weekly_saved", lang, weekly=weekly)
+
+
+def _mark_morning_slot_sent(
+    cid: int,
+    profile: dict,
+    today: str,
+    user_profiles: dict[str, dict],
+) -> dict:
+    profile["last_morning_sent_date"] = today
+    profile["last_daily_sent_date"] = today
+    user_profiles[str(cid)] = profile
+    db_store.update_profile(
+        cid,
+        {"last_morning_sent_date": today, "last_daily_sent_date": today},
+    )
+    return profile
+
+
 async def _post_today_task_after_weekly(
     bot,
     cid: int,
@@ -5218,6 +5343,8 @@ async def _post_today_task_after_weekly(
 ) -> None:
     """After manual weekly goal change — propose today's task (not morning message)."""
     ulang = _user_lang(profile)
+    tz_name = _profile_timezone_name(profile)
+    today = datetime.now(_zone_or_default(tz_name)).strftime("%Y-%m-%d")
     try:
         async with typing_while(bot, cid):
             text = await _today_task_options_message_text(profile, model_names)
@@ -5233,6 +5360,7 @@ async def _post_today_task_after_weekly(
             "text": text,
             "awaiting_reminder": False,
         }
+        _mark_morning_slot_sent(cid, profile, today, user_profiles)
     except Exception as e:
         log.warning("post_today_task_after_weekly failed cid=%s: %s", cid, e)
 
@@ -5245,6 +5373,8 @@ async def _post_weekly_goal_morning(
 ) -> None:
     """Scheduled morning after new week — full morning message with task options."""
     ulang = _user_lang(profile)
+    tz_name = _profile_timezone_name(profile)
+    today = datetime.now(_zone_or_default(tz_name)).strftime("%Y-%m-%d")
     try:
         await _restore_history_from_db(cid, "morning after weekly goal")
         async with typing_while(bot, cid):
@@ -5261,6 +5391,7 @@ async def _post_weekly_goal_morning(
             "text": text,
             "awaiting_reminder": False,
         }
+        _mark_morning_slot_sent(cid, profile, today, user_profiles)
     except Exception as e:
         log.warning("post_weekly_goal_morning failed cid=%s: %s", cid, e)
 
@@ -5435,6 +5566,7 @@ async def _bootstrap_bot() -> None:
     telegram_app.bot_data["mini_app_url"] = _mini_app_url()
     telegram_app.bot_data["post_weekly_goal_morning"] = _post_weekly_goal_morning
     telegram_app.bot_data["post_today_task_after_weekly"] = _post_today_task_after_weekly
+    telegram_app.bot_data["after_weekly_goal_saved"] = _after_weekly_goal_saved
     _register_telegram_handlers(telegram_app)
 
     bot = telegram_app.bot

@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "morning-catchup-v29"
+BOT_BUILD = "weekly-morning-now-v30"
 
 OB_RETURNING = 0
 OB_NAME = 1
@@ -340,6 +340,9 @@ STRINGS: dict[str, dict[str, str]] = {
     "change_12w_broken": "Что-то сбилось. Напиши «поменять цель» ещё раз.",
     "main_to_weekly": "Отлично 🎯 Теперь первая неделя.",
     "weekly_saved": "Записала 💚 Цель на эту неделю: {weekly}.",
+    "weekly_saved_morning_now": (
+        "Записала 💚 Цель на эту неделю: {weekly}. Вот задача на сегодня 👇"
+    ),
     "finish_12w": (
         "Записала ✨ Новая цель на 12 недель: {main}\n"
         "На эту неделю: {weekly}\n"
@@ -515,6 +518,9 @@ STRINGS: dict[str, dict[str, str]] = {
     "change_12w_broken": "Something went wrong. Type «change goal» again.",
     "main_to_weekly": "First week. What do you want to accomplish this week?",
     "weekly_saved": "Saved 💚 This week's goal: {weekly}.",
+    "weekly_saved_morning_now": (
+        "Saved 💚 This week's goal: {weekly}. Here's today's task 👇"
+    ),
     "finish_12w": (
         "Saved ✨ New 12-week goal: {main}\n"
         "This week: {weekly}\n"
@@ -1344,18 +1350,21 @@ async def _complete_change_weekly_from_dialog(
     lang = _ob_lang(st)
     weekly = (weekly_goal or "").strip()
     from_week_start = bool(st.get("from_week_start"))
-    done_msg = await _finish_change_weekly(
-        cid, weekly, user_profiles, onboarding
-    )
-    if from_week_start:
-        done_msg = ob_text("weekly_saved_evening", lang, weekly=weekly)
-    await msg.reply_text(done_msg)
+    await _finish_change_weekly(cid, weekly, user_profiles, onboarding)
     prof = user_profiles.get(str(cid)) or db.get_profile(cid) or {}
-    if from_week_start:
-        return
-    cb = context.bot_data.get("post_today_task_after_weekly")
-    if cb:
-        await cb(context.bot, cid, prof, model_names)
+    after_cb = context.bot_data.get("after_weekly_goal_saved")
+    if after_cb:
+        done_msg = await after_cb(
+            context.bot,
+            cid,
+            prof,
+            model_names,
+            weekly,
+            from_week_start,
+        )
+    else:
+        done_msg = ob_text("weekly_saved", lang, weekly=weekly)
+    await msg.reply_text(done_msg)
 
 
 async def _finish_change_weekly(
@@ -1412,17 +1421,21 @@ async def _dispatch_goal_confirm_after(
     if after == "finish_weekly":
         weekly = str(st.get("weekly_goal") or "").strip()
         from_week_start = bool(st.get("from_week_start"))
-        done_msg = await _finish_change_weekly(
-            cid, weekly, user_profiles, onboarding
-        )
-        if from_week_start:
-            done_msg = ob_text("weekly_saved_evening", _ob_lang(st), weekly=weekly)
+        await _finish_change_weekly(cid, weekly, user_profiles, onboarding)
+        prof = user_profiles.get(str(cid)) or db.get_profile(cid) or {}
+        after_cb = context.bot_data.get("after_weekly_goal_saved")
+        if after_cb:
+            done_msg = await after_cb(
+                context.bot,
+                cid,
+                prof,
+                model_names,
+                weekly,
+                from_week_start,
+            )
+        else:
+            done_msg = ob_text("weekly_saved", _ob_lang(st), weekly=weekly)
         await msg.reply_text(done_msg)
-        if not from_week_start:
-            prof = user_profiles.get(str(cid)) or db.get_profile(cid) or {}
-            cb = context.bot_data.get("post_today_task_after_weekly")
-            if cb:
-                await cb(context.bot, cid, prof, model_names)
         return
 
     if after == "finish_12w":
