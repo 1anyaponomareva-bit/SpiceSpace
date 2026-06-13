@@ -14,7 +14,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&family=Geologica:wght@300;400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=20260612g" />
+  <link rel="stylesheet" href="./styles.css?v=20260612h" />
   <link rel="stylesheet" href="./cookie.css?v=20260612h" />
   <link rel="preload" href="./assets/cookie-whole.png" as="image" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -117,6 +117,36 @@
     <button type="button" class="settings-btn" id="btn-subscription">💳 Подписка</button>
     <button type="button" class="settings-btn danger" id="btn-stop">🔕 Остановить бота</button>
   </div>
+  </div>
+
+  <div class="screen" id="screen-subscription" hidden>
+    <div class="screen-inner subscription-screen">
+      <header class="subscription-header">
+        <div class="sub-status" id="sub-status">Подписка не активна</div>
+        <div class="sub-days" id="sub-days"></div>
+      </header>
+
+      <div class="plans" id="subscription-plans">
+        <div class="plan-card" data-plan="4weeks" role="button" tabindex="0">
+          <div class="plan-name" data-i18n="sub_plan_4w">4 недели</div>
+          <div class="plan-price">2 000 ⭐️</div>
+          <div class="plan-note" data-i18n="sub_plan_4w_note">~$20</div>
+        </div>
+        <div class="plan-card popular" data-plan="12weeks" role="button" tabindex="0">
+          <div class="plan-badge" data-i18n="sub_popular">Популярный</div>
+          <div class="plan-name" data-i18n="sub_plan_12w">12 недель</div>
+          <div class="plan-price">4 500 ⭐️</div>
+          <div class="plan-note" data-i18n="sub_plan_12w_note">~$45 · экономия $15</div>
+        </div>
+        <div class="plan-card" data-plan="24weeks" role="button" tabindex="0">
+          <div class="plan-name" data-i18n="sub_plan_24w">24 недели</div>
+          <div class="plan-price">7 500 ⭐️</div>
+          <div class="plan-note" data-i18n="sub_plan_24w_note">~$75 · экономия $45</div>
+        </div>
+      </div>
+
+      <button type="button" class="back-btn" id="sub-back">← Назад</button>
+    </div>
   </div>
 
   <div class="screen" id="screen-calendar" hidden>

@@ -49,6 +49,12 @@ _SUPABASE_PROFILE_COLUMNS_FALLBACK = frozenset(
         "cycle_start_date",
         "last_weekly_recap_date",
         "morning_time",
+        "last_user_message_date",
+        "reengagement_sent_date",
+        "is_premium",
+        "subscription_end",
+        "plan",
+        "trial_start_date",
     }
 )
 
@@ -834,6 +840,12 @@ def _profile_to_row(p: dict) -> dict:
         "cycle_start_date": p.get("cycle_start_date"),
         "milestones_shown": _milestones_shown_for_row(p),
         "last_weekly_recap_date": p.get("last_weekly_recap_date") or None,
+        "last_user_message_date": p.get("last_user_message_date") or "",
+        "reengagement_sent_date": p.get("reengagement_sent_date") or "",
+        "is_premium": bool(p.get("is_premium")),
+        "subscription_end": p.get("subscription_end") or "",
+        "plan": p.get("plan") or "",
+        "trial_start_date": p.get("trial_start_date") or "",
         "cycle_flags": _cycle_flags_for_row(p),
     }
     cols = _supabase_profile_columns or _SUPABASE_PROFILE_COLUMNS_FALLBACK
@@ -873,6 +885,20 @@ def _row_to_profile(row: dict) -> dict:
     p.setdefault("cycle_start_date", p.get("cycle_start_date") or "")
     p.setdefault("last_weekly_recap_date", p.get("last_weekly_recap_date") or "")
     p.setdefault("language_code", p.get("language_code") or "en")
+    p.setdefault("last_user_message_date", p.get("last_user_message_date") or "")
+    p.setdefault("reengagement_sent_date", p.get("reengagement_sent_date") or "")
+    p.setdefault("is_premium", bool(p.get("is_premium")))
+    p.setdefault("subscription_end", p.get("subscription_end") or "")
+    p.setdefault("plan", p.get("plan") or "")
+    p.setdefault("trial_start_date", p.get("trial_start_date") or "")
+    if p.get("last_user_message_date"):
+        p["last_user_message_date"] = str(p["last_user_message_date"])[:10]
+    if p.get("reengagement_sent_date"):
+        p["reengagement_sent_date"] = str(p["reengagement_sent_date"])[:10]
+    if p.get("subscription_end"):
+        p["subscription_end"] = str(p["subscription_end"])[:10]
+    if p.get("trial_start_date"):
+        p["trial_start_date"] = str(p["trial_start_date"])[:10]
     return p
 
 

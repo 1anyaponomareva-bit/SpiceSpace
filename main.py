@@ -51,6 +51,7 @@ from prompts import (
     evening_opening,
     morning_message_prompt,
     morning_opening,
+    reengagement_system,
     prepend_user_time,
     refresh_user_time_in_system,
     resolve_user_timezone,
@@ -68,6 +69,7 @@ from pydantic import BaseModel, Field
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    LabeledPrice,
     Message,
     Update,
     WebAppInfo,
@@ -78,6 +80,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    PreCheckoutQueryHandler,
     filters,
 )
 
@@ -85,6 +88,34 @@ DATA_DIR = Path(__file__).resolve().parent
 WEBAPP_DIR = DATA_DIR / "webapp"
 load_dotenv(DATA_DIR / ".env")
 ADMIN_TELEGRAM_ID = 8412438788
+TRIAL_DAYS = 3
+
+SUBSCRIPTION_PLANS = {
+    "4weeks": {
+        "label_ru": "4 недели",
+        "label_en": "4 weeks",
+        "stars": 2000,
+        "days": 28,
+    },
+    "12weeks": {
+        "label_ru": "12 недель",
+        "label_en": "12 weeks",
+        "stars": 4500,
+        "days": 84,
+    },
+    "24weeks": {
+        "label_ru": "24 недели",
+        "label_en": "24 weeks",
+        "stars": 7500,
+        "days": 168,
+    },
+}
+
+SUBSCRIPTION_PAYLOAD_DAYS = {
+    "subscription_4weeks": 28,
+    "subscription_12weeks": 84,
+    "subscription_24weeks": 168,
+}
 
 MILESTONE_DAYS = {
     3, 7, 10, 14, 17, 20, 24, 27, 30, 34, 37, 40, 44, 47, 50,
@@ -2339,6 +2370,363 @@ def _update_today_summary_field(
     db_store.patch_daily_summary(chat_id, today, **patch)
 
 
+def _touch_user_message_date(chat_id: int, profile: dict | None = None) -> None:
+    """Обновить дату последнего сообщения пользователя (для re-engagement)."""
+    if profile is None:
+        profile = user_profiles.get(str(chat_id)) or db_store.get_profile(chat_id)
+    if not isinstance(profile, dict):
+        return
+    today = _profile_local_date(profile).isoformat()
+    before = str(profile.get("last_user_message_date") or "").strip()
+    if before == today:
+        return
+    profile["last_user_message_date"] = today
+    db_store.update_profile(chat_id, {"last_user_message_date": today})
+    user_profiles[str(chat_id)] = profile
+
+
+def _days_since_user_message(profile: dict, today: date) -> int | None:
+    raw = str(profile.get("last_user_message_date") or "").strip()
+    if not raw or len(raw) < 10:
+        return None
+    try:
+        last = date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+    return (today - last).days
+
+
+def _reengagement_silence_action(profile: dict, today: date) -> str:
+    """normal | reengage | quiet | stop"""
+    days = _days_since_user_message(profile, today)
+    if days is None:
+        return "normal"
+    if days >= 8:
+        return "stop"
+    if days >= 6:
+        return "quiet"
+    if days == 5:
+        return "reengage"
+    return "normal"
+
+
+def _reengagement_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    ob.ob_text("reengagement_btn_continue", lang),
+                    callback_data="reengagement:continue",
+                ),
+                InlineKeyboardButton(
+                    ob.ob_text("reengagement_btn_new_goal", lang),
+                    callback_data="reengagement:new_goal",
+                ),
+            ]
+        ]
+    )
+
+
+async def _reengagement_message_text(profile: dict, model_names: list[str]) -> str:
+    lang = ui_lang(profile)
+    name = str(profile.get("name") or "").strip()
+    if name:
+        user_content = ob.ob_text("reengagement_claude_user_named", lang, name=name)
+    else:
+        user_content = ob.ob_text("reengagement_claude_user", lang)
+    system = prepend_user_time(profile, reengagement_system(lang))
+    if lang != "ru":
+        system = (
+            "CRITICAL: Write ONLY in English.\n\n"
+        ) + system
+
+    def call() -> str:
+        for mid in model_names:
+            try:
+                text = claude_generate(
+                    mid,
+                    [{"role": "user", "content": user_content}],
+                    system=system,
+                    max_tokens=220,
+                    cache_core=False,
+                ).strip()
+                if text:
+                    return text
+            except Exception as e:
+                log.warning("reengagement generate %s: %s", mid, e)
+        return ob.ob_text("reengagement_fallback", lang)
+
+    return await asyncio.to_thread(call)
+
+
+async def _send_reengagement_message(
+    bot,
+    cid: int,
+    profile: dict,
+    model_names: list[str],
+    *,
+    today: str,
+) -> bool:
+    claimed = db_store.claim_send_slot(cid, "reengagement_sent_date", today)
+    if not claimed:
+        return False
+    profile["reengagement_sent_date"] = today
+    user_profiles[str(cid)] = profile
+    lang = ui_lang(profile)
+    try:
+        async with typing_while(bot, cid):
+            text = await _reengagement_message_text(profile, model_names)
+        await bot.send_message(
+            chat_id=cid,
+            text=sanitize_bot_reply(text),
+            reply_markup=_reengagement_keyboard(lang),
+        )
+        log.info("reengagement sent cid=%s", cid)
+        return True
+    except Exception as e:
+        log.warning("reengagement send failed cid=%s: %s", cid, e)
+        db_store.update_profile(cid, {"reengagement_sent_date": None})
+        profile["reengagement_sent_date"] = ""
+        user_profiles[str(cid)] = profile
+        return False
+
+
+async def handle_reengagement_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    if not query or not query.data or not query.message:
+        return
+    await query.answer()
+    cid = query.message.chat_id
+    data = query.data.strip()
+
+    prof = user_profiles.get(str(cid)) or db_store.get_profile(cid) or {}
+    if not isinstance(prof, dict):
+        return
+    lang = ui_lang(prof)
+
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception as e:
+        log.warning("reengagement edit_markup failed cid=%s: %s", cid, e)
+
+    if data == "reengagement:continue":
+        _touch_user_message_date(cid, prof)
+        db_store.save_subscriber(cid, True)
+        subscribers.add(cid)
+        db_store.update_profile(
+            cid,
+            {"daily_enabled": True, "reengagement_sent_date": ""},
+        )
+        prof["daily_enabled"] = True
+        prof["reengagement_sent_date"] = ""
+        user_profiles[str(cid)] = prof
+        await context.bot.send_message(
+            chat_id=cid,
+            text=ob.ob_text("reengagement_continue", lang),
+            reply_markup=_webapp_keyboard(cid, lang),
+        )
+        return
+
+    if data == "reengagement:new_goal":
+        _touch_user_message_date(cid, prof)
+        db_store.save_subscriber(cid, True)
+        subscribers.add(cid)
+        db_store.update_profile(cid, {"daily_enabled": True})
+        prof["daily_enabled"] = True
+        user_profiles[str(cid)] = prof
+        ob.start_reengagement_goal(onboarding, cid, prof)
+        await context.bot.send_message(
+            chat_id=cid,
+            text=ob.ob_text("reengagement_goal_ask", lang),
+        )
+        return
+
+
+def _profile_truthy(value: object) -> bool:
+    if value is True or value == 1:
+        return True
+    if isinstance(value, str) and value.strip().lower() in ("true", "1", "yes", "on"):
+        return True
+    return False
+
+
+def _profile_is_premium_active(profile: dict, today: date) -> bool:
+    if not _profile_truthy(profile.get("is_premium")):
+        return False
+    end_raw = str(profile.get("subscription_end") or "").strip()[:10]
+    if not end_raw:
+        return False
+    try:
+        return date.fromisoformat(end_raw) >= today
+    except ValueError:
+        return False
+
+
+def _profile_in_trial(profile: dict, today: date) -> bool:
+    start_raw = str(
+        profile.get("trial_start_date") or profile.get("cycle_start_date") or ""
+    ).strip()[:10]
+    if not start_raw:
+        return True
+    try:
+        start = date.fromisoformat(start_raw)
+    except ValueError:
+        return True
+    return (today - start).days < TRIAL_DAYS
+
+
+def _profile_has_daily_access(profile: dict, today: date) -> bool:
+    if _profile_in_trial(profile, today):
+        return True
+    return _profile_is_premium_active(profile, today)
+
+
+async def send_subscription_invoice(user_id: int, plan: str, bot) -> None:
+    plan_key = plan if plan in SUBSCRIPTION_PLANS else "4weeks"
+    spec = SUBSCRIPTION_PLANS[plan_key]
+    profile = user_profiles.get(str(user_id)) or db_store.get_profile(user_id) or {}
+    lang = ui_lang(profile if isinstance(profile, dict) else None)
+    ru = lang == "ru"
+    label = spec["label_ru"] if ru else spec["label_en"]
+    stars = int(spec["stars"])
+    title = f"SpiceSpace — {label}"
+    description = ob.ob_text("subscription_invoice_desc", lang, label=label)
+    await bot.send_invoice(
+        chat_id=user_id,
+        title=title,
+        description=description,
+        payload=f"subscription_{plan_key}",
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label, stars)],
+    )
+
+
+async def pre_checkout_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.pre_checkout_query
+    if not query:
+        return
+    payload = str(query.invoice_payload or "")
+    if payload not in SUBSCRIPTION_PAYLOAD_DAYS:
+        uid = query.from_user.id if query.from_user else 0
+        prof = user_profiles.get(str(uid)) or db_store.get_profile(uid) or {}
+        lang = ui_lang(prof if isinstance(prof, dict) else None)
+        await query.answer(
+            ok=False,
+            error_message=ob.ob_text("subscription_checkout_invalid", lang),
+        )
+        return
+    await query.answer(ok=True)
+
+
+async def successful_payment_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    msg = update.message
+    if not msg or not msg.successful_payment or not update.effective_user:
+        return
+    cid = update.effective_user.id
+    payload = str(msg.successful_payment.invoice_payload or "")
+    days = SUBSCRIPTION_PAYLOAD_DAYS.get(payload, 28)
+
+    profile = user_profiles.get(str(cid)) or db_store.get_profile(cid) or {}
+    if not isinstance(profile, dict):
+        profile = {}
+    today = _profile_local_date(profile)
+    end_raw = str(profile.get("subscription_end") or "").strip()[:10]
+    base = today
+    if end_raw:
+        try:
+            current_end = date.fromisoformat(end_raw)
+            if current_end >= today:
+                base = current_end
+        except ValueError:
+            pass
+    end_date = (base + timedelta(days=days)).isoformat()
+
+    updated = db_store.update_profile(
+        cid,
+        {
+            "is_premium": True,
+            "subscription_end": end_date,
+            "plan": payload,
+        },
+    )
+    user_profiles[str(cid)] = updated
+    subscribers.add(cid)
+    db_store.save_subscriber(cid, True)
+
+    lang = ui_lang(updated)
+    await msg.reply_text(
+        ob.ob_text("subscription_activated", lang, end_date=end_date),
+        reply_markup=_webapp_keyboard(cid, lang),
+    )
+
+
+async def _run_subscription_maintenance(
+    bot,
+    cid: int,
+    profile: dict,
+    today: date,
+    user_profiles: dict[str, dict],
+) -> None:
+    lang = ui_lang(profile)
+    name = str(profile.get("name") or "").strip() or ob._friend_word(lang)
+    today_iso = today.isoformat()
+    end_raw = str(profile.get("subscription_end") or "").strip()[:10]
+
+    if _profile_truthy(profile.get("is_premium")) and end_raw:
+        try:
+            end = date.fromisoformat(end_raw)
+        except ValueError:
+            end = None
+        if end is not None:
+            if end < today:
+                db_store.update_profile(cid, {"is_premium": False})
+                profile["is_premium"] = False
+                user_profiles[str(cid)] = profile
+                if not db_store.cycle_flag_sent(profile, f"sub_expired_{end_raw}"):
+                    renew_url = ob.mini_app_webapp_url(_mini_app_url(), cid, lang)
+                    renew_url = f"{renew_url}&tab=subscription"
+                    try:
+                        await bot.send_message(
+                            chat_id=cid,
+                            text=ob.ob_text("subscription_expired", lang, name=name),
+                            reply_markup=InlineKeyboardMarkup(
+                                [
+                                    [
+                                        InlineKeyboardButton(
+                                            ob.ob_text("subscription_renew_btn", lang),
+                                            web_app=WebAppInfo(url=renew_url),
+                                        )
+                                    ]
+                                ]
+                            ),
+                        )
+                        updated = db_store.mark_cycle_flag(cid, f"sub_expired_{end_raw}")
+                        user_profiles[str(cid)] = updated
+                    except Exception as e:
+                        log.warning("subscription expired notify failed cid=%s: %s", cid, e)
+                return
+
+            days_left = (end - today).days
+            reminder_key = f"sub_reminder_3d_{end_raw}"
+            if days_left == 3 and not db_store.cycle_flag_sent(profile, reminder_key):
+                try:
+                    await bot.send_message(
+                        chat_id=cid,
+                        text=ob.ob_text("subscription_expiring", lang, name=name),
+                    )
+                    updated = db_store.mark_cycle_flag(cid, reminder_key)
+                    user_profiles[str(cid)] = updated
+                except Exception as e:
+                    log.warning("subscription reminder failed cid=%s: %s", cid, e)
+
+
 def _touch_streak_for_activity(chat_id: int, profile: dict) -> None:
     """Отметить активность пользователя сегодня (для streak), без last_daily_sent_date."""
     if not isinstance(profile, dict):
@@ -3871,6 +4259,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     reply_ctx = _reply_context_from_message(update.message)
 
+    prof_early = user_profiles.get(str(cid)) or db_store.get_profile(cid)
+    if isinstance(prof_early, dict):
+        _touch_user_message_date(cid, prof_early)
+
     st_ob = onboarding.get(cid)
     if st_ob is not None:
         if int(st_ob.get("step") or -1) == ob.OB_CHANGE_WEEKLY:
@@ -3958,6 +4350,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if prof_d:
         prof_d = _sync_profile_language_code(cid, update, prof_d) or prof_d
         _touch_streak_for_activity(cid, prof_d)
+        _touch_user_message_date(cid, prof_d)
+    else:
+        prof_touch = user_profiles.get(str(cid)) or db_store.get_profile(cid)
+        if isinstance(prof_touch, dict):
+            _touch_user_message_date(cid, prof_touch)
 
     model_chain: list[str] = context.bot_data.get("claude_model_names") or []
 
@@ -4221,10 +4618,14 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
 
     st_ob = onboarding.get(cid)
+    prof_ob = user_profiles.get(str(cid)) or db_store.get_profile(cid)
+    ob_lang = ui_lang(prof_ob if isinstance(prof_ob, dict) else None)
+    if not isinstance(prof_ob, dict) and update.effective_user:
+        ob_lang = ui_lang({"language_code": update.effective_user.language_code or "en"})
     if st_ob is not None and int(st_ob.get("step") or 0) > 0:
         await _bot_reply(
             msg,
-            "Давай до конца знакомство текстом — фото чуть позже 💛",
+            ui_text("onboard_text_only_photo", lang=ob_lang),
         )
         return
 
@@ -4237,9 +4638,13 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     prof_photo = user_profiles.get(str(cid))
     if isinstance(prof_photo, dict):
         _touch_streak_for_activity(cid, prof_photo)
+        _touch_user_message_date(cid, prof_photo)
 
     model_names: list[str] = context.bot_data["claude_model_names"]
-    caption = (msg.caption or "").strip() or "Что на фото?"
+    photo_lang = ui_lang(prof_photo if isinstance(prof_photo, dict) else None)
+    caption = (msg.caption or "").strip() or ui_text(
+        "photo_default_caption", lang=photo_lang
+    )
 
     log.info("incoming photo chat_id=%s caption_len=%s", cid, len(caption))
 
@@ -4256,14 +4661,14 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         log.exception("Claude quota exhausted (photo)")
         await _bot_reply(
             msg,
-            "У Claude API сейчас лимит запросов (ошибка 429). Подожди 1–2 минуты и отправь фото снова.",
+            ui_text("claude_quota_short", profile=prof_photo if isinstance(prof_photo, dict) else None),
         )
         return
     except Exception:
         log.exception("Photo reply failed chat_id=%s", cid)
         await _bot_reply(
             msg,
-            "Не получилось разобрать фото. Попробуй ещё раз или опиши текстом.",
+            ui_text("photo_parse_failed", profile=prof_photo if isinstance(prof_photo, dict) else None),
         )
         return
 
@@ -4277,16 +4682,22 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_chat or not update.effective_message:
         return
     cid = update.effective_chat.id
+    prof_voice = user_profiles.get(str(cid)) or db_store.get_profile(cid)
+    voice_lang = ui_lang(prof_voice if isinstance(prof_voice, dict) else None)
+    if not isinstance(prof_voice, dict) and update.effective_user:
+        voice_lang = ui_lang({"language_code": update.effective_user.language_code or "en"})
+    if isinstance(prof_voice, dict):
+        _touch_user_message_date(cid, prof_voice)
     st_ob = onboarding.get(cid)
     if st_ob and int(st_ob.get("step") or 0) > 0:
         await _bot_reply(
             update.effective_message,
-            "Давай до конца знакомство текстом — голос чуть позже 💛",
+            ui_text("onboard_text_only_voice", lang=voice_lang),
         )
         return
     await _bot_reply(
         update.effective_message,
-        "Голосовые сообщения пока не расшифровываю — напиши текстом, так диалог стабильнее.",
+        ui_text("voice_not_supported", lang=voice_lang),
     )
 
 
@@ -5473,6 +5884,10 @@ def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> di
         p["daily_time"] = mt  # Always keep in sync for Mini App + daily_check_job
     et = db_store.normalize_time_hhmm(p.get("evening_time"))
     p["evening_time"] = et or "21:00"
+    p.setdefault("is_premium", bool(p.get("is_premium")))
+    p.setdefault("subscription_end", p.get("subscription_end") or "")
+    p.setdefault("plan", p.get("plan") or "")
+    p.setdefault("trial_start_date", p.get("trial_start_date") or "")
 
     tid = telegram_id or str(p.get("telegram_id") or "")
     today = _profile_local_date(p)
@@ -5538,6 +5953,16 @@ def _register_telegram_handlers(app_: Application) -> None:
             handle_task_completion_callback,
             pattern=r"^task_(done|partial|missed)$",
         )
+    )
+    app_.add_handler(
+        CallbackQueryHandler(
+            handle_reengagement_callback,
+            pattern=r"^reengagement:(continue|new_goal)$",
+        )
+    )
+    app_.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
+    app_.add_handler(
+        MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler)
     )
     app_.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
@@ -5634,6 +6059,47 @@ async def _bootstrap_bot() -> None:
                     cid, profile, now_local.date()
                 )
                 user_profiles[key] = profile
+
+                today_date = now_local.date()
+                await _run_subscription_maintenance(
+                    bot, cid, profile, today_date, user_profiles
+                )
+                profile = user_profiles.get(key) or profile
+
+                if not _profile_has_daily_access(profile, today_date):
+                    continue
+
+                silence = _reengagement_silence_action(profile, today_date)
+                if silence == "stop":
+                    db_store.save_subscriber(cid, False)
+                    subscribers.discard(cid)
+                    log.info(
+                        "reengagement disabled daily cid=%s days_silent>=8",
+                        cid,
+                    )
+                    continue
+                if silence == "quiet":
+                    continue
+                if silence == "reengage":
+                    reengagement_sent = str(
+                        profile.get("reengagement_sent_date") or ""
+                    ).strip()
+                    in_reengage = _time_ready_for_daily_send(
+                        morning_time,
+                        now_hm,
+                        already_sent_today=(reengagement_sent == today),
+                        catchup_minutes=MORNING_CATCHUP_MINUTES,
+                    )
+                    if in_reengage:
+                        await _send_reengagement_message(
+                            bot,
+                            cid,
+                            profile,
+                            model_chain,
+                            today=today,
+                        )
+                    continue
+
                 days_since_start = _days_since_cycle_start(
                     profile, now_local.date()
                 )
@@ -6142,6 +6608,30 @@ async def stop_profile_endpoint(
         prof["daily_enabled"] = False
         db_store.upsert_profile(cid, prof)
         user_profiles[tid] = prof
+    return {"ok": True}
+
+
+class SubscribePayload(BaseModel):
+    plan: str = Field(default="4weeks", max_length=32)
+
+
+@app.post("/api/subscribe")
+async def subscribe_endpoint(
+    request: Request,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+    body: SubscribePayload | None = Body(default=None),
+) -> dict:
+    tid = _auth_telegram_id(request, telegram_id)
+    plan = (body.plan if body else "4weeks").strip()
+    if plan not in SUBSCRIPTION_PLANS:
+        raise HTTPException(status_code=400, detail="invalid plan")
+    if not telegram_app or not telegram_app.bot:
+        raise HTTPException(status_code=503, detail="bot unavailable")
+    try:
+        await send_subscription_invoice(int(tid), plan, telegram_app.bot)
+    except Exception as e:
+        log.exception("subscribe invoice failed tid=%s plan=%s: %s", tid, plan, e)
+        raise HTTPException(status_code=500, detail="invoice failed") from e
     return {"ok": True}
 
 

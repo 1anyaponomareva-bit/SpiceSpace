@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "weekly-morning-now-v30"
+BOT_BUILD = "stars-subscription-i18n-v34"
 
 OB_RETURNING = 0
 OB_NAME = 1
@@ -48,6 +48,7 @@ OB_DONE = 9
 OB_CHANGE_WEEKLY = 10
 OB_CHANGE_12W = 11
 OB_WEEKLY_RECAP = 12
+OB_REENGAGE_GOAL = 13
 
 GOAL_TYPE_12W = "12-недельная цель"
 GOAL_TYPE_WEEKLY = "цель на неделю"
@@ -366,6 +367,42 @@ STRINGS: dict[str, dict[str, str]] = {
         "Контекст диалога сброшен. Можем начать с чистого листа. "
         "Чтобы пройти знакомство снова — /start."
     ),
+    "reengagement_btn_continue": "Продолжаем 💪",
+    "reengagement_btn_new_goal": "Поставим новую цель 🎯",
+    "reengagement_continue": (
+        "Отлично, я здесь 🙂 Завтра утром напишу как обычно."
+    ),
+    "reengagement_goal_ask": (
+        "Расскажи — что сейчас актуальнее? Какую цель хочешь поставить?"
+    ),
+    "reengagement_goal_saved": (
+        "Записала ✨ Цель: {main}\n"
+        "На эту неделю: {weekly}\n"
+        "Завтра утром напишу как обычно 💚"
+    ),
+    "reengagement_fallback": (
+        "Привет, я заметила, что тебя давно не было — и это окей. "
+        "Хочешь продолжить с тем, что было, или поставим новую цель?"
+    ),
+    "reengagement_claude_user": "Напиши сообщение.",
+    "reengagement_claude_user_named": "Имя пользователя: {name}",
+    "subscription_activated": (
+        "Подписка активирована ✨\n\nСпейс с тобой до {end_date}. Продолжаем!"
+    ),
+    "subscription_expired": (
+        "{name}, подписка закончилась 🌙\n\n"
+        "Хочешь продолжить — открой мини апп и выбери тариф."
+    ),
+    "subscription_expiring": (
+        "{name}, подписка заканчивается через 3 дня 🌙 Не забудь продлить."
+    ),
+    "subscription_renew_btn": "💳 Продлить",
+    "subscription_invoice_desc": (
+        "Спейс помнит тебя и помогает не сливаться с целей. {label} доступа."
+    ),
+    "subscription_checkout_invalid": (
+        "Неизвестный тариф. Выбери план в мини-приложении."
+    ),
     },
     "en": {
     "greeting": GREETING_NEW_EN,
@@ -543,6 +580,42 @@ STRINGS: dict[str, dict[str, str]] = {
     "cmd_reset_msg": (
         "Chat context cleared. We can start fresh. "
         "To go through setup again — /start."
+    ),
+    "reengagement_btn_continue": "Let's continue 💪",
+    "reengagement_btn_new_goal": "Set a new goal 🎯",
+    "reengagement_continue": (
+        "Great, I'm here 🙂 I'll message you tomorrow morning as usual."
+    ),
+    "reengagement_goal_ask": (
+        "Tell me — what feels more relevant right now? What goal do you want to set?"
+    ),
+    "reengagement_goal_saved": (
+        "Saved ✨ Goal: {main}\n"
+        "This week: {weekly}\n"
+        "I'll message you tomorrow morning as usual 💚"
+    ),
+    "reengagement_fallback": (
+        "Hey, I noticed you've been away for a while — and that's okay. "
+        "Want to pick up where we left off, or set a new goal?"
+    ),
+    "reengagement_claude_user": "Write the message.",
+    "reengagement_claude_user_named": "User name: {name}",
+    "subscription_activated": (
+        "Subscription activated ✨\n\nSpace is with you until {end_date}. Let's go!"
+    ),
+    "subscription_expired": (
+        "{name}, your subscription ended 🌙\n\n"
+        "To continue — open the mini app and pick a plan."
+    ),
+    "subscription_expiring": (
+        "{name}, your subscription ends in 3 days 🌙 Don't forget to renew."
+    ),
+    "subscription_renew_btn": "💳 Renew",
+    "subscription_invoice_desc": (
+        "SpiceSpace remembers you and helps you stay on track. {label} of access."
+    ),
+    "subscription_checkout_invalid": (
+        "Unknown plan. Pick a plan in the mini app."
     ),
     },
 }
@@ -1443,6 +1516,13 @@ async def _dispatch_goal_confirm_after(
         await msg.reply_text(done_msg)
         return
 
+    if after == "finish_reengagement":
+        done_msg = await _finish_reengagement(
+            cid, st, user_profiles, onboarding, subscribers
+        )
+        await msg.reply_text(done_msg)
+        return
+
     log.warning("unknown goal_confirm after=%s cid=%s", after, cid)
 
 
@@ -1471,6 +1551,61 @@ async def _finish_change_12w(
     lang = _ob_lang(st, profile)
     return ob_text(
         "finish_12w",
+        lang,
+        main=main_goal,
+        weekly=weekly_goal,
+    )
+
+
+def start_reengagement_goal(
+    onboarding: dict[int, dict],
+    cid: int,
+    profile: dict,
+) -> None:
+    lang = _ob_lang(profile=profile)
+    onboarding[cid] = {
+        "step": OB_REENGAGE_GOAL,
+        "reengagement": True,
+        "lang": lang,
+        "language_code": lang,
+        "goal_turns": [],
+        "weekly_turns": [],
+        "main_goal": str(profile.get("main_goal") or profile.get("final_goal") or "").strip(),
+    }
+
+
+async def _finish_reengagement(
+    cid: int,
+    st: dict,
+    user_profiles: dict[str, dict],
+    onboarding: dict[int, dict],
+    subscribers: set[int],
+) -> str:
+    main_goal = str(st.get("main_goal") or "").strip()
+    weekly_goal = str(st.get("weekly_goal") or "").strip()
+    profile = user_profiles.get(str(cid)) or db.get_profile(cid) or {}
+    tz_name = str(profile.get("timezone") or "Asia/Ho_Chi_Minh")
+    try:
+        today_iso = datetime.now(ZoneInfo(tz_name)).date().isoformat()
+    except Exception:
+        today_iso = date.today().isoformat()
+    fields: dict = {
+        "main_goal": main_goal[:2000],
+        "weekly_goal": weekly_goal[:2000],
+        "raw_goal": main_goal[:2000],
+        "final_goal": main_goal[:2000],
+        "daily_enabled": True,
+        "last_user_message_date": today_iso,
+        "reengagement_sent_date": "",
+    }
+    db.save_subscriber(cid, True)
+    subscribers.add(cid)
+    profile = db.update_profile(cid, fields)
+    user_profiles[str(cid)] = profile
+    onboarding.pop(cid, None)
+    lang = _ob_lang(st, profile)
+    return ob_text(
+        "reengagement_goal_saved",
         lang,
         main=main_goal,
         weekly=weekly_goal,
@@ -2007,6 +2142,7 @@ def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
     except Exception:
         tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     profile["cycle_start_date"] = datetime.now(tz).date().isoformat()
+    profile["trial_start_date"] = profile["cycle_start_date"]
     db.upsert_profile(cid, profile)
     db.save_subscriber(cid, True)
     save_onboarding_summary(cid, profile, model_names)
@@ -2079,6 +2215,9 @@ async def _complete_onboarding(
         today_iso = datetime.now(tz).date().isoformat()
         profile["cycle_start_date"] = today_iso
         db.update_profile(cid, {"cycle_start_date": today_iso})
+        if not profile.get("trial_start_date"):
+            profile["trial_start_date"] = today_iso
+            db.update_profile(cid, {"trial_start_date": today_iso})
 
     name = profile.get("name", "")
     mt = profile.get("morning_time", "09:30")
@@ -2435,9 +2574,15 @@ async def handle_onboarding_turn(
             await msg.reply_text(reply)
         return
 
+    if step == OB_REENGAGE_GOAL:
+        st["goal_turns"] = [{"role": "user", "content": raw.strip()[:2000]}]
+        st["step"] = OB_GOAL_DIALOG
+        step = OB_GOAL_DIALOG
+
     if step == OB_GOAL_DIALOG:
         turns = st.setdefault("goal_turns", [])
-        turns.append({"role": "user", "content": raw.strip()[:2000]})
+        if not turns or turns[-1].get("role") != "user":
+            turns.append({"role": "user", "content": raw.strip()[:2000]})
 
         prev_reply = _last_assistant_reply(turns)
         goal_hint = (
@@ -2485,12 +2630,15 @@ async def handle_onboarding_turn(
         return
 
     async def _complete_weekly_tactics_pick(weekly_goal: str) -> None:
-        mode = str(st.get("change_mode") or "")
-        after = (
-            "finish_12w"
-            if mode in ("adjust_12w", "new_12w")
-            else "weekly_to_morning"
-        )
+        if st.get("reengagement"):
+            after = "finish_reengagement"
+        else:
+            mode = str(st.get("change_mode") or "")
+            after = (
+                "finish_12w"
+                if mode in ("adjust_12w", "new_12w")
+                else "weekly_to_morning"
+            )
         await _propose_goal_confirm(
             msg,
             st,

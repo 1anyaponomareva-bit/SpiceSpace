@@ -88,6 +88,26 @@ _UI: dict[str, dict[str, str]] = {
     "reminder_tail_at": {"ru": "в {time}", "en": "at {time}"},
     "reminder_tail_daily": {"ru": ", каждый день", "en": ", every day"},
     "reminder_tail_weekly": {"ru": ", по {days}", "en": ", on {days}"},
+    "onboard_text_only_photo": {
+        "ru": "Давай до конца знакомство текстом — фото чуть позже 💛",
+        "en": "Let's finish setup in text first — photos a bit later 💛",
+    },
+    "onboard_text_only_voice": {
+        "ru": "Давай до конца знакомство текстом — голос чуть позже 💛",
+        "en": "Let's finish setup in text first — voice messages a bit later 💛",
+    },
+    "voice_not_supported": {
+        "ru": "Голосовые сообщения пока не расшифровываю — напиши текстом, так диалог стабильнее.",
+        "en": "I can't transcribe voice messages yet — text works best for now.",
+    },
+    "photo_default_caption": {
+        "ru": "Что на фото?",
+        "en": "What's in the photo?",
+    },
+    "photo_parse_failed": {
+        "ru": "Не получилось разобрать фото. Попробуй ещё раз или опиши текстом.",
+        "en": "Couldn't read the photo. Try again or describe it in text.",
+    },
 }
 
 

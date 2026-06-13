@@ -248,6 +248,118 @@
     }
     setText('#edit-times-cancel', 'cancel');
     setText('#edit-times-save', 'save');
+    applySubscriptionI18n();
+  }
+
+  function applySubscriptionI18n() {
+    document.querySelectorAll('#screen-subscription [data-i18n]').forEach((el) => {
+      const key = el.getAttribute('data-i18n');
+      if (key) el.textContent = t(key);
+    });
+    const back = document.getElementById('sub-back');
+    if (back) back.textContent = t('sub_back');
+    renderSubscriptionStatus(profile);
+  }
+
+  function formatSubDaysLeft(days, dateIso) {
+    return t('sub_days_left')
+      .replace('{days}', String(days))
+      .replace('{daysLabel}', pluralizeDays(days))
+      .replace('{date}', dateIso);
+  }
+
+  function isPremiumActive(prof) {
+    if (!prof?.is_premium || !prof?.subscription_end) return false;
+    const end = parseISODate(prof.subscription_end);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    end.setHours(0, 0, 0, 0);
+    return end >= today;
+  }
+
+  function renderSubscriptionStatus(prof) {
+    const statusEl = document.getElementById('sub-status');
+    const daysEl = document.getElementById('sub-days');
+    if (!statusEl || !daysEl) return;
+    if (isPremiumActive(prof)) {
+      const end = parseISODate(prof.subscription_end);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      end.setHours(0, 0, 0, 0);
+      const days = Math.ceil((end - today) / (1000 * 60 * 60 * 24));
+      statusEl.textContent = t('sub_active');
+      daysEl.textContent = formatSubDaysLeft(days, prof.subscription_end);
+    } else {
+      statusEl.textContent = t('sub_inactive');
+      daysEl.textContent = '';
+    }
+  }
+
+  function openSubscriptionScreen() {
+    const screen = document.getElementById('screen-subscription');
+    const home = document.getElementById('screen-home');
+    const cal = document.getElementById('screen-calendar');
+    if (home) {
+      home.hidden = true;
+      home.classList.remove('screen--active');
+    }
+    if (cal) {
+      cal.hidden = true;
+      cal.classList.remove('screen--active');
+    }
+    if (screen) {
+      screen.hidden = false;
+      screen.classList.add('screen--active');
+    }
+    const tabBar = document.getElementById('tab-bar');
+    if (tabBar) tabBar.hidden = true;
+    applySubscriptionI18n();
+    renderSubscriptionStatus(profile);
+    haptic('light');
+  }
+
+  function closeSubscriptionScreen() {
+    const screen = document.getElementById('screen-subscription');
+    if (screen) {
+      screen.hidden = true;
+      screen.classList.remove('screen--active');
+    }
+    const tabBar = document.getElementById('tab-bar');
+    if (tabBar) tabBar.hidden = false;
+    switchTab(activeTab || 'home');
+  }
+
+  function bindSubscription() {
+    document.getElementById('btn-subscription')?.addEventListener('click', () => {
+      openSubscriptionScreen();
+    });
+    document.getElementById('sub-back')?.addEventListener('click', () => {
+      closeSubscriptionScreen();
+    });
+    document.getElementById('subscription-plans')?.addEventListener('click', async (e) => {
+      const card = e.target.closest('.plan-card');
+      if (!card) return;
+      const plan = card.getAttribute('data-plan');
+      if (!plan) return;
+      haptic('medium');
+      card.style.opacity = '0.6';
+      try {
+        const res = await apiFetch('/api/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ plan }),
+        });
+        if (!res.ok) {
+          alert(t('sub_invoice_error'));
+          return;
+        }
+        if (tg) tg.close();
+      } catch (_) {
+        alert(t('sub_invoice_error'));
+      } finally {
+        card.style.opacity = '';
+      }
+    });
   }
 
   function applyLanguageFromProfile(prof) {
@@ -1328,9 +1440,7 @@
       startGoalChange('weekly');
     });
 
-    document.getElementById('btn-subscription')?.addEventListener('click', () => {
-      alert(t('subscription_soon'));
-    });
+    bindSubscription();
 
     document.getElementById('btn-stop')?.addEventListener('click', async () => {
       await apiFetch('/api/profile/stop', { method: 'POST' });
@@ -1393,6 +1503,9 @@
     document.querySelector('.settings-block')?.classList.add('loaded');
     if (window.SpiceFortune?.tryShow) {
       await window.SpiceFortune.tryShow();
+    }
+    if (new URLSearchParams(window.location.search).get('tab') === 'subscription') {
+      openSubscriptionScreen();
     }
   }
 
