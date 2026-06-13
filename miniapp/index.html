@@ -14,7 +14,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&family=Geologica:wght@300;400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=20260612h" />
+  <link rel="stylesheet" href="./styles.css?v=20260613welcome" />
   <link rel="stylesheet" href="./cookie.css?v=20260612h" />
   <link rel="preload" href="./assets/cookie-whole.png" as="image" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -26,6 +26,21 @@
   <div class="sync-banner" id="sync-banner" hidden>
     <p class="sync-banner__text">Открой через бота для синхронизации данных</p>
     <button type="button" class="sync-banner__btn" id="sync-banner-open">Открыть чат</button>
+  </div>
+
+  <div class="welcome-screen" id="welcome-screen" hidden>
+    <div class="welcome-content">
+      <div class="welcome-emoji">✨</div>
+      <div class="welcome-title">Привет, я Спейс</div>
+      <div class="welcome-desc">
+        Помогаю не сливаться с целей. Помню что ты говорила вчера.
+        Мягко тыкаю если забываешь про себя.
+      </div>
+      <button class="welcome-btn" id="welcome-start-btn">
+        Начать бесплатно →
+      </button>
+      <div class="welcome-trial">3 дня бесплатно · потом от 2 000 ⭐️</div>
+    </div>
   </div>
 
   <div class="empty-state" id="empty-state" hidden>
@@ -121,6 +136,7 @@
 
   <div class="screen" id="screen-subscription" hidden>
     <div class="screen-inner subscription-screen">
+      <p class="subscription-payment-title">Оплата через Telegram Stars ⭐️</p>
       <header class="subscription-header">
         <div class="sub-status" id="sub-status">Подписка не активна</div>
         <div class="sub-days" id="sub-days"></div>
@@ -129,21 +145,23 @@
       <div class="plans" id="subscription-plans">
         <div class="plan-card" data-plan="4weeks" role="button" tabindex="0">
           <div class="plan-name" data-i18n="sub_plan_4w">4 недели</div>
-          <div class="plan-price">2 000 ⭐️</div>
+          <div class="plan-price">2 000 ⭐️ Stars</div>
           <div class="plan-note" data-i18n="sub_plan_4w_note">~$20</div>
         </div>
         <div class="plan-card popular" data-plan="12weeks" role="button" tabindex="0">
           <div class="plan-badge" data-i18n="sub_popular">Популярный</div>
           <div class="plan-name" data-i18n="sub_plan_12w">12 недель</div>
-          <div class="plan-price">4 500 ⭐️</div>
+          <div class="plan-price">4 500 ⭐️ Stars</div>
           <div class="plan-note" data-i18n="sub_plan_12w_note">~$45 · экономия $15</div>
         </div>
         <div class="plan-card" data-plan="24weeks" role="button" tabindex="0">
           <div class="plan-name" data-i18n="sub_plan_24w">24 недели</div>
-          <div class="plan-price">7 500 ⭐️</div>
+          <div class="plan-price">7 500 ⭐️ Stars</div>
           <div class="plan-note" data-i18n="sub_plan_24w_note">~$75 · экономия $45</div>
         </div>
       </div>
+
+      <p class="subscription-stars-tip">Stars можно купить прямо в Telegram.<br>100 Stars ≈ $2</p>
 
       <button type="button" class="back-btn" id="sub-back">← Назад</button>
     </div>
@@ -234,6 +252,6 @@
 
 <script src="./i18n.js?v=20260612i18n2"></script>
 <script src="./fortune.js?v=20260612i18n2"></script>
-<script src="./app.js?v=20260612i18n2"></script>
+<script src="./app.js?v=20260613welcome"></script>
 </body>
 </html>
