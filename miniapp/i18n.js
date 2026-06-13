@@ -92,6 +92,11 @@ const translations = {
     fortune_btn_go: 'Погнали дальше →',
     fortune_fallback: 'Скоро твоя цель станет ближе — если сделаешь один честный шаг на этой неделе.',
     fortune_test_btn: '🥠 Тест печеньки',
+    welcome_title: 'Привет, я Спейс',
+    welcome_desc:
+      'Помогаю не сливаться с целей. Помню что ты говорила вчера. Мягко тыкаю если забываешь про себя.',
+    welcome_btn: 'Начать бесплатно →',
+    welcome_trial: '3 дня бесплатно · потом от 2 000 ⭐️',
   },
   en: {
     greeting_morning: 'Good morning,',
@@ -186,6 +191,11 @@ const translations = {
     fortune_btn_go: "Let's go →",
     fortune_fallback: 'Your goal gets closer soon — if you take one honest step this week.',
     fortune_test_btn: '🥠 Test fortune cookie',
+    welcome_title: "Hi, I'm Space",
+    welcome_desc:
+      "I help you stay on track with your goals. I remember what you said yesterday. I gently nudge you when you forget about yourself.",
+    welcome_btn: 'Start free →',
+    welcome_trial: '3 days free · then from 2,000 ⭐️',
   },
 };
 

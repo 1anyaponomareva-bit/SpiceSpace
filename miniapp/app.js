@@ -171,6 +171,10 @@
     setText('#empty-state .empty-state__title', 'no_goal_title');
     setText('#empty-state .empty-state__text', 'no_goal_text');
     setText('#empty-open-bot', 'go_to_bot');
+    setText('.welcome-title', 'welcome_title');
+    setText('.welcome-desc', 'welcome_desc');
+    setText('#welcome-start-btn', 'welcome_btn');
+    setText('.welcome-trial', 'welcome_trial');
 
     const setLabelWithSvg = (selector, key) => {
       const el = document.querySelector(selector);
