@@ -718,6 +718,10 @@ body.tg-app { background: var(--bg); }
   color: var(--dark);
 }
 
+.sub-status--active {
+  color: #2d6a4f;
+}
+
 .sub-days {
   margin-top: 8px;
   font-size: 14px;

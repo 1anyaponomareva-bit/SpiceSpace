@@ -264,12 +264,28 @@
   function formatSubDaysLeft(days, dateIso) {
     return t('sub_days_left')
       .replace('{days}', String(days))
-      .replace('{daysLabel}', pluralizeDays(days))
-      .replace('{date}', dateIso);
+      .replace('{daysLabel}', pluralizeDays(days));
+  }
+
+  function formatSubDate(iso) {
+    const d = parseISODate(iso);
+    const lang = window.userLang || 'en';
+    if (lang === 'en') {
+      return `${MONTHS_EN[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+    }
+    return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+  }
+
+  function profilePremiumActive(prof) {
+    if (!prof?.subscription_end || !isPremiumActive(prof)) return false;
+    const premium = prof.is_premium;
+    if (premium === false || premium === 0 || premium === '0') return false;
+    if (typeof premium === 'string' && premium.toLowerCase() === 'false') return false;
+    return true;
   }
 
   function isPremiumActive(prof) {
-    if (!prof?.is_premium || !prof?.subscription_end) return false;
+    if (!prof?.subscription_end) return false;
     const end = parseISODate(prof.subscription_end);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -280,22 +296,28 @@
   function renderSubscriptionStatus(prof) {
     const statusEl = document.getElementById('sub-status');
     const daysEl = document.getElementById('sub-days');
+    const plansEl = document.getElementById('subscription-plans');
     if (!statusEl || !daysEl) return;
-    if (isPremiumActive(prof)) {
+    if (profilePremiumActive(prof)) {
+      const endLabel = formatSubDate(prof.subscription_end);
       const end = parseISODate(prof.subscription_end);
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       end.setHours(0, 0, 0, 0);
       const days = Math.ceil((end - today) / (1000 * 60 * 60 * 24));
-      statusEl.textContent = t('sub_active');
+      statusEl.textContent = t('sub_active_until').replace('{date}', endLabel);
+      statusEl.classList.add('sub-status--active');
       daysEl.textContent = formatSubDaysLeft(days, prof.subscription_end);
+      if (plansEl) plansEl.hidden = false;
     } else {
       statusEl.textContent = t('sub_inactive');
+      statusEl.classList.remove('sub-status--active');
       daysEl.textContent = '';
+      if (plansEl) plansEl.hidden = false;
     }
   }
 
-  function openSubscriptionScreen() {
+  async function openSubscriptionScreen() {
     const screen = document.getElementById('screen-subscription');
     const home = document.getElementById('screen-home');
     const cal = document.getElementById('screen-calendar');
@@ -313,6 +335,7 @@
     }
     const tabBar = document.getElementById('tab-bar');
     if (tabBar) tabBar.hidden = true;
+    await loadProfile({ skipRender: true });
     applySubscriptionI18n();
     renderSubscriptionStatus(profile);
     haptic('light');

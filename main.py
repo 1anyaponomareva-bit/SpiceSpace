@@ -204,8 +204,13 @@ def sanitize_bot_reply(text: str) -> str:
     return format_telegram_text(text)
 
 
-async def _bot_reply(message, text: str) -> None:
-    await message.reply_text(sanitize_bot_reply(text))
+async def _bot_reply(
+    message, text: str, *, reply_markup: InlineKeyboardMarkup | None = None
+) -> None:
+    await message.reply_text(
+        sanitize_bot_reply(text),
+        reply_markup=reply_markup,
+    )
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -2506,6 +2511,19 @@ async def handle_reengagement_callback(
         return
     lang = ui_lang(prof)
 
+    today = _profile_local_date(prof)
+    if not _profile_has_daily_access(prof, today) and not onboarding.get(cid):
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await context.bot.send_message(
+            chat_id=cid,
+            text=_subscription_paywall_text(prof, lang),
+            reply_markup=_subscription_offer_keyboard(cid, lang),
+        )
+        return
+
     try:
         await query.edit_message_reply_markup(reply_markup=None)
     except Exception as e:
@@ -2581,6 +2599,122 @@ def _profile_has_daily_access(profile: dict, today: date) -> bool:
     if _profile_in_trial(profile, today):
         return True
     return _profile_is_premium_active(profile, today)
+
+
+def _trial_start_raw(profile: dict) -> str:
+    return str(
+        profile.get("trial_start_date") or profile.get("cycle_start_date") or ""
+    ).strip()[:10]
+
+
+def _days_since_trial_start(profile: dict, today: date) -> int | None:
+    raw = _trial_start_raw(profile)
+    if not raw:
+        return None
+    try:
+        start = date.fromisoformat(raw)
+    except ValueError:
+        return None
+    return (today - start).days
+
+
+def _subscription_miniapp_url(cid: int, lang: str) -> str:
+    url = ob.mini_app_webapp_url(_mini_app_url(), cid, lang)
+    return f"{url}&tab=subscription"
+
+
+def _subscription_offer_keyboard(cid: int, lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    ob.ob_text("subscription_subscribe_btn", lang),
+                    web_app=WebAppInfo(url=_subscription_miniapp_url(cid, lang)),
+                )
+            ]
+        ]
+    )
+
+
+def _subscription_paywall_text(profile: dict, lang: str) -> str:
+    name = str(profile.get("name") or "").strip() or ob._friend_word(lang)
+    today = _profile_local_date(profile)
+    days = _days_since_trial_start(profile, today)
+    if days is not None and days >= TRIAL_DAYS and not _profile_is_premium_active(
+        profile, today
+    ):
+        return ob.ob_text("trial_expired_offer", lang, name=name)
+    return ob.ob_text("subscription_paywall", lang, name=name)
+
+
+async def _send_subscription_paywall(
+    bot, cid: int, profile: dict, *, offer: bool = False
+) -> None:
+    lang = ui_lang(profile)
+    text = (
+        ob.ob_text(
+            "trial_expired_offer",
+            lang,
+            name=str(profile.get("name") or "").strip() or ob._friend_word(lang),
+        )
+        if offer
+        else _subscription_paywall_text(profile, lang)
+    )
+    await bot.send_message(
+        chat_id=cid,
+        text=text,
+        reply_markup=_subscription_offer_keyboard(cid, lang),
+    )
+
+
+async def _run_trial_expiry_offer(
+    bot,
+    cid: int,
+    profile: dict,
+    today: date,
+    user_profiles: dict[str, dict],
+) -> None:
+    if _profile_has_daily_access(profile, today):
+        return
+    start_raw = _trial_start_raw(profile)
+    if not start_raw:
+        return
+    days = _days_since_trial_start(profile, today)
+    if days != TRIAL_DAYS:
+        return
+    flag_key = f"trial_offer_{start_raw}"
+    if db_store.cycle_flag_sent(profile, flag_key):
+        return
+    try:
+        await _send_subscription_paywall(bot, cid, profile, offer=True)
+        updated = db_store.mark_cycle_flag(cid, flag_key)
+        user_profiles[str(cid)] = updated
+        log.info("trial_expired_offer sent cid=%s start=%s", cid, start_raw)
+    except Exception as e:
+        log.warning("trial_expired_offer failed cid=%s: %s", cid, e)
+
+
+async def _reply_subscription_paywall_if_needed(
+    update: Update, cid: int, profile: dict
+) -> bool:
+    """Block chat when trial ended and no active subscription."""
+    if onboarding.get(cid) is not None:
+        return False
+    if not isinstance(profile, dict):
+        return False
+    today = _profile_local_date(profile)
+    if _profile_has_daily_access(profile, today):
+        return False
+    msg = update.message or update.effective_message
+    if not msg:
+        return False
+    lang = ui_lang(profile)
+    await _bot_reply(
+        msg,
+        _subscription_paywall_text(profile, lang),
+        reply_markup=_subscription_offer_keyboard(cid, lang),
+    )
+    return True
 
 
 async def send_subscription_invoice(user_id: int, plan: str, bot) -> None:
@@ -2663,7 +2797,18 @@ async def successful_payment_handler(
     lang = ui_lang(updated)
     await msg.reply_text(
         ob.ob_text("subscription_activated", lang, end_date=end_date),
-        reply_markup=_webapp_keyboard(cid, lang),
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        ob.ob_text("subscription_view_btn", lang),
+                        web_app=WebAppInfo(
+                            url=_subscription_miniapp_url(cid, lang)
+                        ),
+                    )
+                ]
+            ]
+        ),
     )
 
 
@@ -2690,8 +2835,7 @@ async def _run_subscription_maintenance(
                 profile["is_premium"] = False
                 user_profiles[str(cid)] = profile
                 if not db_store.cycle_flag_sent(profile, f"sub_expired_{end_raw}"):
-                    renew_url = ob.mini_app_webapp_url(_mini_app_url(), cid, lang)
-                    renew_url = f"{renew_url}&tab=subscription"
+                    renew_url = _subscription_miniapp_url(cid, lang)
                     try:
                         await bot.send_message(
                             chat_id=cid,
@@ -3051,6 +3195,20 @@ async def handle_task_completion_callback(
 
     prof = user_profiles.get(str(cid)) or db_store.get_profile(cid) or {}
     if not isinstance(prof, dict):
+        return
+
+    today = _profile_local_date(prof)
+    if not _profile_has_daily_access(prof, today) and not onboarding.get(cid):
+        lang = ui_lang(prof)
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await context.bot.send_message(
+            chat_id=cid,
+            text=_subscription_paywall_text(prof, lang),
+            reply_markup=_subscription_offer_keyboard(cid, lang),
+        )
         return
 
     _apply_task_outcome_to_profile(cid, prof, outcome, telegram_id=str(cid))
@@ -4356,6 +4514,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if isinstance(prof_touch, dict):
             _touch_user_message_date(cid, prof_touch)
 
+    prof_access = prof_d or user_profiles.get(str(cid)) or db_store.get_profile(cid)
+    if isinstance(prof_access, dict):
+        user_profiles[str(cid)] = prof_access
+        if await _reply_subscription_paywall_if_needed(update, cid, prof_access):
+            return
+
     model_chain: list[str] = context.bot_data.get("claude_model_names") or []
 
     morning_state = pending_morning.get(cid)
@@ -4635,10 +4799,13 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _bot_reply(msg, ob.get_greeting_new(lang))
         return
 
-    prof_photo = user_profiles.get(str(cid))
+    prof_photo = user_profiles.get(str(cid)) or db_store.get_profile(cid)
     if isinstance(prof_photo, dict):
+        user_profiles[str(cid)] = prof_photo
         _touch_streak_for_activity(cid, prof_photo)
         _touch_user_message_date(cid, prof_photo)
+        if await _reply_subscription_paywall_if_needed(update, cid, prof_photo):
+            return
 
     model_names: list[str] = context.bot_data["claude_model_names"]
     photo_lang = ui_lang(prof_photo if isinstance(prof_photo, dict) else None)
@@ -4695,6 +4862,11 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             ui_text("onboard_text_only_voice", lang=voice_lang),
         )
         return
+    if isinstance(prof_voice, dict):
+        if await _reply_subscription_paywall_if_needed(
+            update, cid, prof_voice
+        ):
+            return
     await _bot_reply(
         update.effective_message,
         ui_text("voice_not_supported", lang=voice_lang),
@@ -6062,6 +6234,10 @@ async def _bootstrap_bot() -> None:
 
                 today_date = now_local.date()
                 await _run_subscription_maintenance(
+                    bot, cid, profile, today_date, user_profiles
+                )
+                profile = user_profiles.get(key) or profile
+                await _run_trial_expiry_offer(
                     bot, cid, profile, today_date, user_profiles
                 )
                 profile = user_profiles.get(key) or profile

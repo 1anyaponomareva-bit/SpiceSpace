@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "stars-subscription-i18n-v34"
+BOT_BUILD = "subscription-status-v36"
 
 OB_RETURNING = 0
 OB_NAME = 1
@@ -387,7 +387,9 @@ STRINGS: dict[str, dict[str, str]] = {
     "reengagement_claude_user": "Напиши сообщение.",
     "reengagement_claude_user_named": "Имя пользователя: {name}",
     "subscription_activated": (
-        "Подписка активирована ✨\n\nСпейс с тобой до {end_date}. Продолжаем!"
+        "Подписка активирована ✨\n\n"
+        "Спейс с тобой до {end_date}.\n\n"
+        "В мини-апп → «Подписка» — там видно, до какого числа всё активно 💚"
     ),
     "subscription_expired": (
         "{name}, подписка закончилась 🌙\n\n"
@@ -403,6 +405,17 @@ STRINGS: dict[str, dict[str, str]] = {
     "subscription_checkout_invalid": (
         "Неизвестный тариф. Выбери план в мини-приложении."
     ),
+    "trial_expired_offer": (
+        "{name}, 3 бесплатных дня прошли 🌙\n\n"
+        "Утренние и вечерние сообщения на паузе. "
+        "Оформи подписку — и продолжим."
+    ),
+    "subscription_paywall": (
+        "{name}, для общения со мной нужна подписка 🌙\n\n"
+        "Бесплатный период закончился — выбери тариф в мини-апп."
+    ),
+    "subscription_subscribe_btn": "💳 Оформить подписку",
+    "subscription_view_btn": "💳 Моя подписка",
     },
     "en": {
     "greeting": GREETING_NEW_EN,
@@ -601,7 +614,9 @@ STRINGS: dict[str, dict[str, str]] = {
     "reengagement_claude_user": "Write the message.",
     "reengagement_claude_user_named": "User name: {name}",
     "subscription_activated": (
-        "Subscription activated ✨\n\nSpace is with you until {end_date}. Let's go!"
+        "Subscription activated ✨\n\n"
+        "Space is with you until {end_date}.\n\n"
+        "In the mini app → «Subscription» — you'll see how long it's active 💚"
     ),
     "subscription_expired": (
         "{name}, your subscription ended 🌙\n\n"
@@ -617,6 +632,17 @@ STRINGS: dict[str, dict[str, str]] = {
     "subscription_checkout_invalid": (
         "Unknown plan. Pick a plan in the mini app."
     ),
+    "trial_expired_offer": (
+        "{name}, your 3 free days are up 🌙\n\n"
+        "Morning and evening messages are paused. "
+        "Subscribe to keep going."
+    ),
+    "subscription_paywall": (
+        "{name}, you need a subscription to chat with me 🌙\n\n"
+        "Your free trial has ended — pick a plan in the mini app."
+    ),
+    "subscription_subscribe_btn": "💳 Subscribe",
+    "subscription_view_btn": "💳 My subscription",
     },
 }
 
