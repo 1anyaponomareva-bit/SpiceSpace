@@ -194,6 +194,8 @@
     const editNameBtn = document.getElementById('edit-name-btn');
     if (editNameBtn) editNameBtn.setAttribute('aria-label', t('edit_name'));
 
+    setText('#btn-change-12w', 'change_goal_12w');
+    setText('#btn-change-weekly', 'change_goal_weekly');
     setText('#btn-reset', 'settings_reset');
     setText('#btn-subscription', 'settings_subscription');
     setText('#btn-stop', 'settings_stop');
@@ -246,6 +248,141 @@
     }
     setText('#edit-times-cancel', 'cancel');
     setText('#edit-times-save', 'save');
+    applySubscriptionI18n();
+  }
+
+  function applySubscriptionI18n() {
+    document.querySelectorAll('#screen-subscription [data-i18n]').forEach((el) => {
+      const key = el.getAttribute('data-i18n');
+      if (key) el.textContent = t(key);
+    });
+    const back = document.getElementById('sub-back');
+    if (back) back.textContent = t('sub_back');
+    renderSubscriptionStatus(profile);
+  }
+
+  function formatSubDaysLeft(days, dateIso) {
+    return t('sub_days_left')
+      .replace('{days}', String(days))
+      .replace('{daysLabel}', pluralizeDays(days));
+  }
+
+  function formatSubDate(iso) {
+    const d = parseISODate(iso);
+    const lang = window.userLang || 'en';
+    if (lang === 'en') {
+      return `${MONTHS_EN[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+    }
+    return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+  }
+
+  function profilePremiumActive(prof) {
+    if (!prof?.subscription_end || !isPremiumActive(prof)) return false;
+    const premium = prof.is_premium;
+    if (premium === false || premium === 0 || premium === '0') return false;
+    if (typeof premium === 'string' && premium.toLowerCase() === 'false') return false;
+    return true;
+  }
+
+  function isPremiumActive(prof) {
+    if (!prof?.subscription_end) return false;
+    const end = parseISODate(prof.subscription_end);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    end.setHours(0, 0, 0, 0);
+    return end >= today;
+  }
+
+  function renderSubscriptionStatus(prof) {
+    const statusEl = document.getElementById('sub-status');
+    const daysEl = document.getElementById('sub-days');
+    const plansEl = document.getElementById('subscription-plans');
+    if (!statusEl || !daysEl) return;
+    if (profilePremiumActive(prof)) {
+      const endLabel = formatSubDate(prof.subscription_end);
+      const end = parseISODate(prof.subscription_end);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      end.setHours(0, 0, 0, 0);
+      const days = Math.ceil((end - today) / (1000 * 60 * 60 * 24));
+      statusEl.textContent = t('sub_active_until').replace('{date}', endLabel);
+      statusEl.classList.add('sub-status--active');
+      daysEl.textContent = formatSubDaysLeft(days, prof.subscription_end);
+      if (plansEl) plansEl.hidden = false;
+    } else {
+      statusEl.textContent = t('sub_inactive');
+      statusEl.classList.remove('sub-status--active');
+      daysEl.textContent = '';
+      if (plansEl) plansEl.hidden = false;
+    }
+  }
+
+  async function openSubscriptionScreen() {
+    const screen = document.getElementById('screen-subscription');
+    const home = document.getElementById('screen-home');
+    const cal = document.getElementById('screen-calendar');
+    if (home) {
+      home.hidden = true;
+      home.classList.remove('screen--active');
+    }
+    if (cal) {
+      cal.hidden = true;
+      cal.classList.remove('screen--active');
+    }
+    if (screen) {
+      screen.hidden = false;
+      screen.classList.add('screen--active');
+    }
+    const tabBar = document.getElementById('tab-bar');
+    if (tabBar) tabBar.hidden = true;
+    await loadProfile({ skipRender: true });
+    applySubscriptionI18n();
+    renderSubscriptionStatus(profile);
+    haptic('light');
+  }
+
+  function closeSubscriptionScreen() {
+    const screen = document.getElementById('screen-subscription');
+    if (screen) {
+      screen.hidden = true;
+      screen.classList.remove('screen--active');
+    }
+    const tabBar = document.getElementById('tab-bar');
+    if (tabBar) tabBar.hidden = false;
+    switchTab(activeTab || 'home');
+  }
+
+  function bindSubscription() {
+    document.getElementById('btn-subscription')?.addEventListener('click', () => {
+      openSubscriptionScreen();
+    });
+    document.getElementById('sub-back')?.addEventListener('click', () => {
+      closeSubscriptionScreen();
+    });
+    document.getElementById('subscription-plans')?.addEventListener('click', async (e) => {
+      const card = e.target.closest('.plan-card');
+      if (!card) return;
+      const plan = card.getAttribute('data-plan');
+      if (!plan) return;
+      haptic('medium');
+      card.style.opacity = '0.6';
+      try {
+        const res = await apiFetch('/api/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ plan }),
+        });
+        if (!res.ok) {
+          alert(t('sub_invoice_error'));
+          return;
+        }
+        if (tg) tg.close();
+      } catch (_) {
+        alert(t('sub_invoice_error'));
+      } finally {
+        card.style.opacity = '';
+      }
+    });
   }
 
   function applyLanguageFromProfile(prof) {
@@ -258,6 +395,8 @@
     }
     document.documentElement.lang = window.userLang;
     applyStaticI18n();
+    applyGreeting();
+    if (window.SpiceFortune?.applyI18n) window.SpiceFortune.applyI18n();
   }
 
   function syncLanguageCode() {
@@ -280,6 +419,13 @@
   function setCanEditName(enabled) {
     const btn = document.getElementById('edit-name-btn');
     if (btn) btn.hidden = !enabled;
+  }
+
+  function setGoalActionsVisible(visible) {
+    ['btn-change-12w', 'btn-change-weekly'].forEach((id) => {
+      const btn = document.getElementById(id);
+      if (btn) btn.hidden = !visible;
+    });
   }
 
   function setCanEditTimes(enabled) {
@@ -433,6 +579,33 @@
     window.open(link, '_blank');
   }
 
+  async function startGoalChange(mode) {
+    const path = mode === 'weekly' ? '/api/profile/change-weekly' : '/api/profile/change-12w';
+    const btn = mode === 'weekly'
+      ? document.getElementById('btn-change-weekly')
+      : document.getElementById('btn-change-12w');
+    if (btn) btn.disabled = true;
+    try {
+      const resp = await apiFetch(path, { method: 'POST' });
+      if (!resp.ok) {
+        alert(t('save_failed') || 'Could not start. Try again.');
+        return;
+      }
+      haptic('light');
+      openBotChat(mode === 'weekly' ? 'change_weekly' : 'change_12w');
+      if (tg?.close) {
+        setTimeout(() => {
+          try { tg.close(); } catch (_) {}
+        }, 400);
+      }
+    } catch (e) {
+      console.error('startGoalChange failed:', e);
+      alert(t('save_failed') || 'Could not start. Try again.');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   function showSyncBanner(messageKey) {
     const el = document.getElementById('sync-banner');
     const textEl = el?.querySelector('.sync-banner__text');
@@ -496,7 +669,17 @@
       cal.classList.toggle('screen--active', tab === 'calendar');
       cal.hidden = tab !== 'calendar';
     }
-    if (tab === 'calendar') renderCalendar();
+    if (tab === 'calendar') {
+      fetchCalendar().then((data) => {
+        if (data) {
+          calendarData = data;
+          if (profile && data.weekly_score != null) profile.weekly_score = data.weekly_score;
+          renderCalendar(data);
+        } else {
+          renderCalendar();
+        }
+      });
+    }
     haptic('light');
   }
 
@@ -511,9 +694,20 @@
     if (day.task_completed === 'true') return 'done';
     if (day.task_completed === 'false') return 'missed';
     if (day.task_completed === 'partial') return 'partial';
-    if (day.is_today) return 'today';
     if (day.is_future) return 'future';
+    if (day.is_recap_day) return 'recap';
+    if (day.is_today) return 'today';
     return 'no-data';
+  }
+
+  function cycleDayStatus(d) {
+    if (d.task_completed === 'true') return 'done';
+    if (d.task_completed === 'false') return 'missed';
+    if (d.task_completed === 'partial') return 'partial';
+    if (d.is_future) return 'future';
+    if (d.is_recap_day && !d.task_completed) return 'recap';
+    if (d.is_today) return 'today';
+    return 'empty';
   }
 
   function isTaskCompletedStrict(prof) {
@@ -599,6 +793,7 @@
     tasks = [];
     setCanEditName(false);
     setCanEditTimes(false);
+    setGoalActionsVisible(false);
     if (status === 401 || status === 503) {
       showSyncBanner('err_auth');
     } else {
@@ -727,7 +922,21 @@
 
   function renderWeekCard(prof) {
     const week = Number(prof.current_week || 1);
-    const pct = Math.max(0, Math.min(100, Number(prof.weekly_score || 0)));
+    let pct = Math.max(0, Math.min(100, Number(prof.weekly_score || 0)));
+    const cycle = Array.isArray(prof?.week_cycle_days) ? prof.week_cycle_days : null;
+    if (cycle && cycle.length === 7) {
+      const full = 100 / 7;
+      const half = full / 2;
+      pct = Math.round(
+        cycle.reduce((sum, d) => {
+          if (d.is_recap_day) return sum;
+          if (d.task_completed === 'true') return sum + full;
+          if (d.task_completed === 'partial') return sum + half;
+          return sum;
+        }, 0),
+      );
+      pct = Math.max(0, Math.min(100, pct));
+    }
 
     document.getElementById('week-badge').textContent = weekBadgeText(week);
     document.getElementById('week-goal').textContent = weeklyGoalText(prof);
@@ -812,9 +1021,8 @@
 
   function renderStreak(prof) {
     const p = prof || profile;
-    const weekDay = Math.min(7, Math.max(1, weekDayFromProfile(p)));
     const totalDays = Math.max(1, Number(p?.program_day) || programDayFromProfile(p));
-    const total = 7;
+    const cycle = Array.isArray(p?.week_cycle_days) ? p.week_cycle_days : null;
     const streakCount = document.getElementById('streak-count');
     if (streakCount) {
       streakCount.textContent = totalDays > 0
@@ -825,7 +1033,38 @@
     const container = document.querySelector('.streak-circles');
     if (!container) return;
     container.innerHTML = '';
-    for (let i = 0; i < total; i++) {
+
+    if (cycle && cycle.length === 7) {
+      const weekDay = Math.min(7, Math.max(1, weekDayFromProfile(p)));
+      cycle.forEach((d, i) => {
+        const dayNum = i + 1;
+        const status = cycleDayStatus(d);
+        const wrap = document.createElement('div');
+        wrap.className = 'streak-day-wrap';
+        if (d.is_future || dayNum > weekDay) {
+          wrap.innerHTML = '<div class="streak-day empty"></div>';
+        } else {
+          const todayCls = d.is_today ? ' is-today' : '';
+          const statusCls = status === 'done'
+            ? ' done'
+            : status === 'partial'
+              ? ' partial'
+              : status === 'missed'
+                ? ' missed-day'
+                : '';
+          wrap.innerHTML = (
+            `<div class="streak-day active${todayCls}${statusCls}" title="${escapeHtml(d.date || '')}">` +
+            `<img src="./spicespace-logo.jpg" alt="✦" class="streak-logo-icon"/>` +
+            `</div>`
+          );
+        }
+        container.appendChild(wrap);
+      });
+      return;
+    }
+
+    const weekDay = Math.min(7, Math.max(1, weekDayFromProfile(p)));
+    for (let i = 0; i < 7; i++) {
       const wrap = document.createElement('div');
       wrap.className = 'streak-day-wrap';
       if (i < weekDay) {
@@ -1217,9 +1456,14 @@
       if (tg) tg.close();
     });
 
-    document.getElementById('btn-subscription')?.addEventListener('click', () => {
-      alert(t('subscription_soon'));
+    document.getElementById('btn-change-12w')?.addEventListener('click', () => {
+      startGoalChange('12w');
     });
+    document.getElementById('btn-change-weekly')?.addEventListener('click', () => {
+      startGoalChange('weekly');
+    });
+
+    bindSubscription();
 
     document.getElementById('btn-stop')?.addEventListener('click', async () => {
       await apiFetch('/api/profile/stop', { method: 'POST' });
@@ -1229,7 +1473,6 @@
   }
 
   async function start() {
-    applyStaticI18n();
     initTelegram();
     BACKEND_TELEGRAM_ID = getTelegramId();
     bindEvents();
@@ -1238,7 +1481,16 @@
 
     const tgUser = tg?.initDataUnsafe?.user || null;
 
+    function applyFallbackI18n() {
+      if (typeof window.resolveUserLang === 'function') {
+        window.userLang = window.resolveUserLang();
+      }
+      applyStaticI18n();
+      applyGreeting();
+    }
+
     if (!BACKEND_URL) {
+      applyFallbackI18n();
       document.getElementById('screen-home').hidden = false;
       return;
     }
@@ -1246,6 +1498,7 @@
     const result = await loadProfile();
 
     if (!result.ok) {
+      applyFallbackI18n();
       showSyncBanner();
       showMain();
       return;
@@ -1261,6 +1514,7 @@
     hideSyncBanner();
     setCanEditTimes(true);
     setCanEditName(true);
+    setGoalActionsVisible(profileHasGoals(profile));
     renderTimes(profile);
     paintMainScreenTimes(profileMorningTime(profile), profileEveningTime(profile));
     calendarData = await fetchCalendar();
@@ -1272,6 +1526,9 @@
     document.querySelector('.settings-block')?.classList.add('loaded');
     if (window.SpiceFortune?.tryShow) {
       await window.SpiceFortune.tryShow();
+    }
+    if (new URLSearchParams(window.location.search).get('tab') === 'subscription') {
+      openSubscriptionScreen();
     }
   }
 

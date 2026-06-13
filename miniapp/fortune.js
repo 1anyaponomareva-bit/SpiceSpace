@@ -11,6 +11,8 @@
     .replace(/\/+$/, '');
 
   const FORTUNE_TEST_IDS = new Set(['8412438788']);
+  const FORTUNE_SIGNATURE =
+    'сохрани это предсказание что бы увидеть что я была права';
 
   const SPARK_OFFSETS = [
     [-118, -82],
@@ -21,14 +23,6 @@
     [96, 92],
     [-44, -126],
     [42, -132],
-    [-178, -48],
-    [176, -38],
-    [-30, 132],
-    [32, 126],
-    [-132, 58],
-    [132, 60],
-    [-70, -58],
-    [72, -54],
   ];
 
   let opened = false;
@@ -100,13 +94,24 @@
   function ensureSparks(overlay) {
     if (sparksReady) return;
     sparksReady = true;
+    const stage = overlay.querySelector('.fortune-stage');
+    if (!stage) return;
     for (const [x, y] of SPARK_OFFSETS) {
       const s = document.createElement('span');
       s.className = 'spark';
       s.style.setProperty('--x', `${x}px`);
       s.style.setProperty('--y', `${y}px`);
-      overlay.appendChild(s);
+      stage.appendChild(s);
     }
+  }
+
+  function preloadBrokenCookie(overlay) {
+    const img = overlay.querySelector('.cookie-broken');
+    if (!img || img.dataset.loaded === '1') return;
+    const src = img.getAttribute('data-src') || img.getAttribute('src');
+    if (!src) return;
+    img.src = src;
+    img.dataset.loaded = '1';
   }
 
   function hideOverlay(overlay) {
@@ -121,39 +126,170 @@
     overlay.hidden = false;
     overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('fortune-open');
+    preloadBrokenCookie(overlay);
     if (tg?.ready) tg.ready();
     if (tg?.expand) tg.expand();
   }
 
   function setFortuneText(data) {
     const textEl = document.getElementById('fortune-text');
-    const subEl = document.getElementById('fortune-sub');
+    const sigEl = document.getElementById('fortune-signature');
     if (textEl && data?.text) textEl.textContent = data.text;
-    if (subEl && data?.sub) subEl.textContent = data.sub;
+    if (sigEl) sigEl.textContent = FORTUNE_SIGNATURE;
+  }
+
+  function wrapCanvasLines(ctx, text, x, y, maxWidth, lineHeight) {
+    const words = String(text || '').split(/\s+/).filter(Boolean);
+    let line = '';
+    let cy = y;
+    for (let i = 0; i < words.length; i += 1) {
+      const test = line ? `${line} ${words[i]}` : words[i];
+      if (ctx.measureText(test).width > maxWidth && line) {
+        ctx.fillText(line, x, cy);
+        line = words[i];
+        cy += lineHeight;
+      } else {
+        line = test;
+      }
+    }
+    if (line) ctx.fillText(line, x, cy);
+    return cy;
+  }
+
+  function renderFortuneImage(text, signature) {
+    const W = 900;
+    const pad = 56;
+    const innerW = W - pad * 2;
+    const measure = document.createElement('canvas').getContext('2d');
+    if (!measure) return null;
+    measure.font = '400 34px Inter, system-ui, sans-serif';
+    const words = String(text || '').split(/\s+/).filter(Boolean);
+    const lines = [];
+    let line = '';
+    for (const word of words) {
+      const test = line ? `${line} ${word}` : word;
+      if (measure.measureText(test).width > innerW && line) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = test;
+      }
+    }
+    if (line) lines.push(line);
+
+    const sigLines = [];
+    measure.font = 'italic 26px Inter, system-ui, sans-serif';
+    const sigWords = String(signature || '').split(/\s+/).filter(Boolean);
+    line = '';
+    for (const word of sigWords) {
+      const test = line ? `${line} ${word}` : word;
+      if (measure.measureText(test).width > innerW && line) {
+        sigLines.push(line);
+        line = word;
+      } else {
+        line = test;
+      }
+    }
+    if (line) sigLines.push(line);
+
+    const bodyH = 52 + lines.length * 46 + 36 + sigLines.length * 34 + 48;
+    const H = Math.max(640, bodyH + pad * 2);
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.fillStyle = '#faf6ee';
+    ctx.fillRect(0, 0, W, H);
+
+    const px = pad;
+    const py = pad;
+    const pw = W - pad * 2;
+    const ph = H - pad * 2;
+    ctx.fillStyle = '#f3ebdc';
+    ctx.fillRect(px + 6, py + 8, pw, ph);
+    ctx.fillStyle = '#faf6ee';
+    ctx.fillRect(px, py, pw, ph);
+
+    ctx.fillStyle = '#7a5c31';
+    ctx.font = '700 20px Unbounded, Inter, system-ui, sans-serif';
+    ctx.fillText('FORTUNE COOKIE', px + 28, py + 44);
+
+    ctx.fillStyle = '#191919';
+    ctx.font = '400 34px Inter, system-ui, sans-serif';
+    let cy = py + 96;
+    for (const ln of lines) {
+      ctx.fillText(ln, px + 28, cy);
+      cy += 46;
+    }
+
+    cy += 10;
+    ctx.strokeStyle = 'rgba(25, 25, 25, 0.12)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px + 28, cy);
+    ctx.lineTo(px + pw - 28, cy);
+    ctx.stroke();
+    cy += 36;
+
+    ctx.fillStyle = 'rgba(25, 25, 25, 0.58)';
+    ctx.font = 'italic 26px Inter, system-ui, sans-serif';
+    for (const ln of sigLines) {
+      ctx.fillText(ln, px + 28, cy);
+      cy += 34;
+    }
+
+    return canvas;
+  }
+
+  function triggerDownload(canvas) {
+    return new Promise((resolve) => {
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            resolve(false);
+            return;
+          }
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.download = `spicespace-fortune-${localISODate()}.png`;
+          link.href = url;
+          link.rel = 'noopener';
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 3000);
+          resolve(true);
+        },
+        'image/png',
+        0.92,
+      );
+    });
   }
 
   async function downloadPaper() {
-    const paper = document.getElementById('fortune-paper');
-    if (!paper || typeof html2canvas !== 'function') return;
+    const text = document.getElementById('fortune-text')?.textContent?.trim() || '';
+    const signature =
+      document.getElementById('fortune-signature')?.textContent?.trim() ||
+      FORTUNE_SIGNATURE;
+    const btn = document.getElementById('fortune-btn-save');
+    if (btn) btn.disabled = true;
     try {
-      const canvas = await html2canvas(paper, {
-        backgroundColor: '#faf6ee',
-        scale: 2,
-        useCORS: true,
-      });
-      const link = document.createElement('a');
-      link.download = `spicespace-fortune-${localISODate()}.png`;
-      link.href = canvas.toDataURL('image/png');
-      link.click();
-    } catch (_) {}
+      const canvas = renderFortuneImage(text, signature);
+      if (!canvas) return;
+      await triggerDownload(canvas);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   function bindOverlay(overlay) {
-    const cookie = document.getElementById('fortune-cookie');
+    const hit = document.getElementById('fortune-cookie-hit');
     const btnGo = document.getElementById('fortune-btn-go');
     const btnSave = document.getElementById('fortune-btn-save');
 
-    cookie?.addEventListener('click', () => {
+    hit?.addEventListener('click', () => {
       if (opened) return;
       opened = true;
       overlay.classList.add('opened');
@@ -185,7 +321,6 @@
     if (!data?.text) {
       data = {
         text: 'Скоро твоя цель станет ближе — если сделаешь один честный шаг на этой неделе.',
-        sub: 'Сохрани записку и сверься с ней через пару дней.',
       };
     }
 

@@ -236,6 +236,7 @@ body.tg-app { background: var(--bg); }
   border: 2px solid #D4F26B;
 }
 .day-dot.future { background: #E0E0E0; }
+.day-dot.recap { background: #E8E4F0; border: 2px solid #C8BFD8; }
 .day-dot.no-data { background: #F5F5F5; }
 .calendar-legend {
   display: flex;
@@ -558,6 +559,27 @@ body.tg-app { background: var(--bg); }
   border: 1.5px solid #1e1e1e;
 }
 
+.streak-day.active.done {
+  border-color: rgba(212, 242, 107, 0.85);
+  box-shadow: 0 0 12px rgba(212, 242, 107, 0.35);
+}
+
+.streak-day.active.partial {
+  border-color: rgba(212, 242, 107, 0.45);
+  background: linear-gradient(135deg, #161616 50%, #2a2a18 50%);
+}
+
+.streak-day.active.missed-day {
+  border-color: rgba(120, 120, 120, 0.55);
+  box-shadow: none;
+  animation: none;
+}
+
+.streak-day.missed {
+  background: #1A1A1A;
+  border: 1.5px solid #1A1A1A;
+}
+
 @keyframes starGlow {
   0%, 100% {
     box-shadow: 0 0 8px rgba(212, 242, 107, 0.15);
@@ -648,8 +670,14 @@ body.tg-app { background: var(--bg); }
   transition: opacity 0.3s;
 }
 
+.settings-btn[hidden],
 .settings-btn--fortune-test[hidden] {
   display: none !important;
+}
+
+.settings-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .settings-block.loaded {
@@ -672,6 +700,102 @@ body.tg-app { background: var(--bg); }
 
 .settings-btn.danger {
   color: #999;
+}
+
+.subscription-screen {
+  gap: 20px;
+  padding-bottom: calc(16px + var(--safe-bottom));
+}
+
+.subscription-header {
+  text-align: center;
+  padding: 8px 0 4px;
+}
+
+.sub-status {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--dark);
+}
+
+.sub-status--active {
+  color: #2d6a4f;
+}
+
+.sub-days {
+  margin-top: 8px;
+  font-size: 14px;
+  color: #666;
+  min-height: 1.2em;
+}
+
+.plans {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.plan-card {
+  position: relative;
+  background: #fff;
+  border: 1.5px solid #E8E6E0;
+  border-radius: 16px;
+  padding: 18px 16px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.plan-card:active {
+  transform: scale(0.99);
+}
+
+.plan-card.popular {
+  border-color: #C4A882;
+  box-shadow: 0 4px 16px rgba(196, 168, 130, 0.2);
+}
+
+.plan-badge {
+  position: absolute;
+  top: -10px;
+  right: 14px;
+  background: #C4A882;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.plan-name {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--dark);
+  margin-bottom: 6px;
+}
+
+.plan-price {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--dark);
+}
+
+.plan-note {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #888;
+}
+
+.back-btn {
+  width: 100%;
+  margin-top: 8px;
+  background: transparent;
+  border: none;
+  font-family: 'Inter', sans-serif;
+  font-size: 15px;
+  font-weight: 500;
+  color: #888;
+  padding: 12px;
+  cursor: pointer;
 }
 
 .edit-name-sheet {

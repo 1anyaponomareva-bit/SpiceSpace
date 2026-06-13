@@ -15,6 +15,8 @@ const translations = {
     morning_time: 'УТРО',
     evening_time: 'ВЕЧЕР',
     change_btn: 'Изменить',
+    change_goal_12w: 'Изменить цель на 12 недель',
+    change_goal_weekly: 'Изменить цель на 1 неделю',
     tab_home: 'Главная',
     tab_progress: 'Прогресс',
     weeks_12: '12 недель',
@@ -60,6 +62,19 @@ const translations = {
     settings_stop: '🔕 Остановить бота',
     confirm_reset: 'Сбросить всю память бота? Это удалит твой профиль и историю.',
     subscription_soon: 'Подписка скоро будет доступна 💳',
+    sub_inactive: 'Подписка не активна',
+    sub_active: '✅ Подписка активна',
+    sub_active_until: '✅ Подписка доступна до {date}',
+    sub_days_left: 'Осталось {days} {daysLabel}',
+    sub_plan_4w: '4 недели',
+    sub_plan_4w_note: '~$20',
+    sub_plan_12w: '12 недель',
+    sub_plan_12w_note: '~$45 · экономия $15',
+    sub_plan_24w: '24 недели',
+    sub_plan_24w_note: '~$75 · экономия $45',
+    sub_popular: 'Популярный',
+    sub_back: '← Назад',
+    sub_invoice_error: 'Не удалось открыть оплату. Попробуй ещё раз.',
     bot_stopped: 'Бот остановлен. Напиши /start чтобы возобновить.',
     demo_name: 'Привет! 👋',
     demo_goal: 'Открой через бота чтобы увидеть свои цели',
@@ -69,6 +84,14 @@ const translations = {
     incomplete_text:
       'В боте нажми /start, затем напиши «заново» — или кнопку ниже. Цели из Supabase подтянутся после настройки.',
     incomplete_btn: 'Настроить цели в боте',
+    fortune_title_html: 'Твоё предсказание<br>на сегодня',
+    fortune_tap: 'нажми',
+    fortune_open_aria: 'Открыть печеньку',
+    fortune_signature: 'сохрани это предсказание что бы увидеть что я была права',
+    fortune_btn_save: 'Скачать картинку',
+    fortune_btn_go: 'Погнали дальше →',
+    fortune_fallback: 'Скоро твоя цель станет ближе — если сделаешь один честный шаг на этой неделе.',
+    fortune_test_btn: '🥠 Тест печеньки',
   },
   en: {
     greeting_morning: 'Good morning,',
@@ -86,6 +109,8 @@ const translations = {
     morning_time: 'MORNING',
     evening_time: 'EVENING',
     change_btn: 'Change',
+    change_goal_12w: 'Change 12-week goal',
+    change_goal_weekly: 'Change this week\'s goal',
     tab_home: 'Home',
     tab_progress: 'Progress',
     weeks_12: '12 weeks',
@@ -131,6 +156,19 @@ const translations = {
     settings_stop: '🔕 Stop bot',
     confirm_reset: 'Reset all bot memory? This will delete your profile and history.',
     subscription_soon: 'Subscription coming soon 💳',
+    sub_inactive: 'No active subscription',
+    sub_active: '✅ Subscription active',
+    sub_active_until: '✅ Subscription active until {date}',
+    sub_days_left: '{days} {daysLabel} left',
+    sub_plan_4w: '4 weeks',
+    sub_plan_4w_note: '~$20',
+    sub_plan_12w: '12 weeks',
+    sub_plan_12w_note: '~$45 · save $15',
+    sub_plan_24w: '24 weeks',
+    sub_plan_24w_note: '~$75 · save $45',
+    sub_popular: 'Popular',
+    sub_back: '← Back',
+    sub_invoice_error: 'Could not open payment. Try again.',
     bot_stopped: 'Bot stopped. Send /start to resume.',
     demo_name: 'Hi! 👋',
     demo_goal: 'Open via the bot to see your goals',
@@ -140,23 +178,39 @@ const translations = {
     incomplete_text:
       'In the bot send /start, then type «start over» — or use the button below.',
     incomplete_btn: 'Set up goals in bot',
+    fortune_title_html: 'Your fortune<br>for today',
+    fortune_tap: 'tap',
+    fortune_open_aria: 'Open fortune cookie',
+    fortune_signature: 'save this fortune to see if I was right',
+    fortune_btn_save: 'Download image',
+    fortune_btn_go: "Let's go →",
+    fortune_fallback: 'Your goal gets closer soon — if you take one honest step this week.',
+    fortune_test_btn: '🥠 Test fortune cookie',
   },
 };
 
-const urlLang = new URLSearchParams(window.location.search).get('lang');
-const tgLang = window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code;
-const userLang = urlLang || (tgLang?.startsWith('ru') ? 'ru' : 'en');
+function resolveUserLang() {
+  const urlLang = new URLSearchParams(window.location.search).get('lang');
+  if (urlLang === 'ru' || urlLang === 'en') return urlLang;
+  const fromWindow = window.userLang;
+  if (fromWindow === 'ru' || fromWindow === 'en') return fromWindow;
+  const tgLang = window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code;
+  return tgLang?.startsWith('ru') ? 'ru' : 'en';
+}
 
 function t(key) {
-  return translations[userLang]?.[key] || translations.en[key] || key;
+  const lang = resolveUserLang();
+  return translations[lang]?.[key] || translations.en[key] || key;
 }
 
 function levelName(level) {
+  const lang = resolveUserLang();
   const key = level?.key ? `level_${level.key}` : '';
-  if (key && translations[userLang]?.[key]) return t(key);
+  if (key && translations[lang]?.[key]) return t(key);
   return level?.name || t('level_spark');
 }
 
 window.t = t;
-window.userLang = userLang;
+window.userLang = resolveUserLang();
 window.levelName = levelName;
+window.resolveUserLang = resolveUserLang;
