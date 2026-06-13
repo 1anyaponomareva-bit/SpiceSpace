@@ -1150,3 +1150,30 @@ body.tg-app { background: var(--bg); }
   .milestone-card .dot.current,
   .confetti-piece { animation-duration: 0.01ms; }
 }
+
+.welcome-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 80vh;
+  padding: 32px 24px;
+  text-align: center;
+}
+.welcome-emoji { font-size: 56px; margin-bottom: 16px; }
+.welcome-title {
+  font-size: 28px; font-weight: 700;
+  color: #2C2C2C; margin-bottom: 12px;
+}
+.welcome-desc {
+  font-size: 15px; color: #666;
+  line-height: 1.6; margin-bottom: 32px;
+}
+.welcome-btn {
+  background: #2C2C2C; color: #fff;
+  border: none; border-radius: 16px;
+  padding: 16px 32px; width: 100%;
+  font-size: 16px; font-weight: 600;
+  cursor: pointer; margin-bottom: 12px;
+}
+.welcome-trial { font-size: 12px; color: #bbb; }

@@ -618,7 +618,37 @@
     if (el) el.hidden = true;
   }
 
+  function showWelcomeScreen() {
+    hideSyncBanner();
+    document.getElementById('empty-state').hidden = true;
+    const home = document.getElementById('screen-home');
+    if (home) {
+      home.hidden = true;
+      home.classList.remove('screen--active');
+    }
+    const tabBar = document.getElementById('tab-bar');
+    if (tabBar) tabBar.hidden = true;
+    const cal = document.getElementById('screen-calendar');
+    if (cal) {
+      cal.hidden = true;
+      cal.classList.remove('screen--active');
+    }
+    const sub = document.getElementById('screen-subscription');
+    if (sub) {
+      sub.hidden = true;
+      sub.classList.remove('screen--active');
+    }
+    const welcome = document.getElementById('welcome-screen');
+    if (welcome) welcome.hidden = false;
+  }
+
+  function hideWelcomeScreen() {
+    const welcome = document.getElementById('welcome-screen');
+    if (welcome) welcome.hidden = true;
+  }
+
   function showMain() {
+    hideWelcomeScreen();
     document.getElementById('empty-state').hidden = true;
     const home = document.getElementById('screen-home');
     if (home) {
@@ -779,6 +809,10 @@
   /** API недоступен, но пользователь открыл из Telegram — не подменяем демо-целями. */
   function startLoadErrorMode(user, status) {
     console.log('startLoadErrorMode called', new Error().stack);
+    if (status === 401 || status === 404) {
+      showWelcomeScreen();
+      return;
+    }
     profile = {
       name: pickName(user, null),
       main_goal: '',
@@ -1431,6 +1465,15 @@
   function bindEvents() {
     document.getElementById('sync-banner-open')?.addEventListener('click', () => openBotChat('webapp'));
     document.getElementById('empty-open-bot')?.addEventListener('click', () => openBotChat('reonboard'));
+    document.getElementById('welcome-start-btn')?.addEventListener('click', () => {
+      const url = `https://t.me/${BOT_USERNAME}?start=onboarding`;
+      if (tg?.openTelegramLink) {
+        tg.openTelegramLink(url);
+      } else {
+        window.open(url, '_blank');
+      }
+      if (tg?.close) tg.close();
+    });
 
     document.querySelectorAll('.tab-bar__btn').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -1499,7 +1542,11 @@
 
     if (!result.ok) {
       applyFallbackI18n();
-      showSyncBanner();
+      if (result.status === 401 || result.status === 404) {
+        showWelcomeScreen();
+        return;
+      }
+      showSyncBanner('err_load');
       showMain();
       return;
     }
