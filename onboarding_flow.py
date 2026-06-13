@@ -8,7 +8,7 @@ import logging
 import os
 import re
 from datetime import date, datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
@@ -33,7 +33,22 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("coach_bot")
 
-BOT_BUILD = "subscription-status-v36"
+_flow_outgoing_prepare: Callable[[int, str], str] | None = None
+
+
+def register_flow_outgoing_prepare(fn: Callable[[int, str], str]) -> None:
+    global _flow_outgoing_prepare
+    _flow_outgoing_prepare = fn
+
+
+async def flow_reply_text(msg, text: str) -> None:
+    cid = msg.chat_id
+    out = text
+    if _flow_outgoing_prepare:
+        out = _flow_outgoing_prepare(cid, text)
+    await msg.reply_text(out)
+
+BOT_BUILD = "morning-flow-escape-v37"
 
 OB_RETURNING = 0
 OB_NAME = 1
@@ -2383,13 +2398,13 @@ async def handle_returning_choice(
 
     if looks_like_just_chat(raw):
         if not profile_onboarding_complete(prof):
-            await msg.reply_text(ob_text("returning_hint", lang))
+            await flow_reply_text(msg, ob_text("returning_hint", lang))
             return True
         onboarding.pop(cid, None)
         await msg.reply_text(ob_text("returning_just_chat", lang))
         return True
 
-    await msg.reply_text(ob_text("returning_hint", lang))
+    await flow_reply_text(msg, ob_text("returning_hint", lang))
     return True
 
 
@@ -2452,7 +2467,7 @@ async def handle_onboarding_turn(
             )
             await msg.reply_text(ob_text(key, lang))
             return
-        await msg.reply_text(ob_text("goal_confirm_yes_no", lang))
+        await flow_reply_text(msg, ob_text("goal_confirm_yes_no", lang))
         return
 
     if step == OB_WEEKLY_RECAP:
@@ -2542,7 +2557,7 @@ async def handle_onboarding_turn(
                     change_12w_adjust_opening(str(st.get("main_goal") or ""), lang)
                 )
                 return
-            await msg.reply_text(ob_text("change_12w_choice_hint", lang))
+            await flow_reply_text(msg, ob_text("change_12w_choice_hint", lang))
             return
         await msg.reply_text(ob_text("change_12w_broken", lang))
         return

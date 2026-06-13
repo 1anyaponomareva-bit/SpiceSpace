@@ -207,6 +207,11 @@ def sanitize_bot_reply(text: str) -> str:
 async def _bot_reply(
     message, text: str, *, reply_markup: InlineKeyboardMarkup | None = None
 ) -> None:
+    cid = message.chat.id
+    prof = user_profiles.get(str(cid)) or db_store.get_profile(cid) or {}
+    text = _prepare_bot_outgoing(
+        cid, text, prof if isinstance(prof, dict) else {}
+    )
     await message.reply_text(
         sanitize_bot_reply(text),
         reply_markup=reply_markup,
@@ -982,6 +987,24 @@ onboarding: dict[int, dict[str, object]] = {}
 last_reminder_task_id: dict[int, str] = {}
 # Ожидание текста задачи после «напомни в 20:00» без названия.
 pending_natural_reminder: dict[int, dict[str, object]] = {}
+flow_mismatch_streak: dict[int, int] = {}
+last_bot_outgoing_text: dict[int, str] = {}
+
+_FLOW_ESCAPE_EXACT = frozenset(
+    {
+        "нет",
+        "no",
+        "nope",
+        "стоп",
+        "stop",
+        "хватит",
+        "выход",
+        "exit",
+        "quit",
+        "отмена",
+        "cancel",
+    }
+)
 
 tasks_lock = threading.Lock()
 tasks_store: list[dict] = []
@@ -1967,98 +1990,30 @@ async def _morning_message_text(
 ) -> str:
     lang = str(profile.get("language_code") or "en")
     ru = lang.lower().startswith("ru")
-    today = _profile_local_date(profile)
-    today_summary = db_store.get_daily_summary(chat_id, today) or {}
-    preset_task = str(today_summary.get("task") or "").strip()
+    name = str(profile.get("name", "")).strip()
+    display_name = name or ("подруга" if ru else "friend")
 
-    if preset_task:
-        name = str(profile.get("name", "")).strip()
+    yesterday_date = _profile_local_date(profile) - timedelta(days=1)
+    yesterday = db_store.get_daily_summary(chat_id, yesterday_date) or {}
+    yesterday_task = str(yesterday.get("task") or "").strip()
+    yesterday_done = yesterday.get("completed") is True
+
+    if yesterday_task and not yesterday_done:
         if ru:
             return (
-                f"{name}, доброе утро 🌅\n\n"
-                f"Вчера ты сказала что сегодня: {preset_task}\n\n"
+                f"{display_name}, доброе утро 🌅\n\n"
+                f"Вчера ты говорила про: {yesterday_task}\n\n"
                 f"Всё в силе или хочешь поменять?"
             )
         return (
-            f"{name}, good morning 🌅\n\n"
-            f"Yesterday you said for today: {preset_task}\n\n"
+            f"{display_name}, good morning 🌅\n\n"
+            f"Yesterday you mentioned: {yesterday_task}\n\n"
             f"Still on track or want to change it?"
         )
 
-    tz_name = str(profile.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
-    yesterday_date = _profile_local_date(profile) - timedelta(days=1)
-    yesterday = db_store.get_daily_summary(chat_id, yesterday_date) or {}
-    yesterday_context = str(yesterday.get("summary") or "").strip()
-    name = str(profile.get("name", "")).strip()
-    display_name = name or ("подруга" if ru else "friend")
-    name_instruction = _exact_name_prompt_instruction(profile, chat_id)
-    na = "не указана" if ru else "not specified"
-    none_word = "нет" if ru else "none"
-    main_goal = str(
-        profile.get("main_goal") or profile.get("final_goal") or ""
-    ).strip() or na
-    vision = str(profile.get("vision") or "").strip() or na
-    weekly_goal = str(profile.get("weekly_goal") or "").strip() or main_goal
-    last_summary = (
-        yesterday_context or str(yesterday.get("key_detail") or "").strip() or none_word
-    )
-    time_per_day = _format_time_per_day_for_prompt(profile)
-    facts_block = _facts_block_for_prompt(chat_id)
-    personality_block = _personality_block_for_prompt(chat_id)
-    yctx_label = "Вчерашний контекст" if ru else "Yesterday's context"
-
-    user_content = (
-        f"{name_instruction}\n\n"
-        f"{yctx_label}:\n{yesterday_context or none_word}\n\n"
-        + morning_message_prompt(lang).format(
-            name=display_name,
-            vision=vision,
-            main_goal=main_goal,
-            weekly_goal=weekly_goal,
-            last_summary=last_summary,
-            time_per_day=time_per_day,
-            facts_block=facts_block,
-            personality_block=personality_block,
-        )
-    )
-
-    morning_body = _morning_personal_system(lang) + f"{name_instruction}"
-    for block in (facts_block, personality_block):
-        if block:
-            morning_body += f"\n\n{block}"
-    morning_system = prepend_user_time(profile, morning_body)
-    if not ru:
-        morning_system = (
-            "CRITICAL: Write ONLY in English. Not a single Russian word. "
-            "This is an English-speaking user.\n\n"
-        ) + morning_system
-
-    def call() -> str:
-        for mid in model_names:
-            try:
-                text = sanitize_bot_reply(
-                    claude_generate(
-                        mid,
-                        [{"role": "user", "content": user_message_with_fresh_time(profile, user_content)}],
-                        system=refresh_user_time_in_system(profile, morning_system),
-                        max_tokens=360,
-                        cache_core=False,
-                    )
-                ).strip()
-                if text:
-                    return text
-            except Exception as e:
-                log.warning("morning message %s: %s", mid, e)
-        return morning_opening(
-            display_name,
-            weekly_goal=weekly_goal,
-            main_goal=main_goal,
-            vision=vision,
-            key_detail=str(yesterday.get("key_detail") or ""),
-            lang=lang,
-        )
-
-    return await asyncio.to_thread(call)
+    if ru:
+        return f"{display_name}, доброе утро 🌅\n\nЧто планируешь сегодня?"
+    return f"{display_name}, good morning 🌅\n\nWhat are you planning for today?"
 
 
 _EVENING_PERSONAL_SYSTEM_RU = (
@@ -3601,11 +3556,6 @@ async def _coach_reply(
 
     if append_history:
         _append_history_turn(chat_id, effective_text, reply)
-        picked_task = _maybe_save_task_from_user_reply(chat_id, prof, user_text)
-        if picked_task and telegram_app:
-            asyncio.create_task(
-                _ask_midday_reminder(telegram_app.bot, chat_id, prof, picked_task)
-            )
         asyncio.create_task(
             maybe_save_daily_summary(
                 chat_id, prof, histories.get(chat_id, []), model_names
@@ -3894,6 +3844,154 @@ def _reminder_capability_reply(profile: dict | None) -> str:
     return "Могу ✨ Во сколько тебе писать утром?"
 
 
+def _flow_escape_message(profile: dict | None) -> str:
+    ru = ui_lang(profile).lower().startswith("ru") if profile else True
+    if ru:
+        return "Хорошо, забыли 🙂 О чём хочешь поговорить?"
+    return "Okay, let's drop that 🙂 What would you like to talk about?"
+
+
+def _normalize_bot_outgoing(text: str) -> str:
+    return re.sub(r"\s+", " ", sanitize_bot_reply(text or "").strip().lower())
+
+
+def _user_in_active_flow(cid: int) -> bool:
+    return (
+        cid in onboarding
+        or cid in pending_morning
+        or cid in pending_evening
+        or cid in pending_natural_reminder
+    )
+
+
+def _clear_flow_state(cid: int) -> None:
+    onboarding.pop(cid, None)
+    pending_morning.pop(cid, None)
+    pending_evening.pop(cid, None)
+    pending_natural_reminder.pop(cid, None)
+    flow_mismatch_streak.pop(cid, None)
+
+
+def _prepare_bot_outgoing(
+    cid: int, text: str, profile: dict | None
+) -> str:
+    norm = _normalize_bot_outgoing(text)
+    if norm and _user_in_active_flow(cid):
+        last = last_bot_outgoing_text.get(cid, "")
+        if last and norm == last:
+            _clear_flow_state(cid)
+            escape = _flow_escape_message(profile)
+            last_bot_outgoing_text[cid] = _normalize_bot_outgoing(escape)
+            return escape
+    if norm:
+        last_bot_outgoing_text[cid] = norm
+    return text
+
+
+def _user_wants_flow_escape(raw: str) -> bool:
+    low = re.sub(r"[^\w\s]", "", (raw or "").strip().lower())
+    low = re.sub(r"\s+", " ", low).strip()
+    if not low:
+        return False
+    if low in _FLOW_ESCAPE_EXACT:
+        return True
+    return any(
+        phrase in low
+        for phrase in ("хватит", "отмена", "cancel", "стоп", "выход", "stop", "exit")
+    )
+
+
+def _active_structured_flow(cid: int) -> str | None:
+    st = onboarding.get(cid)
+    if isinstance(st, dict):
+        step = int(st.get("step") or -1)
+        if step == OB_RETURNING:
+            return "returning"
+        if step == ob.OB_CHANGE_12W and str(st.get("change_12w_phase") or "") == "choice":
+            return "change_12w_choice"
+        if st.get("goal_confirm"):
+            return "goal_confirm"
+        if step in (OB_ASK_MORNING_TIME, OB_ASK_EVENING_TIME):
+            return "time_setup"
+    ms = pending_morning.get(cid)
+    if isinstance(ms, dict) and ms.get("awaiting_reminder"):
+        return "midday_reminder"
+    if cid in pending_natural_reminder:
+        return "natural_reminder"
+    return None
+
+
+def _structured_flow_reply_matches(
+    kind: str,
+    raw: str,
+    cid: int,
+    profile: dict,
+) -> bool:
+    if kind == "returning":
+        return (
+            ob.looks_like_time_update_request(raw)
+            or ob.looks_like_restart_onboarding(raw)
+            or (
+                ob.looks_like_just_chat(raw)
+                and ob.profile_onboarding_complete(profile)
+            )
+        )
+    if kind == "change_12w_choice":
+        return ob._wants_new_cycle_reply(raw) or ob._wants_adjust_reply(raw)
+    if kind == "goal_confirm":
+        return ob._is_goal_confirm_yes(raw) or ob._is_goal_confirm_no(raw)
+    if kind == "time_setup":
+        return bool(_extract_hhmm_from_text(raw) or _parse_daily_time(raw.strip()))
+    if kind == "midday_reminder":
+        low = raw.strip().lower()
+        return _user_declined(low) or bool(
+            _extract_hhmm_from_text(raw) or _parse_daily_time(raw.strip())
+        )
+    if kind == "natural_reminder":
+        return len(raw.strip()) >= 2
+    return True
+
+
+async def _exit_flow_and_reply(
+    update: Update,
+    cid: int,
+    raw: str,
+    profile: dict | None,
+) -> None:
+    _clear_flow_state(cid)
+    msg = _flow_escape_message(profile)
+    _append_history_turn(cid, raw, msg)
+    await _bot_reply(update.message, msg)
+
+
+async def _try_flow_escape(
+    update: Update,
+    cid: int,
+    raw: str,
+    profile: dict | None,
+) -> bool:
+    if not _user_in_active_flow(cid):
+        return False
+
+    prof = profile if isinstance(profile, dict) else {}
+    structured = _active_structured_flow(cid)
+    if structured and _structured_flow_reply_matches(structured, raw, cid, prof):
+        flow_mismatch_streak.pop(cid, None)
+        return False
+
+    if _user_wants_flow_escape(raw):
+        await _exit_flow_and_reply(update, cid, raw, prof)
+        return True
+
+    if structured:
+        streak = flow_mismatch_streak.get(cid, 0) + 1
+        flow_mismatch_streak[cid] = streak
+        if streak >= 2:
+            await _exit_flow_and_reply(update, cid, raw, prof)
+            return True
+    return False
+
+
 def _append_history_turn(chat_id: int, user_text: str, model_text: str) -> None:
     hist = histories.setdefault(chat_id, [])
     hist.append({"role": "user", "parts": [user_text]})
@@ -4104,6 +4202,7 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     pending_morning.pop(cid, None)
     pending_evening.pop(cid, None)
     pending_natural_reminder.pop(cid, None)
+    flow_mismatch_streak.pop(cid, None)
     last_reminder_task_id.pop(cid, None)
     onboarding.pop(cid, None)
     prof = user_profiles.get(str(cid)) or db_store.get_profile(cid)
@@ -4327,7 +4426,7 @@ async def _deliver_scheduled_morning(
             reply_markup=_webapp_keyboard(cid, ulang),
         )
         pending_morning[cid] = {
-            "task": "",
+            "task": _yesterday_unfinished_task(cid, profile),
             "text": text,
             "awaiting_reminder": False,
         }
@@ -4421,35 +4520,13 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(prof_early, dict):
         _touch_user_message_date(cid, prof_early)
 
+    if _user_in_active_flow(cid):
+        prof_escape = prof_early if isinstance(prof_early, dict) else {}
+        if await _try_flow_escape(update, cid, raw, prof_escape):
+            return
+
     st_ob = onboarding.get(cid)
     if st_ob is not None:
-        if int(st_ob.get("step") or -1) == ob.OB_CHANGE_WEEKLY:
-            if _wants_escape_change_weekly(st_ob, raw):
-                onboarding.pop(cid, None)
-                model_names: list[str] = context.bot_data["claude_model_names"]
-                try:
-                    async with typing_while(context.bot, cid):
-                        reply = await _coach_reply(
-                            cid, raw, model_names, reply_context=reply_ctx
-                        )
-                except anthropic.RateLimitError:
-                    log.exception("Claude quota exhausted")
-                    prof_esc = user_profiles.get(str(cid)) or {}
-                    await _bot_reply(
-                        update.message,
-                        ui_text("claude_quota", profile=prof_esc),
-                    )
-                    return
-                except Exception as e:
-                    log.exception("Claude error after weekly escape: %s", e)
-                    prof_esc = user_profiles.get(str(cid)) or {}
-                    await _bot_reply(
-                        update.message,
-                        ui_text("claude_error", profile=prof_esc),
-                    )
-                    return
-                await _bot_reply(update.message, sanitize_bot_reply(reply))
-                return
         await handle_onboarding_turn(update, context, raw)
         return
 
@@ -4602,22 +4679,41 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         morning_text = _pending_morning_text(morning_state)
         if morning_text and prof_d:
-            picked = _maybe_save_task_from_user_reply(cid, prof_d, raw)
-            if picked:
-                msg = ui_text(
-                    "task_saved_today", profile=prof_d, task=picked
+            if model_chain:
+                classified = await _classify_morning_user_reply(
+                    cid, prof_d, raw, model_chain, morning_text, morning_state
                 )
-                await _bot_reply(update.message, msg)
-                _append_history_turn(cid, raw, msg)
-                asyncio.create_task(
-                    _ask_midday_reminder(context.bot, cid, prof_d, picked)
-                )
-                return
-            if _looks_like_short_ack(raw):
-                nudge = ui_text("task_pick_nudge", profile=prof_d)
-                await _bot_reply(update.message, nudge)
-                _append_history_turn(cid, raw, nudge)
-                return
+                pending_morning.pop(cid, None)
+                reply_type = str(classified.get("type") or "chat").lower()
+                saved_task: str | None = None
+                if reply_type == "confirm":
+                    saved_task = _commit_morning_task(
+                        cid,
+                        prof_d,
+                        _yesterday_unfinished_task(cid, prof_d)
+                        or str(morning_state.get("task") or "").strip(),
+                    )
+                elif reply_type == "new_task":
+                    weekly = str(prof_d.get("weekly_goal") or "").strip()
+                    task = _sanitize_today_task(
+                        str(classified.get("task") or "").strip(),
+                        weekly_goal=weekly,
+                    )
+                    if task:
+                        saved_task = _commit_morning_task(cid, prof_d, task)
+                if saved_task:
+                    msg = ui_text(
+                        "task_saved_today", profile=prof_d, task=saved_task
+                    )
+                    await _bot_reply(update.message, msg)
+                    _append_history_turn(cid, raw, msg)
+                    asyncio.create_task(
+                        _ask_midday_reminder(context.bot, cid, prof_d, saved_task)
+                    )
+                    return
+                # chat or no task to save — continue normal conversation
+            else:
+                pending_morning.pop(cid, None)
 
     if cid in pending_natural_reminder and prof_d:
         if not _looks_like_reminder_command(raw):
@@ -5286,35 +5382,115 @@ async def _ask_midday_reminder(bot, chat_id: int, profile: dict, task: str) -> N
     pending_morning[chat_id] = {"task": task, "awaiting_reminder": True}
 
 
-def _maybe_save_task_from_user_reply(
+def _yesterday_unfinished_task(chat_id: int, profile: dict) -> str:
+    yesterday_date = _profile_local_date(profile) - timedelta(days=1)
+    yesterday = db_store.get_daily_summary(chat_id, yesterday_date) or {}
+    if yesterday.get("completed") is True:
+        return ""
+    return str(yesterday.get("task") or "").strip()
+
+
+def _parse_morning_reply_json(text: str) -> dict | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and data.get("type"):
+            return data
+    except json.JSONDecodeError:
+        pass
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+        if isinstance(data, dict) and data.get("type"):
+            return data
+    except json.JSONDecodeError:
+        return None
+    return None
+
+
+async def _classify_morning_user_reply(
     chat_id: int,
     profile: dict,
     user_text: str,
-) -> str | None:
-    weekly = str(profile.get("weekly_goal") or "").strip()
+    model_names: list[str],
+    morning_text: str,
+    morning_state: dict,
+) -> dict:
     raw = (user_text or "").strip()
-    if _is_future_task(raw):
-        return None
-    if len(raw) < 3 or len(raw) > 200:
-        return None
-    if _looks_like_greeting_or_chat(raw):
-        return None
+    lang = str(profile.get("language_code") or "en")
+    ru = lang.lower().startswith("ru")
+    yesterday_task = (
+        _yesterday_unfinished_task(chat_id, profile)
+        or str(morning_state.get("task") or "").strip()
+        or ("нет" if ru else "none")
+    )
 
-    state = pending_morning.get(chat_id)
-    if isinstance(state, dict) and state.get("awaiting_reminder"):
-        return None
+    if ru:
+        prompt = (
+            f"Утреннее сообщение бота:\n{morning_text}\n\n"
+            f"Задача из вчерашнего дня (если была): {yesterday_task}\n\n"
+            f"Ответ пользователя: {raw}\n\n"
+            "Определи тип ответа:\n"
+            "- confirm — подтверждает старую/вчерашнюю задачу без изменений "
+            "(да, всё в силе, ok, продолжаем, оставляем)\n"
+            "- new_task — называет новую задачу на сегодня\n"
+            "- chat — приветствие, болтовня, вопрос не про задачу, неясный ответ\n\n"
+            "Верни ТОЛЬКО JSON без markdown:\n"
+            '{"type": "confirm|new_task|chat", '
+            '"task": "текст задачи только если type=new_task, иначе пустая строка"}'
+        )
+        system = "Верни только валидный JSON."
+    else:
+        prompt = (
+            f"Bot morning message:\n{morning_text}\n\n"
+            f"Yesterday's task (if any): {yesterday_task}\n\n"
+            f"User reply: {raw}\n\n"
+            "Classify the reply:\n"
+            "- confirm — confirms the existing/yesterday task unchanged "
+            "(yes, still on track, ok, keep it)\n"
+            "- new_task — states a new task for today\n"
+            "- chat — greeting, small talk, off-topic, unclear\n\n"
+            "Return ONLY JSON, no markdown:\n"
+            '{"type": "confirm|new_task|chat", '
+            '"task": "task text only if type=new_task, else empty string"}'
+        )
+        system = "Return only valid JSON."
 
-    morning_text = _pending_morning_text(state)
-    if not morning_text:
-        return None
+    def call() -> dict:
+        for mid in model_names:
+            try:
+                text = claude_generate(
+                    mid,
+                    [{"role": "user", "content": prompt}],
+                    system=system,
+                    max_tokens=120,
+                    cache_core=False,
+                ).strip()
+                parsed = _parse_morning_reply_json(text)
+                if parsed:
+                    reply_type = str(parsed.get("type") or "chat").lower()
+                    if reply_type not in ("confirm", "new_task", "chat"):
+                        reply_type = "chat"
+                    return {
+                        "type": reply_type,
+                        "task": str(parsed.get("task") or "").strip(),
+                    }
+            except Exception as e:
+                log.warning("morning reply classify %s: %s", mid, e)
+        return {"type": "chat", "task": ""}
 
-    pending_morning.pop(chat_id, None)
-    picked = _pick_morning_task_from_reply(raw, morning_text)
+    return await asyncio.to_thread(call)
 
-    picked = _sanitize_today_task(picked, weekly_goal=weekly)
+
+def _commit_morning_task(chat_id: int, profile: dict, task: str) -> str | None:
+    weekly = str(profile.get("weekly_goal") or "").strip()
+    picked = _sanitize_today_task(task, weekly_goal=weekly)
     if not picked:
         return None
-
     today = _profile_local_date(profile)
     existing = db_store.get_daily_summary(chat_id, today) or {}
     current = str(existing.get("task") or "").strip()
@@ -5322,6 +5498,15 @@ def _maybe_save_task_from_user_reply(
         return None
     _save_today_task_choice(chat_id, profile, picked)
     return picked
+
+
+def _maybe_save_task_from_user_reply(
+    chat_id: int,
+    profile: dict,
+    user_text: str,
+) -> str | None:
+    """Morning replies are classified via Claude in on_message."""
+    return None
 
 
 _GREETING_TASK_MARKERS = (
@@ -5970,7 +6155,7 @@ async def _post_weekly_goal_morning(
             reply_markup=keyboard,
         )
         pending_morning[cid] = {
-            "task": "",
+            "task": _yesterday_unfinished_task(cid, profile),
             "text": text,
             "awaiting_reminder": False,
         }
@@ -6110,6 +6295,13 @@ scheduler: AsyncIOScheduler | None = None
 
 
 def _register_telegram_handlers(app_: Application) -> None:
+    ob.register_flow_outgoing_prepare(
+        lambda cid, text: _prepare_bot_outgoing(
+            cid,
+            text,
+            user_profiles.get(str(cid)) or db_store.get_profile(cid) or {},
+        )
+    )
     app_.add_handler(CommandHandler("start", cmd_start))
     app_.add_handler(CommandHandler("app", app_command))
     app_.add_handler(CommandHandler("stop", cmd_stop))
@@ -6744,6 +6936,8 @@ def _purge_user_runtime(chat_id: int) -> None:
     pending_morning.pop(chat_id, None)
     pending_evening.pop(chat_id, None)
     pending_natural_reminder.pop(chat_id, None)
+    flow_mismatch_streak.pop(chat_id, None)
+    last_bot_outgoing_text.pop(chat_id, None)
     last_reminder_task_id.pop(chat_id, None)
     subscribers.discard(chat_id)
     user_profiles.pop(tid, None)
