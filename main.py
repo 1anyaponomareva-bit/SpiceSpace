@@ -601,6 +601,23 @@ COACH_STYLE_INSTRUCTION = """Ты ведёшь диалог на русском 
 
 SYSTEM_INSTRUCTION = SPICESPACE_GLOBAL_SYSTEM + "\n\n" + COACH_STYLE_INSTRUCTION
 
+CHAT_ONE_QUESTION_RULE = """КРИТИЧЕСКИ ВАЖНО — вопросы:
+В каждом сообщении задавай МАКСИМУМ ОДИН вопрос.
+Никогда не задавай два вопроса подряд.
+Если хочется спросить несколько вещей — выбери самый важный вопрос."""
+
+CHAT_ONE_QUESTION_RULE_EN = """CRITICALLY IMPORTANT — questions:
+In every message ask AT MOST ONE question.
+Never ask two questions in a row.
+If you want to ask several things — pick the single most important question."""
+
+
+def _chat_one_question_rule(profile: dict) -> str:
+    lang = str(profile.get("language_code") or "en")
+    if lang.lower().startswith("ru"):
+        return CHAT_ONE_QUESTION_RULE
+    return CHAT_ONE_QUESTION_RULE_EN
+
 MORNING_PROMPT = """Коротко (до 6 предложений), по-человечески. Напомни цель из контекста. Без «как настроение».
 Не выдавай конкретную задачу на день в этом сообщении — только настрой и якорь на цель. Конец: приглашение написать, когда удобно."""
 
@@ -3173,13 +3190,27 @@ def save_daily_task(
     existing = db_store.get_daily_summary(chat_id, today) or {}
     if source != "morning_flow" and str(existing.get("task") or "").strip():
         return
-    _update_today_summary_field(chat_id, profile, task=cleaned)
+    _update_today_summary_field(
+        chat_id,
+        profile,
+        task=cleaned,
+        completed=False,
+        task_completed=None,
+    )
 
 
 def _detect_evening_task_completed(text: str) -> str | None:
     low = (text or "").strip().lower()
     if not low:
         return None
+
+    material_markers = ("уже снято", "уже готово")
+    if any(m in low for m in material_markers):
+        explicit_done = any(
+            w in low for w in ("сделала", "выполнила", "выполнил", "сделал", "done")
+        )
+        if not explicit_done:
+            return None
 
     partial_words = [
         "частично",
@@ -3676,7 +3707,7 @@ async def _coach_reply(
             f"Достижения: {last_week.get('achievements', '')}\n"
             f"Сложности: {last_week.get('challenges', '')}"
         )
-    extra_parts: list[str] = []
+    extra_parts: list[str] = [_chat_one_question_rule(prof)]
     if facts_text:
         extra_parts.append(f"Важные факты:\n{facts_text}")
     if personality_text:
@@ -3803,13 +3834,13 @@ async def _coach_reply_photo(
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
     lang = str(prof.get("language_code") or "en")
     is_russian = lang.lower().startswith("ru")
-    photo_extra = ""
+    photo_extra = _chat_one_question_rule(prof)
     if not is_russian:
         photo_extra = (
             "CRITICAL: This user speaks ONLY English. "
             "NEVER write in Russian. NEVER mix languages. "
             "Every single word must be in English.\n\n"
-        )
+        ) + photo_extra
     system = build_chat_system(prof, yesterday, today_summary, extra=photo_extra)
 
     caption_body = _user_text_with_reply_context(
@@ -5920,7 +5951,7 @@ def _effective_task_completed(summ: dict | None) -> str | None:
         return "false"
     blob = " ".join(
         str(summ.get(k) or "")
-        for k in ("summary", "mood", "key_detail", "task")
+        for k in ("summary", "mood", "key_detail")
     ).strip()
     if blob:
         return _infer_task_completed_from_text(blob)

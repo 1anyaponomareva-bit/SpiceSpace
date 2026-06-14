@@ -622,10 +622,14 @@
     if (el) el.hidden = true;
   }
 
+  function hasTelegramSession() {
+    if ((tg?.initData || '').trim()) return true;
+    if (tg?.initDataUnsafe?.user?.id) return true;
+    return Boolean(getTelegramId());
+  }
+
   function shouldShowWelcomeScreen(status) {
-    return (
-      (status === 401 || status === 404) && !(tg?.initData || '').trim()
-    );
+    return (status === 401 || status === 404) && !hasTelegramSession();
   }
 
   function showWelcomeScreen(status) {
@@ -684,6 +688,7 @@
   }
 
   function showEmptyState() {
+    hideWelcomeScreen();
     document.getElementById('empty-state').hidden = false;
     const home = document.getElementById('screen-home');
     if (home) {
@@ -1240,41 +1245,39 @@
     return { ok: true, profile: data.profile || data, user: data.user || null };
   }
 
+  async function fetchProfileByTelegramId(tid) {
+    if (!tid || !BACKEND_URL) return null;
+    try {
+      const directResp = await fetch(
+        `${BACKEND_URL}/api/profile?telegram_id=${encodeURIComponent(tid)}&_t=${Date.now()}`,
+        { cache: 'no-store' },
+      );
+      if (directResp.ok) return await profileFromResponse(directResp);
+      return { ok: false, status: directResp.status };
+    } catch (_) {
+      return null;
+    }
+  }
+
   async function fetchProfile() {
+    const resolveTid = () => BACKEND_TELEGRAM_ID || getTelegramId();
     try {
       const resp = await apiFetch(`/api/profile?_t=${Date.now()}`);
       if (!resp || resp.status === 0) {
-        const tid = BACKEND_TELEGRAM_ID || getTelegramId();
-        if (tid && BACKEND_URL) {
-          const directResp = await fetch(
-            `${BACKEND_URL}/api/profile?telegram_id=${encodeURIComponent(tid)}&_t=${Date.now()}`,
-            { cache: 'no-store' },
-          );
-          if (directResp.ok) {
-            return await profileFromResponse(directResp);
-          }
-          return { ok: false, status: directResp.status };
-        }
-        return { ok: false, status: 0 };
+        const fallback = await fetchProfileByTelegramId(resolveTid());
+        return fallback || { ok: false, status: 0 };
       }
-      if (resp.status === 401 || resp.status === 404) return { ok: false, status: resp.status };
+      if (resp.status === 401 || resp.status === 404) {
+        const fallback = await fetchProfileByTelegramId(resolveTid());
+        if (fallback?.ok) return fallback;
+        return { ok: false, status: resp.status };
+      }
       if (!resp.ok) return { ok: false, status: resp.status };
       return await profileFromResponse(resp);
     } catch (e) {
       console.error('fetchProfile error:', e);
-      const tid = BACKEND_TELEGRAM_ID || getTelegramId();
-      if (tid && BACKEND_URL) {
-        try {
-          const directResp = await fetch(
-            `${BACKEND_URL}/api/profile?telegram_id=${encodeURIComponent(tid)}&_t=${Date.now()}`,
-            { cache: 'no-store' },
-          );
-          if (directResp.ok) {
-            return await profileFromResponse(directResp);
-          }
-        } catch (_) {}
-      }
-      return { ok: false, status: 0 };
+      const fallback = await fetchProfileByTelegramId(resolveTid());
+      return fallback || { ok: false, status: 0 };
     }
   }
 
@@ -1535,6 +1538,7 @@
   async function start() {
     initTelegram();
     BACKEND_TELEGRAM_ID = getTelegramId();
+    hideWelcomeScreen();
     bindEvents();
     bindEditName();
     bindEditTimes();
@@ -1561,6 +1565,10 @@
       applyFallbackI18n();
       if (shouldShowWelcomeScreen(result.status)) {
         showWelcomeScreen(result.status);
+        return;
+      }
+      if (result.status === 404 && hasTelegramSession()) {
+        showIncompleteProfileState();
         return;
       }
       if (result.status === 401 || result.status === 503) {
