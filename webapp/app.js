@@ -622,7 +622,17 @@
     if (el) el.hidden = true;
   }
 
-  function showWelcomeScreen() {
+  function shouldShowWelcomeScreen(status) {
+    return (
+      (status === 401 || status === 404) && !(tg?.initData || '').trim()
+    );
+  }
+
+  function showWelcomeScreen(status) {
+    if (!shouldShowWelcomeScreen(status)) {
+      hideWelcomeScreen();
+      return;
+    }
     hideSyncBanner();
     document.getElementById('empty-state').hidden = true;
     const home = document.getElementById('screen-home');
@@ -814,8 +824,10 @@
   function startLoadErrorMode(user, status) {
     console.log('startLoadErrorMode called', new Error().stack);
     if (status === 401 || status === 404) {
-      showWelcomeScreen();
-      return;
+      if (shouldShowWelcomeScreen(status)) {
+        showWelcomeScreen(status);
+        return;
+      }
     }
     profile = {
       name: pickName(user, null),
@@ -1275,6 +1287,7 @@
       const result = await fetchProfile();
       if (!result.ok || !result.profile) return result;
       profile = result.profile;
+      hideWelcomeScreen();
       hideSyncBanner();
       if (!opts.skipRender) {
         renderProfile(profile);
@@ -1546,11 +1559,15 @@
 
     if (!result.ok) {
       applyFallbackI18n();
-      if (result.status === 401 || result.status === 404) {
-        showWelcomeScreen();
+      if (shouldShowWelcomeScreen(result.status)) {
+        showWelcomeScreen(result.status);
         return;
       }
-      showSyncBanner('err_load');
+      if (result.status === 401 || result.status === 503) {
+        showSyncBanner('err_auth');
+      } else {
+        showSyncBanner('err_load');
+      }
       showMain();
       return;
     }

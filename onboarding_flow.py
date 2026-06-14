@@ -48,7 +48,7 @@ async def flow_reply_text(msg, text: str) -> None:
         out = _flow_outgoing_prepare(cid, text)
     await msg.reply_text(out)
 
-BOT_BUILD = "morning-flow-escape-v37"
+BOT_BUILD = "trial-messages-v38"
 
 OB_RETURNING = 0
 OB_NAME = 1
