@@ -1151,7 +1151,10 @@ body.tg-app { background: var(--bg); }
   .confetti-piece { animation-duration: 0.01ms; }
 }
 
-.welcome-screen {
+.welcome-screen[hidden] {
+  display: none !important;
+}
+.welcome-screen:not([hidden]) {
   display: flex;
   flex-direction: column;
   align-items: center;
