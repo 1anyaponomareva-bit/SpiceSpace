@@ -51,7 +51,6 @@ from prompts import (
     evening_opening,
     morning_message_prompt,
     morning_opening,
-    reengagement_system,
     prepend_user_time,
     refresh_user_time_in_system,
     resolve_user_timezone,
@@ -94,19 +93,19 @@ SUBSCRIPTION_PLANS = {
     "4weeks": {
         "label_ru": "4 недели",
         "label_en": "4 weeks",
-        "stars": 2000,
+        "stars": 100,
         "days": 28,
     },
     "12weeks": {
         "label_ru": "12 недель",
         "label_en": "12 weeks",
-        "stars": 4500,
+        "stars": 100,
         "days": 84,
     },
     "24weeks": {
         "label_ru": "24 недели",
         "label_en": "24 weeks",
-        "stars": 7500,
+        "stars": 100,
         "days": 168,
     },
 }
@@ -2354,11 +2353,13 @@ def _touch_user_message_date(chat_id: int, profile: dict | None = None) -> None:
     if not isinstance(profile, dict):
         return
     today = _profile_local_date(profile).isoformat()
-    before = str(profile.get("last_user_message_date") or "").strip()
-    if before == today:
-        return
+    empty_sent = _serialize_reengagement_sent(_empty_reengagement_sent())
     profile["last_user_message_date"] = today
-    db_store.update_profile(chat_id, {"last_user_message_date": today})
+    profile["reengagement_sent_date"] = empty_sent
+    db_store.update_profile(
+        chat_id,
+        {"last_user_message_date": today, "reengagement_sent_date": empty_sent},
+    )
     user_profiles[str(chat_id)] = profile
 
 
@@ -2373,30 +2374,84 @@ def _days_since_user_message(profile: dict, today: date) -> int | None:
     return (today - last).days
 
 
-def _reengagement_silence_action(profile: dict, today: date) -> str:
-    """normal | reengage | quiet | stop"""
-    days = _days_since_user_message(profile, today)
-    if days is None:
-        return "normal"
-    if days >= 8:
-        return "stop"
-    if days >= 6:
-        return "quiet"
-    if days == 5:
-        return "reengage"
-    return "normal"
+def _empty_reengagement_sent() -> dict[str, str]:
+    return {"day4": "", "day8": "", "day15": ""}
+
+
+def _parse_reengagement_sent(raw: object) -> dict[str, str]:
+    out = _empty_reengagement_sent()
+    s = str(raw or "").strip()
+    if not s:
+        return out
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+        out["day4"] = s
+        return out
+    try:
+        data = json.loads(s)
+        if isinstance(data, dict):
+            for key in out:
+                out[key] = str(data.get(key) or "").strip()[:10]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return out
+
+
+def _serialize_reengagement_sent(sent: dict[str, str]) -> str:
+    clean = _empty_reengagement_sent()
+    for key in clean:
+        clean[key] = str(sent.get(key) or "").strip()[:10]
+    return json.dumps(clean, ensure_ascii=False, separators=(",", ":"))
+
+
+REENGAGEMENT_CLAUDE_SYSTEM_RU = """Ты Спейс. Пользователь не отвечает {days} дней.
+Напиши короткое личное сообщение используя имя и цель.
+Без осуждения. Как подруга которая заметила что тебя нет.
+Не спрашивай почему пропала. Напомни что помнишь её цель.
+2-3 предложения. Никакого коуч-языка.
+
+Тон: {tone}"""
+
+REENGAGEMENT_CLAUDE_SYSTEM_EN = """You're Space. The user hasn't replied for {days} days.
+Write a short personal message using their name and goal.
+No judgment. Like a friend who noticed you're missing.
+Don't ask why they disappeared. Remind them you remember their goal.
+2-3 sentences. No coach-speak.
+
+Tone: {tone}"""
+
+
+def _reengagement_tone(days_silent: int, lang: str) -> str:
+    ru = str(lang or "en").lower().startswith("ru")
+    if days_silent >= 15:
+        return (
+            "говорит что замолкает, но дверь открыта всегда"
+            if ru
+            else "says you're going quiet, but the door is always open"
+        )
+    if days_silent >= 8:
+        return (
+            "теплее, скучает, всё ещё ждёт"
+            if ru
+            else "warmer, misses her, still waiting"
+        )
+    return (
+        "мягкое напоминание, всё ок"
+        if ru
+        else "gentle reminder, it's all okay"
+    )
 
 
 def _reengagement_keyboard(lang: str) -> InlineKeyboardMarkup:
+    ru = str(lang or "en").lower().startswith("ru")
     return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    ob.ob_text("reengagement_btn_continue", lang),
+                    "Я здесь 👋" if ru else "I'm here 👋",
                     callback_data="reengagement:continue",
                 ),
                 InlineKeyboardButton(
-                    ob.ob_text("reengagement_btn_new_goal", lang),
+                    "Поставим новую цель 🎯" if ru else "Set a new goal 🎯",
                     callback_data="reengagement:new_goal",
                 ),
             ]
@@ -2404,18 +2459,40 @@ def _reengagement_keyboard(lang: str) -> InlineKeyboardMarkup:
     )
 
 
-async def _reengagement_message_text(profile: dict, model_names: list[str]) -> str:
+async def _reengagement_message_text(
+    profile: dict, model_names: list[str], *, days_silent: int
+) -> str:
     lang = ui_lang(profile)
+    ru = lang.lower().startswith("ru")
     name = str(profile.get("name") or "").strip()
-    if name:
-        user_content = ob.ob_text("reengagement_claude_user_named", lang, name=name)
+    main_goal = str(
+        profile.get("main_goal") or profile.get("final_goal") or ""
+    ).strip()
+    tone = _reengagement_tone(days_silent, lang)
+    template = REENGAGEMENT_CLAUDE_SYSTEM_RU if ru else REENGAGEMENT_CLAUDE_SYSTEM_EN
+    system = prepend_user_time(
+        profile, template.format(days=days_silent, tone=tone)
+    )
+    if not ru:
+        system = "CRITICAL: Write ONLY in English.\n\n" + system
+    if name and main_goal:
+        user_content = (
+            f"Имя: {name}\nЦель: {main_goal}\nДней без ответа: {days_silent}"
+            if ru
+            else f"Name: {name}\nGoal: {main_goal}\nDays silent: {days_silent}"
+        )
+    elif name:
+        user_content = (
+            f"Имя: {name}\nДней без ответа: {days_silent}"
+            if ru
+            else f"Name: {name}\nDays silent: {days_silent}"
+        )
     else:
-        user_content = ob.ob_text("reengagement_claude_user", lang)
-    system = prepend_user_time(profile, reengagement_system(lang))
-    if lang != "ru":
-        system = (
-            "CRITICAL: Write ONLY in English.\n\n"
-        ) + system
+        user_content = (
+            f"Дней без ответа: {days_silent}"
+            if ru
+            else f"Days silent: {days_silent}"
+        )
 
     def call() -> str:
         for mid in model_names:
@@ -2431,7 +2508,15 @@ async def _reengagement_message_text(profile: dict, model_names: list[str]) -> s
                     return text
             except Exception as e:
                 log.warning("reengagement generate %s: %s", mid, e)
-        return ob.ob_text("reengagement_fallback", lang)
+        if ru:
+            return (
+                f"{name + ', ' if name else ''}я заметила, что тебя давно не было — и это окей. "
+                "Помню твою цель, когда будешь готова — я здесь."
+            )
+        return (
+            f"{name + ', ' if name else ''}I noticed you've been away — and that's okay. "
+            "I still remember your goal; whenever you're ready, I'm here."
+        )
 
     return await asyncio.to_thread(call)
 
@@ -2443,28 +2528,27 @@ async def _send_reengagement_message(
     model_names: list[str],
     *,
     today: str,
+    days_silent: int,
+    slot: str,
 ) -> bool:
-    claimed = db_store.claim_send_slot(cid, "reengagement_sent_date", today)
-    if not claimed:
+    sent = _parse_reengagement_sent(profile.get("reengagement_sent_date"))
+    if sent.get(slot):
         return False
-    profile["reengagement_sent_date"] = today
-    user_profiles[str(cid)] = profile
     lang = ui_lang(profile)
     try:
         async with typing_while(bot, cid):
-            text = await _reengagement_message_text(profile, model_names)
+            text = await _reengagement_message_text(
+                profile, model_names, days_silent=days_silent
+            )
         await bot.send_message(
             chat_id=cid,
             text=sanitize_bot_reply(text),
             reply_markup=_reengagement_keyboard(lang),
         )
-        log.info("reengagement sent cid=%s", cid)
+        log.info("reengagement sent cid=%s slot=%s days=%s", cid, slot, days_silent)
         return True
     except Exception as e:
         log.warning("reengagement send failed cid=%s: %s", cid, e)
-        db_store.update_profile(cid, {"reengagement_sent_date": None})
-        profile["reengagement_sent_date"] = ""
-        user_profiles[str(cid)] = profile
         return False
 
 
@@ -2505,16 +2589,22 @@ async def handle_reengagement_callback(
         _touch_user_message_date(cid, prof)
         db_store.save_subscriber(cid, True)
         subscribers.add(cid)
+        empty_sent = _serialize_reengagement_sent(_empty_reengagement_sent())
         db_store.update_profile(
             cid,
-            {"daily_enabled": True, "reengagement_sent_date": ""},
+            {"daily_enabled": True, "reengagement_sent_date": empty_sent},
         )
         prof["daily_enabled"] = True
-        prof["reengagement_sent_date"] = ""
+        prof["reengagement_sent_date"] = empty_sent
         user_profiles[str(cid)] = prof
+        continue_text = (
+            "Рада что ты здесь 🙂 Завтра утром напишу как обычно."
+            if lang.lower().startswith("ru")
+            else "Glad you're back 🙂 I'll message tomorrow morning as usual."
+        )
         await context.bot.send_message(
             chat_id=cid,
-            text=ob.ob_text("reengagement_continue", lang),
+            text=continue_text,
             reply_markup=_webapp_keyboard(cid, lang),
         )
         return
@@ -2527,9 +2617,14 @@ async def handle_reengagement_callback(
         prof["daily_enabled"] = True
         user_profiles[str(cid)] = prof
         ob.start_reengagement_goal(onboarding, cid, prof)
+        goal_ask = (
+            "Расскажи — что сейчас актуальнее? Какую цель хочешь поставить?"
+            if lang.lower().startswith("ru")
+            else "What's more relevant for you now? What goal do you want to set?"
+        )
         await context.bot.send_message(
             chat_id=cid,
-            text=ob.ob_text("reengagement_goal_ask", lang),
+            text=goal_ask,
         )
         return
 
@@ -6694,35 +6789,49 @@ async def _bootstrap_bot() -> None:
                 if not _profile_has_daily_access(profile, today_date):
                     continue
 
-                silence = _reengagement_silence_action(profile, today_date)
-                if silence == "stop":
-                    db_store.save_subscriber(cid, False)
-                    subscribers.discard(cid)
-                    log.info(
-                        "reengagement disabled daily cid=%s days_silent>=8",
-                        cid,
+                days_silent = _days_since_user_message(profile, today_date)
+                if days_silent is not None and days_silent >= 4:
+                    sent = _parse_reengagement_sent(
+                        profile.get("reengagement_sent_date")
                     )
-                    continue
-                if silence == "quiet":
-                    continue
-                if silence == "reengage":
-                    reengagement_sent = str(
-                        profile.get("reengagement_sent_date") or ""
-                    ).strip()
-                    in_reengage = _time_ready_for_daily_send(
-                        morning_time,
-                        now_hm,
-                        already_sent_today=(reengagement_sent == today),
-                        catchup_minutes=MORNING_CATCHUP_MINUTES,
-                    )
-                    if in_reengage:
-                        await _send_reengagement_message(
+                    reengage_slot: str | None = None
+                    if days_silent >= 15 and not sent.get("day15"):
+                        reengage_slot = "day15"
+                    elif days_silent >= 8 and not sent.get("day8"):
+                        reengage_slot = "day8"
+                    elif not sent.get("day4"):
+                        reengage_slot = "day4"
+
+                    if reengage_slot and in_morning:
+                        ok = await _send_reengagement_message(
                             bot,
                             cid,
                             profile,
                             model_chain,
                             today=today,
+                            days_silent=days_silent,
+                            slot=reengage_slot,
                         )
+                        if ok:
+                            sent[reengage_slot] = today
+                            patch: dict[str, object] = {
+                                "reengagement_sent_date": _serialize_reengagement_sent(
+                                    sent
+                                ),
+                            }
+                            if reengage_slot == "day15":
+                                patch["daily_enabled"] = False
+                                profile["daily_enabled"] = False
+                            profile["reengagement_sent_date"] = patch[
+                                "reengagement_sent_date"
+                            ]
+                            db_store.update_profile(cid, patch)
+                            user_profiles[key] = profile
+                            if reengage_slot == "day15":
+                                log.info(
+                                    "reengagement day15 disabled daily cid=%s",
+                                    cid,
+                                )
                     continue
 
                 days_since_start = _days_since_cycle_start(
