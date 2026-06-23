@@ -13,7 +13,7 @@ import anthropic
 
 from claude_client import generate
 from db import get_daily_summary, normalize_task_completed, patch_daily_summary, upsert_daily_summary
-from prompts import DAILY_SUMMARY_PROMPT, ONBOARDING_SUMMARY_PROMPT
+from prompts import DAILY_SUMMARY_PROMPT, ONBOARDING_SUMMARY_PROMPT, daily_summary_prompt
 
 log = logging.getLogger("coach_bot")
 
@@ -94,15 +94,17 @@ def _parse_summary_json(text: str, weekly_goal: str = "") -> dict | None:
     return None
 
 
-def _conversation_text(hist: list[dict], max_turns: int = 20) -> str:
+def _conversation_text(hist: list[dict], max_turns: int = 20, *, ru: bool = True) -> str:
     lines: list[str] = []
+    user_l = "Она" if ru else "She"
+    bot_l = "SpiceSpace"
     for turn in hist[-max_turns:]:
         role = turn.get("role")
         parts = turn.get("parts") or []
         text = (parts[0] if parts else "").strip()
         if not text:
             continue
-        who = "Она" if role == "user" else "SpiceSpace"
+        who = user_l if role == "user" else bot_l
         lines.append(f"{who}: {text}")
     return "\n".join(lines)
 
@@ -121,6 +123,7 @@ def save_summary_for_today(
     today = datetime.now(tz).date()
 
     existing = get_daily_summary(user_id, today)
+    existing_task = str((existing or {}).get("task") or "").strip()
     if existing:
         created_at = str(
             existing.get("created_at") or existing.get("updated_at") or ""
@@ -134,14 +137,22 @@ def save_summary_for_today(
             except Exception:
                 pass
 
-    conv = _conversation_text(hist)
+    lang = str(profile.get("language_code") or "en")
+    ru = lang.lower().startswith("ru")
+    conv = _conversation_text(hist, ru=ru)
     if not conv.strip():
         return
 
     weekly_goal = str(profile.get("weekly_goal") or "").strip()
-    prompt = DAILY_SUMMARY_PROMPT.format(
+    na = "не указана" if ru else "not set"
+    prompt = daily_summary_prompt(lang).format(
         conversation=conv,
-        weekly_goal=weekly_goal or "не указана",
+        weekly_goal=weekly_goal or na,
+    )
+    system = (
+        "Отвечай только валидным JSON."
+        if ru
+        else "Reply with valid JSON only. All text fields must be in English."
     )
 
     for mid in model_names:
@@ -149,15 +160,18 @@ def save_summary_for_today(
             raw = generate(
                 mid,
                 [{"role": "user", "content": prompt}],
-                system="Отвечай только валидным JSON.",
+                system=system,
                 max_tokens=400,
                 cache_core=False,
             )
             parsed = _parse_summary_json(raw, weekly_goal=weekly_goal)
             if parsed:
-                task = parsed.get("task", "")
-                if not _sanitize_summary_task(task, weekly_goal=weekly_goal):
-                    task = ""
+                if existing_task:
+                    task = existing_task
+                else:
+                    task = parsed.get("task", "")
+                    if not _sanitize_summary_task(task, weekly_goal=weekly_goal):
+                        task = ""
                 patch_fields: dict = {
                     "summary": parsed["summary"],
                     "mood": parsed["mood"],

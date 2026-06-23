@@ -42,9 +42,9 @@ from bot_typing import typing_while
 from claude_client import build_model_chain, configure as configure_claude, generate as claude_generate
 from claude_client import select_model_id
 from prompts import (
-    TODAY_TASK_PROMPT,
     post_task_followup_prompt,
     today_task_options_prompt,
+    today_task_prompt,
     build_chat_system,
     evening_message_prompt,
     evening_no_task_prompt,
@@ -1991,12 +1991,14 @@ def _exact_name_prompt_instruction(profile: dict, chat_id: int | None = None) ->
 
 
 def _format_time_per_day_for_prompt(profile: dict) -> str:
+    lang = str(profile.get("language_code") or "en")
+    ru = lang.lower().startswith("ru")
     raw = str(profile.get("time_per_day") or "").strip()
     if not raw:
-        return "не указано"
+        return "не указано" if ru else "not specified"
     if re.search(r"мин|час|hour|min", raw, re.I):
         return raw
-    return f"{raw} минут"
+    return f"{raw} минут" if ru else f"{raw} minutes"
 
 
 async def _morning_message_text(
@@ -3258,6 +3260,12 @@ async def _try_save_task_from_message(
         "зафиксировала",
         "вечером спрошу",
         "вечером проверю",
+        "saved",
+        "locked in",
+        "got it",
+        "i'll check",
+        "i'll ask",
+        "this evening",
     )
     if not any(ind in bot_lower for ind in indicators):
         return
@@ -5521,16 +5529,27 @@ async def _today_task_options_message_text(
 
 
 async def _generate_today_task(profile: dict, model_names: list[str]) -> str:
-    weekly_goal = str(profile.get("weekly_goal") or "").strip() or "не указана"
+    lang = str(profile.get("language_code") or "en")
+    ru = lang.lower().startswith("ru")
+    na = "не указана" if ru else "not set"
+    weekly_goal = str(profile.get("weekly_goal") or "").strip() or na
     main_goal = str(
         profile.get("main_goal") or profile.get("final_goal") or ""
-    ).strip() or "не указана"
+    ).strip() or na
     time_per_day = _format_time_per_day_for_prompt(profile)
-    prompt = TODAY_TASK_PROMPT.format(
+    prompt = today_task_prompt(lang).format(
         weekly_goal=weekly_goal,
         main_goal=main_goal,
         time_per_day=time_per_day,
     )
+    system_body = (
+        "Верни только задачу на сегодня."
+        if ru
+        else "Return only today's task. Write in English only."
+    )
+    system = prepend_user_time(profile, system_body)
+    if not ru:
+        system = "CRITICAL: Write ONLY in English.\n\n" + system
 
     def call() -> str:
         for mid in model_names:
@@ -5538,10 +5557,7 @@ async def _generate_today_task(profile: dict, model_names: list[str]) -> str:
                 text = claude_generate(
                     mid,
                     [{"role": "user", "content": prompt}],
-                    system=refresh_user_time_in_system(
-                        profile,
-                        prepend_user_time(profile, "Верни только задачу на сегодня."),
-                    ),
+                    system=refresh_user_time_in_system(profile, system),
                     max_tokens=120,
                     cache_core=False,
                 ).strip()
@@ -5800,6 +5816,7 @@ async def _classify_morning_user_reply(
             "(yes, still on track, ok, keep it)\n"
             "- new_task — states a new task for today\n"
             "- chat — greeting, small talk, off-topic, unclear\n\n"
+            "If type=new_task, the task field MUST be in English.\n\n"
             "Return ONLY JSON, no markdown:\n"
             '{"type": "confirm|new_task|chat", '
             '"task": "task text only if type=new_task, else empty string"}'
