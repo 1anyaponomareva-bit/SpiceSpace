@@ -894,7 +894,13 @@ def _row_to_profile(row: dict) -> dict:
     if p.get("last_user_message_date"):
         p["last_user_message_date"] = str(p["last_user_message_date"])[:10]
     if p.get("reengagement_sent_date"):
-        p["reengagement_sent_date"] = str(p["reengagement_sent_date"])[:10]
+        raw_re = str(p["reengagement_sent_date"]).strip()
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_re):
+            p["reengagement_sent_date"] = raw_re
+        elif raw_re.startswith("{"):
+            p["reengagement_sent_date"] = raw_re
+        else:
+            p["reengagement_sent_date"] = raw_re[:10]
     if p.get("subscription_end"):
         p["subscription_end"] = str(p["subscription_end"])[:10]
     if p.get("trial_start_date"):
