@@ -2540,24 +2540,6 @@ async def handle_onboarding_turn(
     if step == OB_CHANGE_12W:
         phase = str(st.get("change_12w_phase") or "choice")
         if phase == "choice":
-            if _wants_new_cycle_reply(raw):
-                st["change_mode"] = "new_12w"
-                st["change_12w_phase"] = "vision"
-                st["step"] = OB_VISION_DIALOG
-                st["vision_turns"] = []
-                name = str(st.get("name") or "") or _friend_word(lang)
-                await msg.reply_text(message_vision(name, lang))
-                return
-            if _wants_adjust_reply(raw):
-                st["change_mode"] = "adjust_12w"
-                st["change_12w_phase"] = "goal"
-                st["step"] = OB_GOAL_DIALOG
-                st["goal_turns"] = []
-                await msg.reply_text(
-                    change_12w_adjust_opening(str(st.get("main_goal") or ""), lang)
-                )
-                return
-            await flow_reply_text(msg, ob_text("change_12w_choice_hint", lang))
             return
         await msg.reply_text(ob_text("change_12w_broken", lang))
         return
