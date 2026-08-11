@@ -312,13 +312,12 @@
       statusEl.textContent = t('sub_active_until').replace('{date}', endLabel);
       statusEl.classList.add('sub-status--active');
       daysEl.textContent = formatSubDaysLeft(days, prof.subscription_end);
-      if (plansEl) plansEl.hidden = false;
     } else {
-      statusEl.textContent = t('sub_inactive');
+      statusEl.textContent = t('subscription_soon');
       statusEl.classList.remove('sub-status--active');
       daysEl.textContent = '';
-      if (plansEl) plansEl.hidden = false;
     }
+    if (plansEl) plansEl.hidden = true;
   }
 
   async function openSubscriptionScreen() {
@@ -362,30 +361,6 @@
     });
     document.getElementById('sub-back')?.addEventListener('click', () => {
       closeSubscriptionScreen();
-    });
-    document.getElementById('subscription-plans')?.addEventListener('click', async (e) => {
-      const card = e.target.closest('.plan-card');
-      if (!card) return;
-      const plan = card.getAttribute('data-plan');
-      if (!plan) return;
-      haptic('medium');
-      card.style.opacity = '0.6';
-      try {
-        const res = await apiFetch('/api/subscribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ plan }),
-        });
-        if (!res.ok) {
-          alert(t('sub_invoice_error'));
-          return;
-        }
-        if (tg) tg.close();
-      } catch (_) {
-        alert(t('sub_invoice_error'));
-      } finally {
-        card.style.opacity = '';
-      }
     });
   }
 
@@ -1602,9 +1577,6 @@
     document.querySelector('.settings-block')?.classList.add('loaded');
     if (window.SpiceFortune?.tryShow) {
       await window.SpiceFortune.tryShow();
-    }
-    if (new URLSearchParams(window.location.search).get('tab') === 'subscription') {
-      openSubscriptionScreen();
     }
   }
 

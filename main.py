@@ -88,6 +88,7 @@ WEBAPP_DIR = DATA_DIR / "webapp"
 load_dotenv(DATA_DIR / ".env")
 ADMIN_TELEGRAM_ID = 8412438788
 TRIAL_DAYS = 3
+SUBSCRIPTIONS_ENABLED = False
 
 SUBSCRIPTION_PLANS = {
     "4weeks": {
@@ -2668,6 +2669,8 @@ def _profile_in_trial(profile: dict, today: date) -> bool:
 
 
 def _profile_has_daily_access(profile: dict, today: date) -> bool:
+    if not SUBSCRIPTIONS_ENABLED:
+        return True
     if _profile_in_trial(profile, today):
         return True
     return _profile_is_premium_active(profile, today)
@@ -2787,6 +2790,8 @@ async def _append_trial_day2_morning_ps(
     user_profiles: dict[str, dict],
 ) -> str:
     today = _profile_local_date(profile)
+    if not SUBSCRIPTIONS_ENABLED:
+        return text
     if _profile_is_premium_active(profile, today):
         return text
     if _trial_day(profile, today) != 2:
@@ -2846,6 +2851,8 @@ async def _maybe_send_trial_day3_subscription_message(
     today: date,
     user_profiles: dict[str, dict],
 ) -> None:
+    if not SUBSCRIPTIONS_ENABLED:
+        return
     if _profile_is_premium_active(profile, today):
         return
     if _trial_day(profile, today) != 3:
@@ -2879,6 +2886,8 @@ async def _run_trial_expiry_offer(
     user_profiles: dict[str, dict],
     model_names: list[str],
 ) -> None:
+    if not SUBSCRIPTIONS_ENABLED:
+        return
     if _profile_is_premium_active(profile, today):
         return
     if _trial_day(profile, today) != 4:
@@ -2928,6 +2937,8 @@ async def handle_open_subscription_callback(
         await query.edit_message_reply_markup(reply_markup=None)
     except Exception:
         pass
+    if not SUBSCRIPTIONS_ENABLED:
+        return
     try:
         await send_subscription_invoice(cid, "4weeks", context.bot)
     except Exception as e:
@@ -2966,6 +2977,8 @@ def _subscription_paywall_text(profile: dict, lang: str) -> str:
 async def _send_subscription_paywall(
     bot, cid: int, profile: dict, *, offer: bool = False
 ) -> None:
+    if not SUBSCRIPTIONS_ENABLED:
+        return
     lang = ui_lang(profile)
     text = (
         ob.ob_text(
@@ -2987,6 +3000,8 @@ async def _reply_subscription_paywall_if_needed(
     update: Update, cid: int, profile: dict
 ) -> bool:
     """Block chat when trial ended and no active subscription."""
+    if not SUBSCRIPTIONS_ENABLED:
+        return False
     if onboarding.get(cid) is not None:
         return False
     if not isinstance(profile, dict):
@@ -3007,6 +3022,8 @@ async def _reply_subscription_paywall_if_needed(
 
 
 async def send_subscription_invoice(user_id: int, plan: str, bot) -> None:
+    if not SUBSCRIPTIONS_ENABLED:
+        return
     plan_key = plan if plan in SUBSCRIPTION_PLANS else "4weeks"
     spec = SUBSCRIPTION_PLANS[plan_key]
     profile = user_profiles.get(str(user_id)) or db_store.get_profile(user_id) or {}
@@ -3108,6 +3125,8 @@ async def _run_subscription_maintenance(
     today: date,
     user_profiles: dict[str, dict],
 ) -> None:
+    if not SUBSCRIPTIONS_ENABLED:
+        return
     lang = ui_lang(profile)
     name = str(profile.get("name") or "").strip() or ob._friend_word(lang)
     today_iso = today.isoformat()
@@ -7550,6 +7569,8 @@ async def subscribe_endpoint(
     body: SubscribePayload | None = Body(default=None),
 ) -> dict:
     tid = _auth_telegram_id(request, telegram_id)
+    if not SUBSCRIPTIONS_ENABLED:
+        raise HTTPException(status_code=503, detail="subscriptions disabled")
     plan = (body.plan if body else "4weeks").strip()
     if plan not in SUBSCRIPTION_PLANS:
         raise HTTPException(status_code=400, detail="invalid plan")
