@@ -1078,22 +1078,28 @@ def _should_skip_greeting(profile: dict | None) -> bool:
 
 
 def _is_dont_know_streak_phrase(raw: str) -> bool:
-    low = re.sub(r"[^\w\s]", " ", (raw or "").strip().lower())
+    low = re.sub(r"[^\w\s']", " ", (raw or "").strip().lower())
     low = re.sub(r"\s+", " ", low).strip()
     if not low:
         return False
-    exact = {
+    cores = (
         "не знаю",
         "не уверена",
         "не уверен",
         "хз",
+        "без понятия",
+        "нечего сказать",
         "idk",
         "dont know",
         "don't know",
         "not sure",
         "no idea",
-    }
-    if low in exact:
+    )
+    if low in cores:
+        return True
+    # "я не знаю" / "ну не знаю пока" — иначе streak не рос, а ответ
+    # на "не знаю" повторялся одним и тем же текстом.
+    if len(low.split()) <= 6 and any(c in low for c in cores):
         return True
     return (
         low.startswith("не знаю")
@@ -1556,37 +1562,67 @@ def _user_looks_unsure_about_goal(raw: str) -> bool:
     return any(m in low for m in markers)
 
 
-def goal_area_options_message(lang: str = "en") -> str:
+DONT_KNOW_CLARIFY_SYSTEM = """Ты Спейс. Пользователь сказал что не знает / не уверена.
+Задай ОДИН другой уточняющий вопрос про её текущую жизнь —
+что занимает время и энергию, что беспокоит, чего не хватает.
+Примеры тона: "Что сейчас занимает больше всего твоего времени и энергии?"
+НЕ предлагай списки вариантов (здоровье/деньги/отношения).
+НЕ повторяй свой предыдущий вопрос если он передан ниже.
+Один вопрос, 1-2 предложения. Только текст, без JSON."""
+
+
+async def generate_dont_know_clarifying_question(
+    turns: list[dict],
+    model_names: list[str],
+    lang: str = "en",
+) -> str:
+    prev = _last_assistant_reply(turns)
     if _is_ru(lang):
-        return (
-            "Давай я помогу. Вот что чаще всего выбирают:\n"
-            "1. Здоровье и спорт\n"
-            "2. Деньги и карьера\n"
-            "3. Отношения и семья\n"
-            "4. Личный проект или творчество\n\n"
-            "Что из этого ближе всего к тебе сейчас?"
-        )
-    return (
-        "Let me help. Here's what people usually pick:\n"
-        "1. Health and fitness\n"
-        "2. Money and career\n"
-        "3. Relationships and family\n"
-        "4. A personal project or creative work\n\n"
-        "Which feels closest for you right now?"
+        fallback = "Что сейчас занимает больше всего твоего времени и энергии?"
+    else:
+        fallback = "What takes most of your time and energy right now?"
+    history = _format_dialog_history(turns[-6:], lang=lang) if turns else ""
+    user = (
+        f"История (кратко):\n{history}\n\n"
+        f"Твой предыдущий вопрос (НЕ повторяй):\n{prev or '—'}\n\n"
+        "Задай другой один уточняющий вопрос."
     )
+    text = await _claude_plain_text(
+        DONT_KNOW_CLARIFY_SYSTEM,
+        user,
+        model_names,
+        lang=lang,
+        fallback=fallback,
+        max_tokens=120,
+    )
+    if prev and _questions_roughly_same(text, prev):
+        text = await _claude_plain_text(
+            DONT_KNOW_CLARIFY_SYSTEM,
+            user
+            + "\n\nКРИТИЧНО: предыдущий вопрос совпал — сформулируй СОВСЕМ другой.",
+            model_names,
+            lang=lang,
+            fallback=fallback,
+            max_tokens=120,
+        )
+    if prev and _questions_roughly_same(text, prev):
+        return fallback
+    return text or fallback
 
 
 def _switch_approach_hint(lang: str = "en") -> str:
     if _is_ru(lang):
         return (
             "Ты уже задавала похожий вопрос. Смени подход полностью: "
-            "предложи 3-4 конкретные области цели (здоровье/деньги/отношения/творчество) "
-            "или один совсем другой уточняющий вопрос. Не повторяй прошлый вопрос."
+            "задай один совсем другой уточняющий вопрос про текущую жизнь "
+            "(время, энергия, что беспокоит). Без списков вариантов. "
+            "Не повторяй прошлый вопрос."
         )
     return (
         "You already asked a similar question. Switch approach completely: "
-        "offer 3-4 concrete goal areas (health/money/relationships/creative) "
-        "or ask one clearly different clarifying question. Do not repeat the previous question."
+        "ask one clearly different clarifying question about her current life "
+        "(time, energy, what worries her). No option lists. "
+        "Do not repeat the previous question."
     )
 
 
@@ -3212,7 +3248,17 @@ async def handle_onboarding_turn(
             return
 
         if _user_looks_unsure_about_goal(raw) and streak < 3:
-            reply = goal_area_options_message(lang)
+            async with typing_while(context.bot, cid):
+                reply = await generate_dont_know_clarifying_question(
+                    turns, model_names, lang
+                )
+            prev_reply = _last_assistant_reply(turns)
+            if prev_reply and _questions_roughly_same(reply, prev_reply):
+                reply = (
+                    "А если без цели — что в жизни сейчас сильнее всего напрягает или тянет?"
+                    if _is_ru(lang)
+                    else "Forget the goal label — what in life feels most heavy or pulling right now?"
+                )
             turns.append({"role": "assistant", "content": reply[:2000]})
             await msg.reply_text(reply)
             return
@@ -3252,7 +3298,9 @@ async def handle_onboarding_turn(
                 )
                 reply = (result.get("message") or "").strip() or reply
             if prev_reply and _questions_roughly_same(reply, prev_reply):
-                reply = goal_area_options_message(lang)
+                reply = await generate_dont_know_clarifying_question(
+                    turns, model_names, lang
+                )
                 result = {"message": reply, "ready_for_goal": False}
 
         turns.append({"role": "assistant", "content": reply[:2000]})
@@ -3287,7 +3335,17 @@ async def handle_onboarding_turn(
             return
 
         if _user_looks_unsure_about_goal(raw) and streak < 3:
-            reply = goal_area_options_message(lang)
+            async with typing_while(context.bot, cid):
+                reply = await generate_dont_know_clarifying_question(
+                    turns, model_names, lang
+                )
+            prev_reply = _last_assistant_reply(turns)
+            if prev_reply and _questions_roughly_same(reply, prev_reply):
+                reply = (
+                    "А если без цели — что в жизни сейчас сильнее всего напрягает или тянет?"
+                    if _is_ru(lang)
+                    else "Forget the goal label — what in life feels most heavy or pulling right now?"
+                )
             turns.append({"role": "assistant", "content": reply[:2000]})
             await msg.reply_text(reply)
             return
@@ -3325,7 +3383,9 @@ async def handle_onboarding_turn(
                 )
                 reply = (result.get("message") or "").strip() or reply
             if prev_reply and _questions_roughly_same(reply, prev_reply):
-                reply = goal_area_options_message(lang)
+                reply = await generate_dont_know_clarifying_question(
+                    turns, model_names, lang
+                )
                 result = {"message": reply, "ready": False, "goal": ""}
 
         turns.append({"role": "assistant", "content": reply[:2000]})
