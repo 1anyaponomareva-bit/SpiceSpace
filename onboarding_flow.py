@@ -1393,7 +1393,6 @@ async def build_change_goal_dialog_opening(
     """Opening for new_12w / adjust after choice. Returns (message, seed turns)."""
     name = str(profile.get("name") or "").strip() or _friend_word(lang)
     prev = (previous_goal or str(profile.get("main_goal") or "")).strip()
-    topic = (user_topic or "").strip()
 
     if mode == "adjust_12w":
         fb = change_12w_adjust_opening(prev, lang)
@@ -1406,45 +1405,12 @@ async def build_change_goal_dialog_opening(
         )
         return text, [{"role": "assistant", "content": text[:2000]}]
 
-    if prev:
-        old_sphere = await classify_goal_sphere(prev, model_names, lang)
-        new_sphere = (
-            await classify_goal_sphere(topic, model_names, lang)
-            if topic and len(topic) >= 8
-            else old_sphere
-        )
-        label = _sphere_label(old_sphere, lang)
-        same = new_sphere == old_sphere or not topic
-        if same:
-            same_fb = (
-                f"{name}, помню ты шла к «{prev[:100]}». Что пошло не так — или что хочешь поменять?"
-                if _is_ru(lang)
-                else f"{name}, I remember you were working toward «{prev[:100]}». What went wrong — or what do you want to change?"
-            )
-            text = await _claude_plain_text(
-                SAME_SPHERE_OPENING_SYSTEM,
-                f"Имя: {name}\nПредыдущая цель: {prev}\nСфера: {old_sphere} ({label})",
-                model_names,
-                lang=lang,
-                fallback=same_fb,
-            )
-        else:
-            diff_fb = (
-                f"Помню ты работала над {label}, сейчас другое — расскажи что сейчас важнее."
-                if _is_ru(lang)
-                else f"I remember you were focused on {label}; this is different — what matters more now?"
-            )
-            text = await _claude_plain_text(
-                DIFF_SPHERE_OPENING_SYSTEM,
-                f"Имя: {name}\nПредыдущая цель: {prev}\nПрошлая сфера: {label}\nНовая тема: {topic[:300]}",
-                model_names,
-                lang=lang,
-                fallback=diff_fb,
-            )
-        return text, [{"role": "assistant", "content": text[:2000]}]
-
+    # new_12w — ask about the new goal only; never mention the previous one
     question = await generate_first_pain_question(
-        name, model_names, lang, profile=profile
+        name,
+        model_names,
+        lang,
+        profile={"name": name} if name else None,
     )
     return question, [{"role": "assistant", "content": question[:2000]}]
 
