@@ -2663,11 +2663,18 @@ async def handle_reengagement_callback(
         prof["daily_enabled"] = True
         user_profiles[str(cid)] = prof
         ob.start_reengagement_goal(onboarding, cid, prof)
-        goal_ask = (
-            "Расскажи — что сейчас актуальнее? Какую цель хочешь поставить?"
-            if lang.lower().startswith("ru")
-            else "What's more relevant for you now? What goal do you want to set?"
+        model_names: list[str] = context.bot_data.get("claude_model_names") or []
+        goal_ask, seed = await ob.build_change_goal_dialog_opening(
+            prof,
+            lang,
+            model_names,
+            mode="new_12w",
+            previous_goal=str(prof.get("main_goal") or ""),
         )
+        st_re = onboarding.get(cid)
+        if isinstance(st_re, dict):
+            st_re["goal_turns"] = seed
+            st_re["step"] = OB_GOAL_DIALOG
         await context.bot.send_message(
             chat_id=cid,
             text=goal_ask,
@@ -4382,11 +4389,17 @@ async def _try_handle_change_12w_choice(
         st["change_mode"] = "new_12w"
         st["change_12w_phase"] = "vision"
         st["step"] = ob.OB_VISION_DIALOG
-        st["vision_turns"] = []
-        name = str(st.get("name") or prof.get("name") or "").strip() or (
-            "подруга" if lang.lower().startswith("ru") else "friend"
+        st["dont_know_streak"] = 0
+        prev_goal = str(st.get("main_goal") or prof.get("main_goal") or "").strip()
+        msg, seed = await ob.build_change_goal_dialog_opening(
+            prof if isinstance(prof, dict) else st,
+            lang,
+            model_names,
+            mode="new_12w",
+            previous_goal=prev_goal,
+            user_topic=raw,
         )
-        msg = ob.message_vision(name, lang)
+        st["vision_turns"] = seed
         _append_history_turn(cid, raw, msg)
         await _bot_reply(update.message, msg)
         return True
@@ -4396,8 +4409,17 @@ async def _try_handle_change_12w_choice(
         st["change_mode"] = "adjust_12w"
         st["change_12w_phase"] = "goal"
         st["step"] = OB_GOAL_DIALOG
-        st["goal_turns"] = []
-        msg = ob.change_12w_adjust_opening(str(st.get("main_goal") or ""), lang)
+        st["dont_know_streak"] = 0
+        prev_goal = str(st.get("main_goal") or prof.get("main_goal") or "").strip()
+        msg, seed = await ob.build_change_goal_dialog_opening(
+            prof if isinstance(prof, dict) else st,
+            lang,
+            model_names,
+            mode="adjust_12w",
+            previous_goal=prev_goal,
+            user_topic=raw,
+        )
+        st["goal_turns"] = seed
         _append_history_turn(cid, raw, msg)
         await _bot_reply(update.message, msg)
         return True
@@ -4721,7 +4743,16 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not name and update.effective_user:
             name = str(update.effective_user.first_name or "").strip()
         ob.start_reonboarding(onboarding, cid, name, lang)
-        await _bot_reply(update.message, ob.message_vision(name, lang))
+        model_names = context.bot_data.get("claude_model_names") or []
+        opening = await ob.kickoff_vision_opening(
+            onboarding,
+            cid,
+            name,
+            lang,
+            model_names,
+            profile=prof if isinstance(prof, dict) else None,
+        )
+        await _bot_reply(update.message, opening)
         return
 
     if isinstance(prof, dict) and prof.get("name"):
@@ -4731,9 +4762,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 onboarding, cid, prof, lang
             )
             if kind == "vision":
+                model_names = context.bot_data.get("claude_model_names") or []
+                opening = await ob.kickoff_vision_opening(
+                    onboarding, cid, name, lang, model_names, profile=prof
+                )
                 await _bot_reply(
                     update.message,
-                    ob.message_vision(name, lang),
+                    opening,
                 )
             elif kind == "weekly":
                 await _bot_reply(
@@ -5116,7 +5151,16 @@ async def cmd_reonboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not name and update.effective_user:
         name = str(update.effective_user.first_name or "").strip()
     ob.start_reonboarding(onboarding, cid, name, lang)
-    await _bot_reply(update.message, ob.message_vision(name, lang))
+    model_names = context.bot_data.get("claude_model_names") or []
+    opening = await ob.kickoff_vision_opening(
+        onboarding,
+        cid,
+        name,
+        lang,
+        model_names,
+        profile=prof if isinstance(prof, dict) else None,
+    )
+    await _bot_reply(update.message, opening)
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -5171,9 +5215,13 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             onboarding, cid, prof_check, lang
         )
         if kind == "vision":
+            model_names = context.bot_data.get("claude_model_names") or []
+            opening = await ob.kickoff_vision_opening(
+                onboarding, cid, name, lang, model_names, profile=prof_check
+            )
             await _bot_reply(
                 update.message,
-                ob.message_vision(name, lang),
+                opening,
             )
         elif kind == "weekly":
             await _bot_reply(

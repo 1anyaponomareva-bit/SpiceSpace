@@ -21,7 +21,6 @@ from prompts import (
     CHANGE_WEEKLY_GOAL_SYSTEM,
     GOAL_DIALOG_SYSTEM,
     NAME_EXTRACT_PROMPT,
-    VISION_DIALOG_SYSTEM,
     WEEKLY_RECAP_DIALOG_SYSTEM,
     WEEKLY_TACTICS_DIALOG_SYSTEM,
     goal_polish_prompt_template,
@@ -34,6 +33,55 @@ if TYPE_CHECKING:
 log = logging.getLogger("coach_bot")
 
 _flow_outgoing_prepare: Callable[[int, str], str] | None = None
+
+FIRST_PAIN_QUESTION_SYSTEM = """Ты Спейс. Пользователь только что назвал своё имя.
+Задай один короткий живой вопрос про то что сейчас не так в его жизни
+или что хочется изменить. Не используй слова 'мечта', 'представь',
+'через 3 месяца'. Говори как подруга — просто и по-человечески.
+Один вопрос, 1-2 предложения максимум.
+Ответь только текстом вопроса, без JSON и кавычек."""
+
+WHY_DIG_SYSTEM = """Ты Спейс. Твоя задача — докопаться до истинной причины цели пользователя.
+Задавай уточняющие вопросы 'зачем тебе это?' / 'что изменится когда это случится?'
+/ 'что это даст тебе на самом деле?'
+Один вопрос за раз. Не переходи к формулировке цели пока не поняла
+эмоциональную суть — уверенность, свобода, признание, покой и т.д.
+Как только поняла суть — переходи к формулировке цели:
+мягко спроси что самое важное реализовать за эти 12 недель или предложи черновик.
+
+ЗАПРЕЩЕНО: слова 'мечта', 'представь через 3 месяца', коуч-язык, markdown.
+Максимум 3 предложения.
+
+Верни JSON: {"message": "...", "ready_for_goal": true/false}
+ready_for_goal=true только когда эмоциональная суть ясна и можно переходить к цели на 12 недель."""
+
+DONT_KNOW_EXIT_SYSTEM = """Ты Спейс. Пользователь несколько раз ответил 'не знаю'.
+Скажи тепло но честно что не можешь помочь если человек сам не готов
+разобраться. Скажи что ты здесь и готова помочь когда он будет готов.
+Попрощайся. 2-3 предложения.
+Только текст ответа, без JSON."""
+
+VARY_PHRASE_SYSTEM = """Скажи то же самое своими словами, каждый раз немного по-другому.
+Тон — живая подруга, не бот. Сохрани смысл и ключевые факты/имена/числа.
+Без markdown. Только готовый текст для пользователя."""
+
+GOAL_SPHERE_SYSTEM = """Classify the goal into one word only:
+health — body, fitness, weight, sport, energy, sleep
+money — money, career, business, clients, income
+relations — relationships, family, love, friends
+creative — creative work, content, project, media, art
+other — anything else
+Reply with only one word: health, money, relations, creative, or other."""
+
+SAME_SPHERE_OPENING_SYSTEM = """Ты Спейс. Пользователь меняет цель но остаётся в той же сфере.
+Начни с того что помнишь предыдущую цель и спроси что пошло не так.
+Используй имя и конкретную предыдущую цель. Без приветствия.
+1-3 предложения. Только текст."""
+
+DIFF_SPHERE_OPENING_SYSTEM = """Ты Спейс. Пользователь меняет цель на другую сферу.
+Без приветствия. Коротко отметь что раньше было другое направление
+и спроси что сейчас важнее. Используй имя если есть.
+1-3 предложения. Только текст."""
 
 
 def register_flow_outgoing_prepare(fn: Callable[[int, str], str]) -> None:
@@ -208,9 +256,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "Твои цели и наши разговоры не видит никто другой. 🔒"
     ),
     "dream_intro": (
-        "Прежде чем ставить цели — давай помечтаем.\n\n"
-        "Представь: прошло 3 месяца, и всё получилось именно так как ты хотела. "
-        "Как выглядит твой день? Что изменилось в твоей жизни?"
+        "Что сейчас сильнее всего хочется изменить в своей жизни?"
     ),
     "wrote_down": "Записала ✨",
     "right": "Верно?",
@@ -281,9 +327,7 @@ STRINGS: dict[str, dict[str, str]] = {
     ),
     "greeting_after_name": "{name}, приятно познакомиться 💚",
     "vision_question": (
-        "Прежде чем ставить цели — давай помечтаем.\n\n"
-        "Представь: прошло 3 месяца, и всё получилось именно так как ты хотела. "
-        "Как выглядит твой день? Что изменилось в твоей жизни?"
+        "Что сейчас сильнее всего хочется изменить в своей жизни?"
     ),
     "vision_privacy": (
         "Кстати — всё что ты пишешь здесь остаётся между нами. "
@@ -441,9 +485,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "Your goals and our conversations are visible only to you 🔒"
     ),
     "dream_intro": (
-        "Before we set goals — let's dream a little.\n\n"
-        "Imagine: 3 months have passed and everything worked out exactly as you wanted. "
-        "What does your day look like? What changed in your life?"
+        "What do you most want to change in your life right now?"
     ),
     "wrote_down": "Got it ✨",
     "right": "Right?",
@@ -508,9 +550,7 @@ STRINGS: dict[str, dict[str, str]] = {
     ),
     "greeting_after_name": "Nice to meet you, {name} 💚",
     "vision_question": (
-        "Before we set goals — let's dream a little.\n\n"
-        "Imagine: 3 months have passed and everything worked out exactly as you wanted. "
-        "What does your day look like? What changed in your life?"
+        "What do you most want to change in your life right now?"
     ),
     "vision_privacy": (
         "By the way — everything you write here stays between us. "
@@ -994,11 +1034,353 @@ def greeting_after_name(name: str, lang: str = "en") -> str:
 
 
 def vision_question_message(lang: str = "en") -> str:
-    return s("dream_intro", lang)
+    if _is_ru(lang):
+        return "Что сейчас сильнее всего хочется изменить в своей жизни?"
+    return "What do you most want to change in your life right now?"
 
 
 def message_vision(name: str, lang: str = "en") -> str:
+    """Sync fallback for callers that cannot await. Prefer message_vision_async."""
     return f"{greeting_after_name(name, lang)}\n\n{vision_question_message(lang)}"
+
+
+def _profile_chatted_today(profile: dict | None) -> bool:
+    if not isinstance(profile, dict):
+        return False
+    last = str(profile.get("last_user_message_date") or "").strip()[:10]
+    if not last:
+        return False
+    try:
+        tz = ZoneInfo(str(profile.get("timezone") or _default_timezone()))
+        today = datetime.now(tz).date().isoformat()
+    except Exception:
+        today = date.today().isoformat()
+    return last == today
+
+
+def _should_skip_greeting(profile: dict | None) -> bool:
+    if not isinstance(profile, dict):
+        return False
+    if not str(profile.get("name") or "").strip():
+        return False
+    return _profile_chatted_today(profile)
+
+
+def _is_dont_know_streak_phrase(raw: str) -> bool:
+    low = re.sub(r"[^\w\s]", " ", (raw or "").strip().lower())
+    low = re.sub(r"\s+", " ", low).strip()
+    if not low:
+        return False
+    exact = {
+        "не знаю",
+        "не уверена",
+        "не уверен",
+        "хз",
+        "idk",
+        "dont know",
+        "don't know",
+        "not sure",
+        "no idea",
+    }
+    if low in exact:
+        return True
+    return (
+        low.startswith("не знаю")
+        or low.startswith("не уверен")
+        or low.startswith("i don't know")
+        or low.startswith("i dont know")
+    )
+
+
+def _looks_like_concrete_goal(raw: str) -> bool:
+    text = (raw or "").strip()
+    if len(text) < 10 or _is_dont_know_streak_phrase(text):
+        return False
+    low = text.lower()
+    markers = (
+        "хочу",
+        "хотел",
+        "хотела",
+        "цель",
+        "похуд",
+        "сброс",
+        "набрать",
+        "заработ",
+        "запуск",
+        "клиент",
+        "кг",
+        "кило",
+        "руб",
+        "$",
+        "долл",
+        "видео",
+        "проект",
+        "want to",
+        "i want",
+        "lose",
+        "earn",
+        "launch",
+        "goal",
+    )
+    return any(m in low for m in markers)
+
+
+def _sphere_label(sphere: str, lang: str = "en") -> str:
+    ru = _is_ru(lang)
+    mapping = {
+        "health": ("здоровье и тело", "health and body"),
+        "money": ("деньги и карьеру", "money and career"),
+        "relations": ("отношения", "relationships"),
+        "creative": ("творчество и проекты", "creative work"),
+        "other": ("другую тему", "something else"),
+    }
+    pair = mapping.get(sphere, mapping["other"])
+    return pair[0] if ru else pair[1]
+
+
+def _update_dont_know_streak(st: dict, raw: str) -> int:
+    if _is_dont_know_streak_phrase(raw):
+        streak = int(st.get("dont_know_streak") or 0) + 1
+    else:
+        streak = 0
+    st["dont_know_streak"] = streak
+    return streak
+
+
+async def _claude_plain_text(
+    system: str,
+    user_content: str,
+    model_names: list[str],
+    *,
+    lang: str = "en",
+    fallback: str = "",
+    max_tokens: int = 220,
+) -> str:
+    messages = [{"role": "user", "content": (user_content or "Напиши сообщение.").strip()}]
+
+    def call() -> str:
+        for mid in model_names or []:
+            try:
+                text = claude_generate(
+                    mid,
+                    _messages_with_lang(messages, lang),
+                    system=_system_with_lang(system, lang),
+                    max_tokens=max_tokens,
+                    cache_core=False,
+                ).strip()
+                text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.I).strip()
+                if text:
+                    return text[:2000]
+            except Exception as e:
+                log.warning("onboarding plain text %s: %s", mid, e)
+        return (fallback or "").strip()
+
+    return await asyncio.to_thread(call)
+
+
+async def say_as_friend(
+    fallback: str,
+    model_names: list[str],
+    lang: str = "en",
+    *,
+    intent: str = "",
+) -> str:
+    fb = (fallback or "").strip()
+    if not fb:
+        return fb
+    user = (
+        f"Intent: {intent}\n\nSay this in your own words:\n{fb}"
+        if intent
+        else f"Say this in your own words:\n{fb}"
+    )
+    out = await _claude_plain_text(
+        VARY_PHRASE_SYSTEM,
+        user,
+        model_names,
+        lang=lang,
+        fallback=fb,
+        max_tokens=260,
+    )
+    return out or fb
+
+
+async def generate_first_pain_question(
+    name: str,
+    model_names: list[str],
+    lang: str = "en",
+) -> str:
+    n = (name or "").strip() or _friend_word(lang)
+    fallback = vision_question_message(lang)
+    return await _claude_plain_text(
+        FIRST_PAIN_QUESTION_SYSTEM,
+        f"Имя пользователя: {n}" if _is_ru(lang) else f"User name: {n}",
+        model_names,
+        lang=lang,
+        fallback=fallback,
+        max_tokens=120,
+    )
+
+
+async def generate_dont_know_exit(
+    model_names: list[str],
+    lang: str = "en",
+) -> str:
+    if _is_ru(lang):
+        fallback = (
+            "Похоже, сейчас тебе самой ещё неясно — и без этого я не смогу помочь по-настоящему. "
+            "Я здесь, когда будешь готова разобраться. Напиши мне тогда."
+        )
+    else:
+        fallback = (
+            "It seems things aren't clear for you yet — and without that I can't really help. "
+            "I'm here when you're ready to figure it out. Write me then."
+        )
+    return await _claude_plain_text(
+        DONT_KNOW_EXIT_SYSTEM,
+        "Напиши прощание." if _is_ru(lang) else "Write the goodbye.",
+        model_names,
+        lang=lang,
+        fallback=fallback,
+        max_tokens=180,
+    )
+
+
+def _parse_goal_sphere(text: str) -> str:
+    low = re.sub(r"[^\w\s]", " ", (text or "").strip().lower())
+    low = re.sub(r"\s+", " ", low).strip()
+    for key in ("health", "money", "relations", "creative", "other"):
+        if key in low:
+            return key
+    return "other"
+
+
+async def classify_goal_sphere(
+    goal_text: str,
+    model_names: list[str],
+    lang: str = "en",
+) -> str:
+    g = (goal_text or "").strip()
+    if not g:
+        return "other"
+    raw = await _claude_plain_text(
+        GOAL_SPHERE_SYSTEM,
+        f"Goal: {g}",
+        model_names,
+        lang="en",
+        fallback="other",
+        max_tokens=12,
+    )
+    return _parse_goal_sphere(raw)
+
+
+async def message_vision_async(
+    name: str,
+    lang: str,
+    model_names: list[str],
+    *,
+    profile: dict | None = None,
+    skip_greeting: bool | None = None,
+) -> tuple[str, str]:
+    """Return (user-facing message, first assistant turn for vision_turns)."""
+    n = (name or "").strip() or _friend_word(lang)
+    skip = (
+        _should_skip_greeting(profile)
+        if skip_greeting is None
+        else bool(skip_greeting)
+    )
+    question = await generate_first_pain_question(n, model_names, lang)
+    if skip:
+        return question, question
+    greet_fb = greeting_after_name(n, lang)
+    greet = await say_as_friend(
+        greet_fb, model_names, lang, intent="short greeting after name"
+    )
+    msg = f"{greet}\n\n{question}"
+    return msg, question
+
+
+async def kickoff_vision_opening(
+    onboarding: dict[int, dict],
+    cid: int,
+    name: str,
+    lang: str,
+    model_names: list[str],
+    *,
+    profile: dict | None = None,
+) -> str:
+    opening, first_q = await message_vision_async(
+        name, lang, model_names, profile=profile
+    )
+    st = onboarding.get(cid) or {}
+    st["vision_turns"] = [{"role": "assistant", "content": first_q[:2000]}]
+    st["dont_know_streak"] = 0
+    onboarding[cid] = st
+    return opening
+
+
+async def build_change_goal_dialog_opening(
+    profile: dict,
+    lang: str,
+    model_names: list[str],
+    *,
+    mode: str,
+    previous_goal: str = "",
+    user_topic: str = "",
+) -> tuple[str, list[dict]]:
+    """Opening for new_12w / adjust after choice. Returns (message, seed turns)."""
+    name = str(profile.get("name") or "").strip() or _friend_word(lang)
+    prev = (previous_goal or str(profile.get("main_goal") or "")).strip()
+    topic = (user_topic or "").strip()
+
+    if mode == "adjust_12w":
+        fb = change_12w_adjust_opening(prev, lang)
+        text = await say_as_friend(
+            fb,
+            model_names,
+            lang,
+            intent="adjust current 12w goal, no greeting",
+        )
+        return text, [{"role": "assistant", "content": text[:2000]}]
+
+    if prev:
+        old_sphere = await classify_goal_sphere(prev, model_names, lang)
+        new_sphere = (
+            await classify_goal_sphere(topic, model_names, lang)
+            if topic and len(topic) >= 8
+            else old_sphere
+        )
+        label = _sphere_label(old_sphere, lang)
+        same = new_sphere == old_sphere or not topic
+        if same:
+            same_fb = (
+                f"{name}, помню ты шла к «{prev[:100]}». Что пошло не так — или что хочешь поменять?"
+                if _is_ru(lang)
+                else f"{name}, I remember you were working toward «{prev[:100]}». What went wrong — or what do you want to change?"
+            )
+            text = await _claude_plain_text(
+                SAME_SPHERE_OPENING_SYSTEM,
+                f"Имя: {name}\nПредыдущая цель: {prev}\nСфера: {old_sphere} ({label})",
+                model_names,
+                lang=lang,
+                fallback=same_fb,
+            )
+        else:
+            diff_fb = (
+                f"Помню ты работала над {label}, сейчас другое — расскажи что сейчас важнее."
+                if _is_ru(lang)
+                else f"I remember you were focused on {label}; this is different — what matters more now?"
+            )
+            text = await _claude_plain_text(
+                DIFF_SPHERE_OPENING_SYSTEM,
+                f"Имя: {name}\nПредыдущая цель: {prev}\nПрошлая сфера: {label}\nНовая тема: {topic[:300]}",
+                model_names,
+                lang=lang,
+                fallback=diff_fb,
+            )
+        return text, [{"role": "assistant", "content": text[:2000]}]
+
+    question = await generate_first_pain_question(name, model_names, lang)
+    return question, [{"role": "assistant", "content": question[:2000]}]
 
 
 def greeting_returning(name: str, lang: str = "en") -> str:
@@ -1351,6 +1733,7 @@ async def _claude_vision_dialog(
     *,
     extra_user_hint: str = "",
     lang: str = "en",
+    system_prompt: str | None = None,
 ) -> dict:
     messages = [
         {"role": t["role"], "content": t["content"]}
@@ -1360,13 +1743,15 @@ async def _claude_vision_dialog(
     if extra_user_hint:
         messages.append({"role": "user", "content": extra_user_hint})
 
+    system = system_prompt or WHY_DIG_SYSTEM
+
     def call() -> dict:
         for mid in model_names:
             try:
                 text = claude_generate(
                     mid,
                     _messages_with_lang(messages, lang),
-                    system=_system_with_lang(VISION_DIALOG_SYSTEM, lang),
+                    system=_system_with_lang(system, lang),
                     max_tokens=400,
                     cache_core=False,
                 ).strip()
@@ -2545,18 +2930,43 @@ async def handle_returning_choice(
 
     if looks_like_restart_onboarding(raw):
         start_reonboarding(onboarding, cid, name, lang)
-        await msg.reply_text(message_vision(name, lang))
+        model_names = context.bot_data.get("claude_model_names") or []
+        opening, first_q = await message_vision_async(
+            name, lang, model_names, profile=prof
+        )
+        onboarding[cid]["vision_turns"] = [
+            {"role": "assistant", "content": first_q[:2000]}
+        ]
+        await msg.reply_text(opening)
         return True
 
     if looks_like_just_chat(raw):
         if not profile_onboarding_complete(prof):
-            await flow_reply_text(msg, ob_text("returning_hint", lang))
+            hint = await say_as_friend(
+                ob_text("returning_hint", lang),
+                context.bot_data.get("claude_model_names") or [],
+                lang,
+                intent="returning hint",
+            )
+            await flow_reply_text(msg, hint)
             return True
         onboarding.pop(cid, None)
-        await msg.reply_text(ob_text("returning_just_chat", lang))
+        chat_msg = await say_as_friend(
+            ob_text("returning_just_chat", lang),
+            context.bot_data.get("claude_model_names") or [],
+            lang,
+            intent="just chat",
+        )
+        await msg.reply_text(chat_msg)
         return True
 
-    await flow_reply_text(msg, ob_text("returning_hint", lang))
+    hint = await say_as_friend(
+        ob_text("returning_hint", lang),
+        context.bot_data.get("claude_model_names") or [],
+        lang,
+        intent="returning hint",
+    )
+    await flow_reply_text(msg, hint)
     return True
 
 
@@ -2633,9 +3043,18 @@ async def handle_onboarding_turn(
                 if confirm.get("goal_type") == GOAL_TYPE_12W
                 else "goal_rewrite_weekly"
             )
-            await msg.reply_text(ob_text(key, lang))
+            rewrite = await say_as_friend(
+                ob_text(key, lang), model_names, lang, intent="ask to rewrite goal"
+            )
+            await msg.reply_text(rewrite)
             return
-        await flow_reply_text(msg, ob_text("goal_confirm_yes_no", lang))
+        confirm_hint = await say_as_friend(
+            ob_text("goal_confirm_yes_no", lang),
+            model_names,
+            lang,
+            intent="ask yes or no on goal",
+        )
+        await flow_reply_text(msg, confirm_hint)
         return
 
     if step == OB_WEEKLY_RECAP:
@@ -2717,22 +3136,41 @@ async def handle_onboarding_turn(
             name = (
                 await _extract_name(raw, model_names, lang=lang)
             ).strip()[:120] or _friend_word(lang)
+            opening, first_q = await message_vision_async(
+                name,
+                lang,
+                model_names,
+                profile=user_profiles.get(str(cid)),
+                skip_greeting=False,
+            )
+            privacy = await say_as_friend(
+                ob_text("vision_privacy", lang),
+                model_names,
+                lang,
+                intent="privacy note",
+            )
         st["name"] = name
         st["step"] = OB_VISION_DIALOG
-        st["vision_turns"] = []
-        n = (name or "").strip() or _friend_word(lang)
-        await msg.reply_text(
-            f"{greeting_after_name(n, lang)}\n\n{vision_question_message(lang)}"
-        )
+        st["vision_turns"] = [{"role": "assistant", "content": first_q[:2000]}]
+        st["dont_know_streak"] = 0
+        await msg.reply_text(opening)
         await asyncio.sleep(1)
-        await msg.reply_text(ob_text("vision_privacy", lang))
+        await msg.reply_text(privacy)
         return
 
     if step == OB_VISION_DIALOG:
         turns = st.setdefault("vision_turns", [])
         turns.append({"role": "user", "content": raw.strip()[:2000]})
 
-        if _user_looks_unsure_about_goal(raw):
+        streak = _update_dont_know_streak(st, raw)
+        if streak >= 3:
+            async with typing_while(context.bot, cid):
+                bye = await generate_dont_know_exit(model_names, lang)
+            onboarding.pop(cid, None)
+            await msg.reply_text(bye)
+            return
+
+        if _user_looks_unsure_about_goal(raw) and streak < 3:
             reply = goal_area_options_message(lang)
             turns.append({"role": "assistant", "content": reply[:2000]})
             await msg.reply_text(reply)
@@ -2740,9 +3178,20 @@ async def handle_onboarding_turn(
 
         prev_reply = _last_assistant_reply(turns)
         same_streak = _assistant_same_question_streak(turns)
-        vis_hint = _switch_approach_hint(lang)
+        dig_hint = ""
+        if _looks_like_concrete_goal(raw):
+            dig_hint = (
+                "User already named a concrete goal. Dig into WHY — "
+                "ask what changes emotionally when it happens. ready_for_goal=false until essence is clear."
+                if not _is_ru(lang)
+                else (
+                    "Пользователь уже назвал конкретную цель. Копай ЗАЧЕМ — "
+                    "что изменится эмоционально когда это случится. ready_for_goal=false пока суть не ясна."
+                )
+            )
+        vis_hint = dig_hint or _switch_approach_hint(lang)
         async with typing_while(context.bot, cid):
-            if same_streak >= 2:
+            if same_streak >= 2 or dig_hint:
                 result = await _claude_vision_dialog(
                     turns,
                     model_names,
@@ -2757,7 +3206,7 @@ async def handle_onboarding_turn(
                 result = await _claude_vision_dialog(
                     turns,
                     model_names,
-                    extra_user_hint=vis_hint,
+                    extra_user_hint=_switch_approach_hint(lang),
                     lang=lang,
                 )
                 reply = (result.get("message") or "").strip() or reply
@@ -2771,6 +3220,7 @@ async def handle_onboarding_turn(
             st["vision"] = _collect_vision_from_turns(turns)
             st["step"] = OB_GOAL_DIALOG
             st["goal_turns"] = []
+            st["dont_know_streak"] = 0
             await msg.reply_text(reply)
         else:
             await msg.reply_text(reply)
@@ -2779,6 +3229,7 @@ async def handle_onboarding_turn(
     if step == OB_REENGAGE_GOAL:
         st["goal_turns"] = [{"role": "user", "content": raw.strip()[:2000]}]
         st["step"] = OB_GOAL_DIALOG
+        st["dont_know_streak"] = 0
         step = OB_GOAL_DIALOG
 
     if step == OB_GOAL_DIALOG:
@@ -2786,7 +3237,15 @@ async def handle_onboarding_turn(
         if not turns or turns[-1].get("role") != "user":
             turns.append({"role": "user", "content": raw.strip()[:2000]})
 
-        if _user_looks_unsure_about_goal(raw):
+        streak = _update_dont_know_streak(st, raw)
+        if streak >= 3:
+            async with typing_while(context.bot, cid):
+                bye = await generate_dont_know_exit(model_names, lang)
+            onboarding.pop(cid, None)
+            await msg.reply_text(bye)
+            return
+
+        if _user_looks_unsure_about_goal(raw) and streak < 3:
             reply = goal_area_options_message(lang)
             turns.append({"role": "assistant", "content": reply[:2000]})
             await msg.reply_text(reply)
@@ -2795,22 +3254,24 @@ async def handle_onboarding_turn(
         prev_reply = _last_assistant_reply(turns)
         same_streak = _assistant_same_question_streak(turns)
         goal_hint = _switch_approach_hint(lang)
+        why_extra = (
+            "Keep digging for emotional why before locking the goal wording. "
+            "ready=true only after user confirms a concrete goal."
+            if not _is_ru(lang)
+            else (
+                "Продолжай копать эмоциональное зачем до фиксации формулировки. "
+                "ready=true только после подтверждения конкретной цели."
+            )
+        )
         async with typing_while(context.bot, cid):
-            if same_streak >= 2:
-                result = await _claude_goal_dialog(
-                    turns,
-                    model_names,
-                    vision=str(st.get("vision") or ""),
-                    extra_user_hint=goal_hint,
-                    lang=lang,
-                )
-            else:
-                result = await _claude_goal_dialog(
-                    turns,
-                    model_names,
-                    vision=str(st.get("vision") or ""),
-                    lang=lang,
-                )
+            extra = goal_hint if same_streak >= 2 else why_extra
+            result = await _claude_goal_dialog(
+                turns,
+                model_names,
+                vision=str(st.get("vision") or ""),
+                extra_user_hint=extra if (same_streak >= 2 or len(turns) <= 4) else "",
+                lang=lang,
+            )
             reply = (result.get("message") or ob_text("goal_fallback", lang)).strip()
 
             if prev_reply and _questions_roughly_same(reply, prev_reply):
