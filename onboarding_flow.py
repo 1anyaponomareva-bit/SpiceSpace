@@ -49,6 +49,10 @@ WHY_DIG_SYSTEM = """Ты Спейс. Твоя задача — докопать�
 Как только поняла суть — переходи к формулировке цели:
 мягко спроси что самое важное реализовать за эти 12 недель или предложи черновик.
 
+КРИТИЧЕСКИ ВАЖНО: задавай строго ОДИН вопрос за раз.
+Никогда не задавай два вопроса в одном сообщении.
+Если хочется спросить несколько вещей — выбери самый важный.
+
 ЗАПРЕЩЕНО: слова 'мечта', 'представь через 3 месяца', коуч-язык, markdown.
 Максимум 3 предложения.
 
@@ -63,6 +67,13 @@ DONT_KNOW_EXIT_SYSTEM = """Ты Спейс. Пользователь неско�
 
 VARY_PHRASE_SYSTEM = """Скажи то же самое своими словами, каждый раз немного по-другому.
 Тон — живая подруга, не бот. Сохрани смысл и ключевые факты/имена/числа.
+Без markdown. Только готовый текст для пользователя."""
+
+RETURNING_ONBOARDING_SYSTEM = """Ты Спейс. Пользователь уже проходил онбординг раньше — ты его знаешь.
+Не используй стандартные фразы из первого знакомства.
+Говори как подруга которая продолжает разговор, не как бот который
+запустил скрипт заново. Каждый раз формулируй немного по-другому.
+Сохрани смысл исходной фразы и ключевые факты/имена/числа.
 Без markdown. Только готовый текст для пользователя."""
 
 GOAL_SPHERE_SYSTEM = """Classify the goal into one word only:
@@ -1184,17 +1195,30 @@ async def say_as_friend(
     lang: str = "en",
     *,
     intent: str = "",
+    profile: dict | None = None,
 ) -> str:
     fb = (fallback or "").strip()
     if not fb:
         return fb
-    user = (
-        f"Intent: {intent}\n\nSay this in your own words:\n{fb}"
-        if intent
-        else f"Say this in your own words:\n{fb}"
-    )
+    prev_goal = ""
+    name = ""
+    if isinstance(profile, dict):
+        prev_goal = str(
+            profile.get("main_goal") or profile.get("final_goal") or ""
+        ).strip()
+        name = str(profile.get("name") or "").strip()
+    returning = bool(prev_goal)
+    system = RETURNING_ONBOARDING_SYSTEM if returning else VARY_PHRASE_SYSTEM
+    parts: list[str] = []
+    if returning:
+        parts.append(f"Имя: {name or '—'}")
+        parts.append(f"Предыдущая цель: {prev_goal}")
+    if intent:
+        parts.append(f"Intent: {intent}")
+    parts.append(f"Скажи это своими словами:\n{fb}")
+    user = "\n".join(parts)
     out = await _claude_plain_text(
-        VARY_PHRASE_SYSTEM,
+        system,
         user,
         model_names,
         lang=lang,
@@ -1208,9 +1232,35 @@ async def generate_first_pain_question(
     name: str,
     model_names: list[str],
     lang: str = "en",
+    *,
+    profile: dict | None = None,
 ) -> str:
     n = (name or "").strip() or _friend_word(lang)
     fallback = vision_question_message(lang)
+    prev_goal = ""
+    if isinstance(profile, dict):
+        prev_goal = str(
+            profile.get("main_goal") or profile.get("final_goal") or ""
+        ).strip()
+    if prev_goal:
+        system = (
+            RETURNING_ONBOARDING_SYSTEM
+            + "\n\n"
+            + "Задай один короткий живой вопрос про то что сейчас не так "
+            "или что хочется изменить. Без слов 'мечта', 'представь', 'через 3 месяца'."
+        )
+        user = (
+            f"Имя: {n}\nПредыдущая цель: {prev_goal}\n"
+            f"Смысл вопроса (перефразируй):\n{fallback}"
+        )
+        return await _claude_plain_text(
+            system,
+            user,
+            model_names,
+            lang=lang,
+            fallback=fallback,
+            max_tokens=120,
+        )
     return await _claude_plain_text(
         FIRST_PAIN_QUESTION_SYSTEM,
         f"Имя пользователя: {n}" if _is_ru(lang) else f"User name: {n}",
@@ -1288,12 +1338,18 @@ async def message_vision_async(
         if skip_greeting is None
         else bool(skip_greeting)
     )
-    question = await generate_first_pain_question(n, model_names, lang)
+    question = await generate_first_pain_question(
+        n, model_names, lang, profile=profile
+    )
     if skip:
         return question, question
     greet_fb = greeting_after_name(n, lang)
     greet = await say_as_friend(
-        greet_fb, model_names, lang, intent="short greeting after name"
+        greet_fb,
+        model_names,
+        lang,
+        intent="short greeting after name",
+        profile=profile,
     )
     msg = f"{greet}\n\n{question}"
     return msg, question
@@ -1339,6 +1395,7 @@ async def build_change_goal_dialog_opening(
             model_names,
             lang,
             intent="adjust current 12w goal, no greeting",
+            profile=profile,
         )
         return text, [{"role": "assistant", "content": text[:2000]}]
 
@@ -1379,7 +1436,9 @@ async def build_change_goal_dialog_opening(
             )
         return text, [{"role": "assistant", "content": text[:2000]}]
 
-    question = await generate_first_pain_question(name, model_names, lang)
+    question = await generate_first_pain_question(
+        name, model_names, lang, profile=profile
+    )
     return question, [{"role": "assistant", "content": question[:2000]}]
 
 
@@ -2947,6 +3006,7 @@ async def handle_returning_choice(
                 context.bot_data.get("claude_model_names") or [],
                 lang,
                 intent="returning hint",
+                profile=prof,
             )
             await flow_reply_text(msg, hint)
             return True
@@ -2956,6 +3016,7 @@ async def handle_returning_choice(
             context.bot_data.get("claude_model_names") or [],
             lang,
             intent="just chat",
+            profile=prof,
         )
         await msg.reply_text(chat_msg)
         return True
@@ -2965,6 +3026,7 @@ async def handle_returning_choice(
         context.bot_data.get("claude_model_names") or [],
         lang,
         intent="returning hint",
+        profile=prof,
     )
     await flow_reply_text(msg, hint)
     return True
@@ -3044,7 +3106,11 @@ async def handle_onboarding_turn(
                 else "goal_rewrite_weekly"
             )
             rewrite = await say_as_friend(
-                ob_text(key, lang), model_names, lang, intent="ask to rewrite goal"
+                ob_text(key, lang),
+                model_names,
+                lang,
+                intent="ask to rewrite goal",
+                profile=user_profiles.get(str(cid)),
             )
             await msg.reply_text(rewrite)
             return
@@ -3053,6 +3119,7 @@ async def handle_onboarding_turn(
             model_names,
             lang,
             intent="ask yes or no on goal",
+            profile=user_profiles.get(str(cid)),
         )
         await flow_reply_text(msg, confirm_hint)
         return
@@ -3148,6 +3215,7 @@ async def handle_onboarding_turn(
                 model_names,
                 lang,
                 intent="privacy note",
+                profile=user_profiles.get(str(cid)),
             )
         st["name"] = name
         st["step"] = OB_VISION_DIALOG
