@@ -1494,8 +1494,23 @@
       if (tg) tg.close();
     });
 
-    document.getElementById('btn-change-12w')?.addEventListener('click', () => {
-      startGoalChange('12w');
+    document.getElementById('btn-change-12w')?.addEventListener('click', async () => {
+      const btn = document.getElementById('btn-change-12w');
+      if (btn) btn.disabled = true;
+      try {
+        const resp = await apiFetch('/api/profile/change-12w', { method: 'POST' });
+        if (!resp.ok) {
+          alert(t('save_failed') || 'Could not start. Try again.');
+          return;
+        }
+        haptic('light');
+        if (tg) tg.close();
+      } catch (e) {
+        console.error('change-12w failed:', e);
+        alert(t('save_failed') || 'Could not start. Try again.');
+      } finally {
+        if (btn) btn.disabled = false;
+      }
     });
     document.getElementById('btn-change-weekly')?.addEventListener('click', () => {
       startGoalChange('weekly');
