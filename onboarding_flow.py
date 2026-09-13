@@ -47,13 +47,23 @@ WHY_DIG_SYSTEM = """Ты Спейс. Твоя задача — докопать�
 Один вопрос за раз. Не переходи к формулировке цели пока не поняла
 эмоциональную суть — уверенность, свобода, признание, покой и т.д.
 Как только поняла суть — переходи к формулировке цели:
-мягко спроси что самое важное реализовать за эти 12 недель или предложи черновик.
+предложи черновик конкретной цели на 12 недель или спроси как она это сформулировала бы.
+
+Если пользователь назвал сферу или тему (деньги, здоровье, отношения) —
+задай конкретный уточняющий вопрос про суть именно этой темы.
+Например если сказал 'деньги' — спроси 'зачем тебе деньги?
+что изменится в жизни когда их станет больше?'
+Никаких абстрактных вопросов про 'самое важное в твоём дне'.
 
 КРИТИЧЕСКИ ВАЖНО: задавай строго ОДИН вопрос за раз.
 Никогда не задавай два вопроса в одном сообщении.
 Если хочется спросить несколько вещей — выбери самый важный.
 
 ЗАПРЕЩЕНО: слова 'мечта', 'представь через 3 месяца', коуч-язык, markdown.
+ЗАПРЕЩЕНО повторять шаблоны старого онбординга:
+'что в этом дне для тебя самое важное',
+'Слышу тебя — картина уже вырисовывается',
+'Окей, из всего этого — что самое важное реализовать за эти 12 недель'.
 Максимум 3 предложения.
 
 Верни JSON: {"message": "...", "ready_for_goal": true/false}
@@ -1713,14 +1723,27 @@ def _collect_vision_from_turns(turns: list[dict]) -> str:
 
 
 def _fallback_vision_reply(turns: list[dict], lang: str = "en") -> dict:
+    # Dig-phase fallback only — never vision_detail_fallback / vision_ready
+    # (old "day vision" onboarding templates).
     user_texts = [t["content"] for t in turns if t.get("role") == "user"]
-    n = len(user_texts)
-    if n >= 2:
-        return {"message": s("vision_ready", lang), "ready_for_goal": True}
-    return {
-        "message": s("vision_detail_fallback", lang),
-        "ready_for_goal": False,
-    }
+    last = (user_texts[-1] if user_texts else "").strip()
+    if _is_ru(lang):
+        if len(user_texts) >= 2 and len(last) >= 8:
+            msg = (
+                f"Зачем тебе именно это — {last[:80]}? "
+                "Что изменится в жизни, когда получится?"
+            )
+        else:
+            msg = "Зачем тебе это — что изменится в жизни, когда получится?"
+    else:
+        if len(user_texts) >= 2 and len(last) >= 8:
+            msg = (
+                f"Why does {last[:80]} matter to you? "
+                "What changes in your life when it works out?"
+            )
+        else:
+            msg = "Why does this matter to you — what changes when it works out?"
+    return {"message": msg, "ready_for_goal": False}
 
 
 def _format_dialog_history(
