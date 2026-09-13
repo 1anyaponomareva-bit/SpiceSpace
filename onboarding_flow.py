@@ -1024,6 +1024,158 @@ def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
+def _questions_roughly_same(a: str, b: str) -> bool:
+    na = _normalize_text(a)
+    nb = _normalize_text(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    shorter, longer = (na, nb) if len(na) <= len(nb) else (nb, na)
+    if len(shorter) >= 24 and shorter in longer:
+        return True
+    # Compare question tails after stripping soft openers
+    def _core(s: str) -> str:
+        s = re.sub(
+            r"^(окей|ок|хорошо|поняла|понял|ясно|слушай|okay|ok|got it|right|so)[,.\s:—-]+",
+            "",
+            s,
+        )
+        return s.strip(" ?!.…")
+
+    ca, cb = _core(na), _core(nb)
+    return bool(ca and cb and (ca == cb or (len(ca) >= 20 and ca in cb) or (len(cb) >= 20 and cb in ca)))
+
+
+def _assistant_same_question_streak(turns: list[dict]) -> int:
+    """Trailing assistant replies that ask essentially the same question."""
+    last = ""
+    streak = 0
+    for turn in reversed(turns):
+        if turn.get("role") != "assistant":
+            continue
+        content = str(turn.get("content") or "").strip()
+        if not content:
+            continue
+        if not last:
+            last = content
+            streak = 1
+            continue
+        if _questions_roughly_same(content, last):
+            streak += 1
+            continue
+        break
+    return streak
+
+
+def user_wants_onboarding_pause(raw: str) -> bool:
+    low = re.sub(r"[^\w\s]", " ", (raw or "").strip().lower())
+    low = re.sub(r"\s+", " ", low).strip()
+    if not low:
+        return False
+    exact = {
+        "стоп",
+        "stop",
+        "хватит",
+        "enough",
+        "потом",
+        "later",
+        "отмена",
+        "cancel",
+        "nevermind",
+        "never mind",
+    }
+    if low in exact:
+        return True
+    phrases = (
+        "не сейчас",
+        "not now",
+        "maybe later",
+        "another time",
+        "в другой раз",
+        "давай потом",
+        "давай не сейчас",
+        "хватит",
+        "стоп",
+        "stop",
+    )
+    return any(p in low for p in phrases)
+
+
+def onboarding_pause_message(lang: str = "en") -> str:
+    if _is_ru(lang):
+        return (
+            "Хорошо, вернёмся к этому когда будешь готова. "
+            "Просто напиши мне когда захочешь."
+        )
+    return (
+        "Okay, we'll come back to this when you're ready. "
+        "Just write me whenever you want."
+    )
+
+
+def _user_looks_unsure_about_goal(raw: str) -> bool:
+    low = re.sub(r"\s+", " ", (raw or "").strip().lower())
+    if not low:
+        return False
+    markers = (
+        "не знаю",
+        "не уверена",
+        "не уверен",
+        "запутал",
+        "помоги",
+        "не понимаю",
+        "хз",
+        "без понятия",
+        "нечего сказать",
+        "idk",
+        "i don't know",
+        "i dont know",
+        "dont know",
+        "don't know",
+        "not sure",
+        "no idea",
+        "help me",
+        "confused",
+        "stuck",
+    )
+    return any(m in low for m in markers)
+
+
+def goal_area_options_message(lang: str = "en") -> str:
+    if _is_ru(lang):
+        return (
+            "Давай я помогу. Вот что чаще всего выбирают:\n"
+            "1. Здоровье и спорт\n"
+            "2. Деньги и карьера\n"
+            "3. Отношения и семья\n"
+            "4. Личный проект или творчество\n\n"
+            "Что из этого ближе всего к тебе сейчас?"
+        )
+    return (
+        "Let me help. Here's what people usually pick:\n"
+        "1. Health and fitness\n"
+        "2. Money and career\n"
+        "3. Relationships and family\n"
+        "4. A personal project or creative work\n\n"
+        "Which feels closest for you right now?"
+    )
+
+
+def _switch_approach_hint(lang: str = "en") -> str:
+    if _is_ru(lang):
+        return (
+            "Ты уже задавала похожий вопрос. Смени подход полностью: "
+            "предложи 3-4 конкретные области цели (здоровье/деньги/отношения/творчество) "
+            "или один совсем другой уточняющий вопрос. Не повторяй прошлый вопрос."
+        )
+    return (
+        "You already asked a similar question. Switch approach completely: "
+        "offer 3-4 concrete goal areas (health/money/relationships/creative) "
+        "or ask one clearly different clarifying question. Do not repeat the previous question."
+    )
+
+
 def _last_assistant_reply(turns: list[dict]) -> str:
     for turn in reversed(turns):
         if turn.get("role") == "assistant":
@@ -2438,6 +2590,22 @@ async def handle_onboarding_turn(
     _note_kids_from_answer(st, raw)
     model_names = context.bot_data.get("claude_model_names") or []
 
+    if user_wants_onboarding_pause(raw) and step in (
+        OB_NAME,
+        OB_VISION_DIALOG,
+        OB_GOAL_DIALOG,
+        OB_GOAL_12W,
+        OB_WEEKLY_TACTICS,
+        OB_MORNING_TIME,
+        OB_EVENING_TIME,
+        OB_CHANGE_12W,
+        OB_REENGAGE_GOAL,
+    ):
+        onboarding.pop(cid, None)
+        pause_msg = onboarding_pause_message(lang)
+        await msg.reply_text(pause_msg)
+        return
+
     if st.get("goal_confirm"):
         confirm = st["goal_confirm"]
         if _is_goal_confirm_yes(raw):
@@ -2564,20 +2732,28 @@ async def handle_onboarding_turn(
         turns = st.setdefault("vision_turns", [])
         turns.append({"role": "user", "content": raw.strip()[:2000]})
 
+        if _user_looks_unsure_about_goal(raw):
+            reply = goal_area_options_message(lang)
+            turns.append({"role": "assistant", "content": reply[:2000]})
+            await msg.reply_text(reply)
+            return
+
         prev_reply = _last_assistant_reply(turns)
-        vis_hint = (
-            "Do not repeat your last reply — reflect anew or move to the 12-week goal."
-            if not _is_ru(lang)
-            else (
-                "Не повторяй прошлый ответ — отрази по-новому "
-                "или переходи к цели на 12 недель."
-            )
-        )
+        same_streak = _assistant_same_question_streak(turns)
+        vis_hint = _switch_approach_hint(lang)
         async with typing_while(context.bot, cid):
-            result = await _claude_vision_dialog(turns, model_names, lang=lang)
+            if same_streak >= 2:
+                result = await _claude_vision_dialog(
+                    turns,
+                    model_names,
+                    extra_user_hint=vis_hint,
+                    lang=lang,
+                )
+            else:
+                result = await _claude_vision_dialog(turns, model_names, lang=lang)
             reply = (result.get("message") or ob_text("vision_fallback", lang)).strip()
 
-            if prev_reply and _normalize_text(reply) == _normalize_text(prev_reply):
+            if prev_reply and _questions_roughly_same(reply, prev_reply):
                 result = await _claude_vision_dialog(
                     turns,
                     model_names,
@@ -2585,6 +2761,9 @@ async def handle_onboarding_turn(
                     lang=lang,
                 )
                 reply = (result.get("message") or "").strip() or reply
+            if prev_reply and _questions_roughly_same(reply, prev_reply):
+                reply = goal_area_options_message(lang)
+                result = {"message": reply, "ready_for_goal": False}
 
         turns.append({"role": "assistant", "content": reply[:2000]})
 
@@ -2607,26 +2786,34 @@ async def handle_onboarding_turn(
         if not turns or turns[-1].get("role") != "user":
             turns.append({"role": "user", "content": raw.strip()[:2000]})
 
+        if _user_looks_unsure_about_goal(raw):
+            reply = goal_area_options_message(lang)
+            turns.append({"role": "assistant", "content": reply[:2000]})
+            await msg.reply_text(reply)
+            return
+
         prev_reply = _last_assistant_reply(turns)
-        goal_hint = (
-            "Offer a concrete goal wording («So your goal is: … Right?») "
-            "or ask another clarifying question. ready=true only after user agrees."
-            if not _is_ru(lang)
-            else (
-                "Предложи конкретную формулировку цели («Получается твоя цель: … Так?») "
-                "или задай другой уточняющий вопрос. ready=true только после согласия пользователя."
-            )
-        )
+        same_streak = _assistant_same_question_streak(turns)
+        goal_hint = _switch_approach_hint(lang)
         async with typing_while(context.bot, cid):
-            result = await _claude_goal_dialog(
-                turns,
-                model_names,
-                vision=str(st.get("vision") or ""),
-                lang=lang,
-            )
+            if same_streak >= 2:
+                result = await _claude_goal_dialog(
+                    turns,
+                    model_names,
+                    vision=str(st.get("vision") or ""),
+                    extra_user_hint=goal_hint,
+                    lang=lang,
+                )
+            else:
+                result = await _claude_goal_dialog(
+                    turns,
+                    model_names,
+                    vision=str(st.get("vision") or ""),
+                    lang=lang,
+                )
             reply = (result.get("message") or ob_text("goal_fallback", lang)).strip()
 
-            if prev_reply and _normalize_text(reply) == _normalize_text(prev_reply):
+            if prev_reply and _questions_roughly_same(reply, prev_reply):
                 result = await _claude_goal_dialog(
                     turns,
                     model_names,
@@ -2635,6 +2822,9 @@ async def handle_onboarding_turn(
                     lang=lang,
                 )
                 reply = (result.get("message") or "").strip() or reply
+            if prev_reply and _questions_roughly_same(reply, prev_reply):
+                reply = goal_area_options_message(lang)
+                result = {"message": reply, "ready": False, "goal": ""}
 
         turns.append({"role": "assistant", "content": reply[:2000]})
 

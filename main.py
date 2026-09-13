@@ -4330,8 +4330,8 @@ async def _try_handle_change_12w_choice(
     lang = ui_lang(prof or st)
     model_names: list[str] = context.bot_data.get("claude_model_names") or []
 
-    if _user_wants_flow_escape(raw):
-        await _exit_flow_and_reply(update, cid, raw, prof)
+    if _user_wants_flow_escape(raw) or ob.user_wants_onboarding_pause(raw):
+        await _exit_onboarding_pause(update, cid, raw, prof)
         return True
 
     choice = await _classify_change_12w_choice(raw, model_names)
@@ -4492,6 +4492,46 @@ async def _exit_flow_and_reply(
     msg = _flow_escape_message(profile)
     _append_history_turn(cid, raw, msg)
     await _bot_reply(update.message, msg)
+
+
+async def _exit_onboarding_pause(
+    update: Update,
+    cid: int,
+    raw: str,
+    profile: dict | None,
+) -> None:
+    st = onboarding.get(cid) if isinstance(onboarding.get(cid), dict) else {}
+    lang = ui_lang(profile) if isinstance(profile, dict) else str(
+        (st or {}).get("lang") or (st or {}).get("language_code") or "en"
+    )
+    _clear_flow_state(cid)
+    msg = ob.onboarding_pause_message(lang)
+    _append_history_turn(cid, raw, msg)
+    await _bot_reply(update.message, msg)
+
+
+def _onboarding_pause_steps() -> frozenset[int]:
+    return frozenset(
+        {
+            ob.OB_NAME,
+            ob.OB_VISION_DIALOG,
+            OB_GOAL_DIALOG,
+            ob.OB_GOAL_12W,
+            ob.OB_WEEKLY_TACTICS,
+            ob.OB_MORNING_TIME,
+            ob.OB_EVENING_TIME,
+            ob.OB_CHANGE_12W,
+            ob.OB_REENGAGE_GOAL,
+        }
+    )
+
+
+def _in_onboarding_goal_flow(cid: int) -> bool:
+    st = onboarding.get(cid)
+    if not isinstance(st, dict):
+        return False
+    step = int(st.get("step") or -1)
+    return step in _onboarding_pause_steps() or bool(st.get("goal_confirm"))
 
 
 async def _try_flow_escape(
@@ -5058,6 +5098,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if await _try_handle_change_12w_choice(
             update, context, raw, st_ob, prof_early
         ):
+            return
+        if _in_onboarding_goal_flow(cid) and ob.user_wants_onboarding_pause(raw):
+            await _exit_onboarding_pause(
+                update,
+                cid,
+                raw,
+                prof_early if isinstance(prof_early, dict) else {},
+            )
             return
 
     if _user_in_active_flow(cid):
