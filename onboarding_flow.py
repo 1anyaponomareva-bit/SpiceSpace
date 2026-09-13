@@ -1236,22 +1236,28 @@ async def generate_first_pain_question(
     profile: dict | None = None,
 ) -> str:
     n = (name or "").strip() or _friend_word(lang)
+    if isinstance(profile, dict) and str(profile.get("name") or "").strip():
+        n = str(profile.get("name") or "").strip()
     fallback = vision_question_message(lang)
-    prev_goal = ""
+    previous_goal = ""
     if isinstance(profile, dict):
-        prev_goal = str(
-            profile.get("main_goal") or profile.get("final_goal") or ""
-        ).strip()
-    if prev_goal:
+        previous_goal = str(profile.get("main_goal") or "").strip()
+
+    if previous_goal:
         system = (
-            RETURNING_ONBOARDING_SYSTEM
+            FIRST_PAIN_QUESTION_SYSTEM
             + "\n\n"
-            + "Задай один короткий живой вопрос про то что сейчас не так "
-            "или что хочется изменить. Без слов 'мечта', 'представь', 'через 3 месяца'."
+            + "ВАЖНО: Этот пользователь уже проходил онбординг раньше.\n"
+            + f"Его предыдущая цель была: {previous_goal}\n"
+            + "НЕ используй стандартные фразы первого знакомства.\n"
+            + "Каждый раз формулируй вопрос немного по-другому —\n"
+            + "как подруга которая продолжает разговор, а не бот который\n"
+            + "запустил скрипт заново."
         )
         user = (
-            f"Имя: {n}\nПредыдущая цель: {prev_goal}\n"
-            f"Смысл вопроса (перефразируй):\n{fallback}"
+            f"Имя: {n}\nПредыдущая цель: {previous_goal}"
+            if _is_ru(lang)
+            else f"Name: {n}\nPrevious goal: {previous_goal}"
         )
         return await _claude_plain_text(
             system,
@@ -1261,6 +1267,7 @@ async def generate_first_pain_question(
             fallback=fallback,
             max_tokens=120,
         )
+
     return await _claude_plain_text(
         FIRST_PAIN_QUESTION_SYSTEM,
         f"Имя пользователя: {n}" if _is_ru(lang) else f"User name: {n}",
