@@ -4820,10 +4820,19 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     subscribers.add(cid)
     tid = str(cid)
-    prof = db_store.update_profile(
-        cid,
-        {"language_code": lang, "daily_enabled": True},
-    )
+    existing = user_profiles.get(tid)
+    if not isinstance(existing, dict):
+        try:
+            existing = db_store.get_profile(cid)
+        except db_store.ProfileReadError:
+            existing = None
+    saved_lang = str((existing or {}).get("language_code") or "").strip()
+    if saved_lang:
+        lang = saved_lang
+    fields: dict[str, object] = {"daily_enabled": True}
+    if not saved_lang:
+        fields["language_code"] = lang
+    prof = db_store.update_profile(cid, fields)
     if not isinstance(prof, dict):
         cached = user_profiles.get(tid)
         prof = cached if isinstance(cached, dict) else {}
@@ -5707,16 +5716,18 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
     msg = update.message
 
+    _restore_cid_flow(cid)
     st_ob = onboarding.get(cid)
     prof_ob = user_profiles.get(str(cid)) or db_store.get_profile(cid)
     ob_lang = ui_lang(prof_ob if isinstance(prof_ob, dict) else None)
     if not isinstance(prof_ob, dict) and update.effective_user:
         ob_lang = ui_lang({"language_code": update.effective_user.language_code or "en"})
     if st_ob is not None and int(st_ob.get("step") or 0) > 0:
-        await _bot_reply(
-            msg,
-            ui_text("onboard_text_only_photo", lang=ob_lang),
-        )
+        hint = ui_text("onboard_text_only_photo", lang=ob_lang)
+        question = ob.last_pending_question(st_ob if isinstance(st_ob, dict) else None)
+        if question:
+            hint = f"{hint}\n\n{question}"
+        await _bot_reply(msg, hint)
         return
 
     if not user_profiles.get(str(cid)):
@@ -5781,12 +5792,14 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         voice_lang = ui_lang({"language_code": update.effective_user.language_code or "en"})
     if isinstance(prof_voice, dict):
         _touch_user_message_date(cid, prof_voice)
+    _restore_cid_flow(cid)
     st_ob = onboarding.get(cid)
     if st_ob and int(st_ob.get("step") or 0) > 0:
-        await _bot_reply(
-            update.effective_message,
-            ui_text("onboard_text_only_voice", lang=voice_lang),
-        )
+        hint = ui_text("onboard_text_only_voice", lang=voice_lang)
+        question = ob.last_pending_question(st_ob if isinstance(st_ob, dict) else None)
+        if question:
+            hint = f"{hint}\n\n{question}"
+        await _bot_reply(update.effective_message, hint)
         return
     if isinstance(prof_voice, dict):
         if await _reply_subscription_paywall_if_needed(

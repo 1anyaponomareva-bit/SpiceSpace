@@ -678,15 +678,16 @@ def get_daily_summary(user_id: int | str, on_date: date) -> dict | None:
     key = str(user_id)
     d = on_date.isoformat()
     if _use_supabase:
-        rows = (
-            _request(
-                "GET",
-                f"daily_summaries?user_id=eq.{key}&summary_date=eq.{d}&limit=1",
-            )
-            or []
+        rows = _request(
+            "GET",
+            f"daily_summaries?user_id=eq.{key}&summary_date=eq.{d}&limit=1",
         )
+        if rows is None:
+            log.warning("daily summary read failed uid=%s date=%s", key, d)
+            return None
         if rows and isinstance(rows[0], dict):
             return _row_to_summary(rows[0])
+        return None
 
     store = _load_json(DAILY_SUMMARIES_PATH, {})
     if not isinstance(store, dict):

@@ -1643,6 +1643,29 @@ def _switch_approach_hint(lang: str = "en") -> str:
     )
 
 
+def last_pending_question(st: dict | None) -> str:
+    """Question the user still needs to answer, so a photo or voice note can repeat it."""
+    if not isinstance(st, dict):
+        return ""
+    confirm = st.get("goal_confirm")
+    if isinstance(confirm, dict):
+        polished = str(confirm.get("polished") or "").strip()
+        if polished:
+            lang = _ob_lang(st)
+            return s("goal_proposed", lang, goal=polished)
+    for key in ("vision_turns", "goal_turns", "weekly_turns", "recap_turns"):
+        turns = st.get(key)
+        if not isinstance(turns, list):
+            continue
+        for turn in reversed(turns):
+            if not isinstance(turn, dict) or turn.get("role") != "assistant":
+                continue
+            text = str(turn.get("content") or "").strip()
+            if text:
+                return text
+    return ""
+
+
 def _last_assistant_reply(turns: list[dict]) -> str:
     for turn in reversed(turns):
         if turn.get("role") == "assistant":
@@ -3228,6 +3251,18 @@ async def handle_onboarding_turn(
                 profile=user_profiles.get(str(cid)),
             )
             await msg.reply_text(rewrite)
+            return
+        if len(raw.strip()) >= 8 and not _is_dont_know_streak_phrase(raw):
+            st.pop("goal_confirm", None)
+            await _propose_goal_confirm(
+                msg,
+                st,
+                field=str(confirm.get("field") or "weekly_goal"),
+                raw=raw.strip(),
+                goal_type=str(confirm.get("goal_type") or GOAL_TYPE_WEEKLY),
+                model_names=model_names,
+                after=str(confirm.get("after") or ""),
+            )
             return
         confirm_hint = await say_as_friend(
             ob_text("goal_confirm_yes_no", lang),
