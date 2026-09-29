@@ -5028,6 +5028,18 @@ async def cmd_weektest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+def _drop_parallel_onboarding_if_goal_set(cid: int, profile: dict | None) -> None:
+    """If a 12-week goal already exists, a leftover onboarding step must not run beside the normal dialog."""
+    if not isinstance(profile, dict):
+        return
+    if not str(profile.get("main_goal") or "").strip():
+        return
+    st = onboarding.get(cid)
+    if not isinstance(st, dict) or st.get("step") is None:
+        return
+    onboarding.pop(cid, None)
+
+
 async def _deliver_scheduled_morning(
     bot,
     cid: int,
@@ -5039,6 +5051,7 @@ async def _deliver_scheduled_morning(
     force: bool = False,
 ) -> bool:
     """Send morning message. Returns True if delivered."""
+    _drop_parallel_onboarding_if_goal_set(cid, profile)
     key = str(cid)
     if not force:
         claimed = db_store.claim_send_slot(cid, "last_morning_sent_date", today)
@@ -5178,6 +5191,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _touch_user_message_date(cid, prof_early)
 
     st_ob = onboarding.get(cid)
+    if (
+        isinstance(prof_early, dict)
+        and str(prof_early.get("main_goal") or "").strip()
+        and cid in pending_morning
+    ):
+        # Reply to the morning message — do not keep or resume onboarding beside it.
+        _drop_parallel_onboarding_if_goal_set(cid, prof_early)
+        st_ob = None
     if isinstance(st_ob, dict):
         if await _try_handle_change_12w_choice(
             update, context, raw, st_ob, prof_early
@@ -5203,8 +5224,15 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     prof_check = user_profiles.get(str(cid)) or db_store.get_profile(cid)
-    if isinstance(prof_check, dict) and not ob.profile_onboarding_complete(
-        prof_check
+    morning_reply_with_goal = (
+        isinstance(prof_check, dict)
+        and str(prof_check.get("main_goal") or "").strip()
+        and cid in pending_morning
+    )
+    if (
+        isinstance(prof_check, dict)
+        and not morning_reply_with_goal
+        and not ob.profile_onboarding_complete(prof_check)
     ):
         user_profiles[str(cid)] = prof_check
         name = str(prof_check.get("name") or "").strip()
@@ -6825,6 +6853,7 @@ async def _post_weekly_goal_morning(
     model_names: list[str],
 ) -> None:
     """Scheduled morning after new week — full morning message with task options."""
+    _drop_parallel_onboarding_if_goal_set(cid, profile)
     ulang = _user_lang(profile)
     tz_name = _profile_timezone_name(profile)
     today = datetime.now(_zone_or_default(tz_name)).strftime("%Y-%m-%d")
@@ -7356,6 +7385,16 @@ async def _bootstrap_bot() -> None:
             step = st.get("step")
             if step in (ob.OB_DONE, None):
                 continue
+            if cid in pending_morning or cid in pending_evening:
+                continue
+            prof_rem = user_profiles.get(str(cid)) or db_store.get_profile(cid)
+            if isinstance(prof_rem, dict) and str(prof_rem.get("main_goal") or "").strip():
+                wrote_today = (
+                    str(prof_rem.get("last_user_message_date") or "")[:10]
+                    == _profile_local_date(prof_rem).isoformat()
+                )
+                if wrote_today:
+                    continue
             if not st.get("name"):
                 continue
             last_activity = st.get("last_activity_at")
