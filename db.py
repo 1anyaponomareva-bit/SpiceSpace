@@ -21,6 +21,8 @@ DATA_DIR = Path(__file__).resolve().parent
 USER_PROFILES_PATH = DATA_DIR / "user_profiles.json"
 SUBSCRIBERS_PATH = DATA_DIR / "subscribers.json"
 DAILY_SUMMARIES_PATH = DATA_DIR / "daily_summaries.json"
+FLOW_STATE_PATH = DATA_DIR / "flow_state.json"
+FLOW_STATE_ROLE = "flow_state"
 
 _base_url = ""
 _service_key = ""
@@ -447,43 +449,32 @@ def patch_profile_times(
     return out, None
 
 
+_CLAIM_SLOT_FIELDS = frozenset(
+    {
+        "last_morning_sent_date",
+        "last_evening_sent_date",
+        "last_daily_sent_date",
+    }
+)
+
+
 def claim_send_slot(user_id: int | str, field: str, value: str) -> bool:
-    """Check if slot is already claimed, then claim it."""
+    """Claim a daily send slot. False if it is already taken or the row cannot be read."""
     key = str(user_id)
+    if field not in _CLAIM_SLOT_FIELDS:
+        log.error("claim_send_slot rejected field=%s", field)
+        return False
     if not _use_supabase:
         return True
-    rows = _request(
-        "GET", f"user_profiles?user_id=eq.{key}&select={field}&limit=1"
-    ) or []
-    log.info(
-        "claim_send_slot uid=%s field=%s value=%s rows=%s",
-        key,
-        field,
-        value,
-        rows,
-    )
-    if not rows or not isinstance(rows[0], dict):
-        log.info("claim_send_slot uid=%s — no profile, returning True", key)
-        return True
-    current = str(rows[0].get(field) or "").strip()
-    log.info(
-        "claim_send_slot uid=%s current=%s value=%s match=%s",
-        key,
-        current,
-        value,
-        current == value,
-    )
-    if current == value:
-        return False
     result = _request(
         "PATCH",
-        f"user_profiles?user_id=eq.{key}",
+        f"user_profiles?user_id=eq.{key}&or=({field}.is.null,{field}.neq.{value})",
         json={field: value},
-        headers={**_headers(), "Prefer": "return=minimal"},
+        headers={**_headers(), "Prefer": "return=representation"},
     )
-    if result is None:
-        log.error(
-            "claim_send_slot PATCH failed uid=%s field=%s value=%s",
+    if not result:
+        log.info(
+            "claim_send_slot lost the race or failed uid=%s field=%s value=%s",
             key,
             field,
             value,
@@ -1004,7 +995,7 @@ def load_history(user_id: int | str, limit: int = 20) -> list[dict]:
         return []
     rows = _request(
         "GET",
-        f"conversation_history?user_id=eq.{key}&order=created_at.desc&limit={limit}",
+        f"conversation_history?user_id=eq.{key}&role=neq.{FLOW_STATE_ROLE}&order=created_at.desc&limit={limit}",
     ) or []
     turns: list[dict] = []
     for row in reversed(rows):
@@ -1016,6 +1007,70 @@ def load_history(user_id: int | str, limit: int = 20) -> list[dict]:
                 }
             )
     return turns
+
+
+def _read_flow_file() -> dict:
+    raw = _load_json(FLOW_STATE_PATH, {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def save_flow_blob(user_id: int | str, blob: dict) -> None:
+    """Persist onboarding / morning / evening state so a restart can resume it."""
+    key = str(user_id)
+    store = _read_flow_file()
+    store[key] = blob
+    _save_json(FLOW_STATE_PATH, store)
+    if not _use_supabase:
+        return
+    _request(
+        "DELETE",
+        f"conversation_history?user_id=eq.{key}&role=eq.{FLOW_STATE_ROLE}",
+    )
+    payload = json.dumps(blob, ensure_ascii=False, default=str)[:12000]
+    _request(
+        "POST",
+        "conversation_history",
+        json={
+            "user_id": int(key),
+            "role": FLOW_STATE_ROLE,
+            "content": payload,
+        },
+        headers={**_headers(), "Prefer": "return=minimal"},
+    )
+
+
+def load_flow_blob(user_id: int | str) -> dict | None:
+    key = str(user_id)
+    if _use_supabase:
+        rows = _request(
+            "GET",
+            f"conversation_history?user_id=eq.{key}&role=eq.{FLOW_STATE_ROLE}&order=created_at.desc&limit=1",
+        )
+        if rows and isinstance(rows[0], dict):
+            raw = str(rows[0].get("content") or "")
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                return parsed
+        if rows is None:
+            log.warning("flow_state read failed uid=%s", key)
+    stored = _read_flow_file().get(key)
+    return stored if isinstance(stored, dict) else None
+
+
+def delete_flow_blob(user_id: int | str) -> None:
+    key = str(user_id)
+    store = _read_flow_file()
+    if key in store:
+        store.pop(key, None)
+        _save_json(FLOW_STATE_PATH, store)
+    if _use_supabase:
+        _request(
+            "DELETE",
+            f"conversation_history?user_id=eq.{key}&role=eq.{FLOW_STATE_ROLE}",
+        )
 
 
 def delete_history(user_id: int | str) -> None:

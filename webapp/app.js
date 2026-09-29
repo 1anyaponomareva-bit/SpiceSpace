@@ -571,12 +571,7 @@
         return;
       }
       haptic('light');
-      openBotChat(mode === 'weekly' ? 'change_weekly' : 'change_12w');
-      if (tg?.close) {
-        setTimeout(() => {
-          try { tg.close(); } catch (_) {}
-        }, 400);
-      }
+      if (tg) tg.close();
     } catch (e) {
       console.error('startGoalChange failed:', e);
       alert(t('save_failed') || 'Could not start. Try again.');

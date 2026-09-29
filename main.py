@@ -1037,15 +1037,114 @@ if result:
 subscribers: set[int] = db_store.load_subscribers()
 user_profiles: dict[str, dict] = db_store.load_all_profiles()
 histories: dict[int, list[dict]] = {}
-pending_morning: dict[int, dict[str, object]] = {}  # morning pick / midday reminder state
-pending_evening: dict[int, dict] = {}
-onboarding: dict[int, dict[str, object]] = {}
+_flow_save_muted = False
+
+
+class _RememberedFlow(dict):
+    """Writes onboarding and daily-dialog state so a process restart can resume it."""
+
+    def __setitem__(self, key, value) -> None:
+        super().__setitem__(key, value)
+        if not _flow_save_muted:
+            _persist_cid_flow(int(key))
+
+    def pop(self, key, *args):
+        existed = key in self
+        result = super().pop(key, *args)
+        if existed and not _flow_save_muted:
+            _persist_cid_flow(int(key))
+        return result
+
+
+pending_morning: _RememberedFlow = _RememberedFlow()
+pending_evening: _RememberedFlow = _RememberedFlow()
+onboarding: _RememberedFlow = _RememberedFlow()
 # Последнее напоминание по задаче (для «ГОТОВО» в чате).
 last_reminder_task_id: dict[int, str] = {}
 # Ожидание текста задачи после «напомни в 20:00» без названия.
 pending_natural_reminder: dict[int, dict[str, object]] = {}
 flow_mismatch_streak: dict[int, int] = {}
 last_bot_outgoing_text: dict[int, str] = {}
+
+
+def _compact_flow_value(value: object) -> object:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, list):
+        compact: list[object] = []
+        for item in value[-6:]:
+            if isinstance(item, dict) and "content" in item:
+                compact.append(
+                    {
+                        "role": item.get("role"),
+                        "content": str(item.get("content") or "")[:400],
+                    }
+                )
+            else:
+                compact.append(_compact_flow_value(item))
+        return compact
+    if isinstance(value, dict):
+        return {str(k): _compact_flow_value(v) for k, v in value.items()}
+    return value
+
+
+def _persist_cid_flow(cid: int) -> None:
+    if _flow_save_muted:
+        return
+    try:
+        blob: dict[str, object] = {}
+        st = onboarding.get(cid)
+        if isinstance(st, dict):
+            blob["onboarding"] = _compact_flow_value(st)
+        morning = pending_morning.get(cid)
+        if isinstance(morning, dict):
+            blob["pending_morning"] = _compact_flow_value(morning)
+        evening = pending_evening.get(cid)
+        if isinstance(evening, dict):
+            blob["pending_evening"] = _compact_flow_value(evening)
+        if ob.onboarding_resume_held(cid):
+            blob["hold"] = True
+        if blob:
+            db_store.save_flow_blob(cid, blob)
+        else:
+            db_store.delete_flow_blob(cid)
+    except Exception as e:
+        log.warning("flow persist failed cid=%s: %s", cid, e)
+
+
+def _restore_cid_flow(cid: int) -> None:
+    global _flow_save_muted
+    if (
+        cid in onboarding
+        or cid in pending_morning
+        or cid in pending_evening
+        or ob.onboarding_resume_held(cid)
+    ):
+        return
+    try:
+        blob = db_store.load_flow_blob(cid)
+    except Exception as e:
+        log.warning("flow restore failed cid=%s: %s", cid, e)
+        return
+    if not isinstance(blob, dict):
+        return
+    _flow_save_muted = True
+    try:
+        if blob.get("hold"):
+            ob.mark_onboarding_resume_hold(cid)
+        st = blob.get("onboarding")
+        if isinstance(st, dict):
+            onboarding[cid] = st
+        morning = blob.get("pending_morning")
+        if isinstance(morning, dict):
+            pending_morning[cid] = morning
+        evening = blob.get("pending_evening")
+        if isinstance(evening, dict):
+            pending_evening[cid] = evening
+    finally:
+        _flow_save_muted = False
 
 _FLOW_ESCAPE_EXACT = frozenset(
     {
@@ -1477,7 +1576,8 @@ def _should_send_task_now(task: dict, now_local: datetime, tz: ZoneInfo) -> bool
     trigger_local = event_local - timedelta(minutes=remind)
     slot_now = now_local.replace(second=0, microsecond=0)
     slot_tr = trigger_local.replace(second=0, microsecond=0)
-    return slot_now == slot_tr
+    delta_min = (slot_now - slot_tr).total_seconds() / 60
+    return 0 <= delta_min <= 15
 
 
 def _mark_task_last_sent(task_id: str) -> None:
@@ -5203,6 +5303,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not raw:
         return
 
+    _restore_cid_flow(cid)
+
     reply_ctx = _reply_context_from_message(update.message)
 
     prof_early = user_profiles.get(str(cid)) or db_store.get_profile(cid)
@@ -5248,9 +5350,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         and str(prof_check.get("main_goal") or "").strip()
         and cid in pending_morning
     )
+    has_main_goal = isinstance(prof_check, dict) and bool(
+        str(prof_check.get("main_goal") or "").strip()
+    )
     if (
         isinstance(prof_check, dict)
         and not morning_reply_with_goal
+        and not has_main_goal
+        and not ob.onboarding_resume_held(cid)
         and not ob.profile_onboarding_complete(prof_check)
     ):
         user_profiles[str(cid)] = prof_check
@@ -5297,7 +5404,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
         return
 
-    if not user_profiles.get(str(cid)):
+    if not user_profiles.get(str(cid)) and not ob.onboarding_resume_held(cid):
         lang = (update.effective_user.language_code if update.effective_user else None) or "en"
         ob.start_new_onboarding(onboarding, cid, lang)
         await _bot_reply(update.message, ob.get_greeting_new(lang))
@@ -7188,6 +7295,7 @@ async def _bootstrap_bot() -> None:
                     continue
 
                 days_silent = _days_since_user_message(profile, today_date)
+                reengage_sent_now = False
                 if days_silent is not None and days_silent >= 4:
                     sent = _parse_reengagement_sent(
                         profile.get("reengagement_sent_date")
@@ -7230,7 +7338,8 @@ async def _bootstrap_bot() -> None:
                                     "reengagement day15 disabled daily cid=%s",
                                     cid,
                                 )
-                    continue
+                                continue
+                            reengage_sent_now = True
 
                 days_since_start = _days_since_cycle_start(
                     profile, now_local.date()
@@ -7256,7 +7365,7 @@ async def _bootstrap_bot() -> None:
                         user_profiles[key] = profile
 
                 if in_morning:
-                    skip_regular_morning = _should_skip_morning_for_weekly_flow(
+                    skip_regular_morning = reengage_sent_now or _should_skip_morning_for_weekly_flow(
                         cid, profile, today
                     )
 
@@ -7838,23 +7947,25 @@ async def _begin_goal_change_from_webapp(tid: str, mode: str) -> dict:
     bot = telegram_app.bot if telegram_app else None
     model_chain = build_model_chain(select_model_id())
 
+    if not bot:
+        raise HTTPException(status_code=503, detail="bot unavailable")
+
     if mode == "weekly":
-        if bot:
-            await ob.kickoff_change_weekly_dialog(
-                bot, cid, profile, onboarding, model_chain
-            )
+        sent = await ob.kickoff_change_weekly_dialog(
+            bot, cid, profile, onboarding, model_chain
+        )
+        if not sent:
+            onboarding.pop(cid, None)
+            raise HTTPException(status_code=502, detail="telegram send failed")
     elif mode == "12w":
         ob.start_change_12w(onboarding, cid, profile)
         message = ob.change_12w_choice_prompt(plang)
-        if bot:
-            try:
-                await bot.send_message(
-                    chat_id=cid, text=sanitize_bot_reply(message)
-                )
-            except Exception as e:
-                log.warning(
-                    "goal_change send failed cid=%s mode=%s: %s", cid, mode, e
-                )
+        try:
+            await bot.send_message(chat_id=cid, text=sanitize_bot_reply(message))
+        except Exception as e:
+            onboarding.pop(cid, None)
+            log.warning("goal_change send failed cid=%s mode=%s: %s", cid, mode, e)
+            raise HTTPException(status_code=502, detail="telegram send failed") from e
     else:
         raise HTTPException(status_code=400, detail="invalid mode")
 

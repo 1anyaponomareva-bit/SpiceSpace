@@ -1099,11 +1099,18 @@ def _is_dont_know_streak_phrase(raw: str) -> bool:
         "хз",
         "без понятия",
         "нечего сказать",
+        "помоги",
+        "не понимаю",
+        "запутал",
+        "запуталась",
         "idk",
         "dont know",
         "don't know",
         "not sure",
         "no idea",
+        "help me",
+        "confused",
+        "stuck",
     )
     if low in cores:
         return True
@@ -1991,12 +1998,21 @@ async def _claude_change_weekly_dialog(
 
 
 def _is_goal_confirm_yes(raw: str) -> bool:
-    low = (raw or "").strip().lower()
+    low = re.sub(r"[^\w\s]", " ", (raw or "").strip().lower())
+    low = re.sub(r"\s+", " ", low).strip()
     if not low:
         return False
-    if low in _GOAL_CONFIRM_YES or low.startswith("да"):
+    if low in _GOAL_CONFIRM_YES:
         return True
-    return any(w in low for w in ("верно", "подходит", "соглас", "записывай", "запиши"))
+    first, _, rest = low.partition(" ")
+    # "да" / "да, верно" — but not "давай подумаем"
+    if first in ("да", "ага", "угу", "yes", "ок", "окей", "yeah", "yep"):
+        if not rest:
+            return True
+        return any(
+            w in rest for w in ("верно", "подходит", "соглас", "точно", "именно", "ок")
+        )
+    return any(w in low for w in ("верно", "подходит", "согласна", "записывай", "запиши"))
 
 
 def _is_goal_confirm_no(raw: str) -> bool:
@@ -2864,9 +2880,31 @@ def touch_onboarding_activity(st: dict) -> None:
     st["last_activity_at"] = datetime.now()
 
 
+_resume_hold: set[int] = set()
+_DIG_USER_TURN_CAP = 8
+
+
+def mark_onboarding_resume_hold(cid: int) -> None:
+    """After three 'I don't know' exits, don't auto-start onboarding on the next message."""
+    _resume_hold.add(int(cid))
+
+
+def clear_onboarding_resume_hold(cid: int) -> None:
+    _resume_hold.discard(int(cid))
+
+
+def onboarding_resume_held(cid: int) -> bool:
+    return int(cid) in _resume_hold
+
+
+def _user_turn_count(turns: list[dict]) -> int:
+    return sum(1 for t in turns if t.get("role") == "user")
+
+
 def start_new_onboarding(
     onboarding: dict[int, dict], cid: int, lang: str = "en"
 ) -> None:
+    clear_onboarding_resume_hold(cid)
     lc = str(lang or "en")
     onboarding[cid] = {
         "step": OB_NAME,
@@ -2887,6 +2925,7 @@ def start_returning_choice(
 def start_reonboarding(
     onboarding: dict[int, dict], cid: int, name: str, lang: str = "en"
 ) -> None:
+    clear_onboarding_resume_hold(cid)
     lc = str(lang or "en")
     onboarding[cid] = {
         "step": OB_VISION_DIALOG,
@@ -2936,7 +2975,8 @@ async def _complete_onboarding(
     weekly_goal = str(profile.get("weekly_goal", ""))
     lang = _ob_lang(st, profile)
 
-    histories[cid] = [
+    hist = histories.setdefault(cid, [])
+    hist.append(
         {
             "role": "user",
             "parts": [
@@ -2951,7 +2991,9 @@ async def _complete_onboarding(
                 )
             ],
         }
-    ]
+    )
+    if len(hist) > 40:
+        histories[cid] = hist[-40:]
 
     progress_kb = None
     fn = context.bot_data.get("progress_reply_keyboard")
@@ -3267,6 +3309,7 @@ async def handle_onboarding_turn(
     if step == OB_CHANGE_12W:
         phase = str(st.get("change_12w_phase") or "choice")
         if phase == "choice":
+            await msg.reply_text(change_12w_choice_prompt(lang))
             return
         await msg.reply_text(ob_text("change_12w_broken", lang))
         return
@@ -3307,6 +3350,7 @@ async def handle_onboarding_turn(
         if streak >= 3:
             async with typing_while(context.bot, cid):
                 bye = await generate_dont_know_exit(model_names, lang)
+            mark_onboarding_resume_hold(cid)
             onboarding.pop(cid, None)
             await msg.reply_text(bye)
             return
@@ -3366,6 +3410,8 @@ async def handle_onboarding_turn(
                     turns, model_names, lang
                 )
                 result = {"message": reply, "ready_for_goal": False}
+            if _user_turn_count(turns) >= _DIG_USER_TURN_CAP:
+                result["ready_for_goal"] = True
 
         turns.append({"role": "assistant", "content": reply[:2000]})
 
@@ -3394,6 +3440,7 @@ async def handle_onboarding_turn(
         if streak >= 3:
             async with typing_while(context.bot, cid):
                 bye = await generate_dont_know_exit(model_names, lang)
+            mark_onboarding_resume_hold(cid)
             onboarding.pop(cid, None)
             await msg.reply_text(bye)
             return
@@ -3451,6 +3498,23 @@ async def handle_onboarding_turn(
                     turns, model_names, lang
                 )
                 result = {"message": reply, "ready": False, "goal": ""}
+            if (
+                _user_turn_count(turns) >= _DIG_USER_TURN_CAP
+                and not (result.get("ready") and result.get("goal"))
+            ):
+                concrete = [
+                    str(t.get("content") or "").strip()
+                    for t in turns
+                    if t.get("role") == "user"
+                    and not _is_dont_know_streak_phrase(str(t.get("content") or ""))
+                ]
+                last_user = max(concrete, key=len) if concrete else ""
+                if len(last_user) >= 8:
+                    result = {
+                        "message": reply,
+                        "ready": True,
+                        "goal": last_user[:500],
+                    }
 
         turns.append({"role": "assistant", "content": reply[:2000]})
 
