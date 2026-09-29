@@ -13,6 +13,10 @@ import httpx
 
 log = logging.getLogger("coach_bot")
 
+
+class ProfileReadError(Exception):
+    """Supabase profile read failed. Callers must not write a blank profile over the row."""
+
 DATA_DIR = Path(__file__).resolve().parent
 USER_PROFILES_PATH = DATA_DIR / "user_profiles.json"
 SUBSCRIBERS_PATH = DATA_DIR / "subscribers.json"
@@ -135,14 +139,14 @@ def _filter_row_for_supabase(row: dict) -> dict:
     return out
 
 
-def _supabase_profile_exists(key: str) -> bool:
-    rows = (
-        _request(
-            "GET",
-            f"user_profiles?user_id=eq.{key}&select=user_id&limit=1",
-        )
-        or []
+def _supabase_profile_exists(key: str) -> bool | None:
+    """True/False if the lookup succeeded. None if the request failed."""
+    rows = _request(
+        "GET",
+        f"user_profiles?user_id=eq.{key}&select=user_id&limit=1",
     )
+    if rows is None:
+        return None
     return bool(rows and isinstance(rows[0], dict))
 
 
@@ -152,7 +156,12 @@ def _write_profile_to_supabase(key: str, row: dict) -> bool:
     if not patch_body:
         return False
 
-    if _supabase_profile_exists(key):
+    exists = _supabase_profile_exists(key)
+    if exists is None:
+        log.error("Supabase profile exists-check failed uid=%s", key)
+        return False
+
+    if exists:
         result = _request(
             "PATCH",
             f"user_profiles?user_id=eq.{key}",
@@ -276,16 +285,29 @@ def load_all_profiles() -> dict[str, dict]:
 def get_profile(user_id: int | str) -> dict | None:
     key = str(user_id)
     if _use_supabase:
-        rows = _request("GET", f"user_profiles?user_id=eq.{key}&limit=1") or []
+        rows = _request("GET", f"user_profiles?user_id=eq.{key}&limit=1")
+        if rows is None:
+            raise ProfileReadError(f"profile read failed uid={key}")
         if rows and isinstance(rows[0], dict):
             row = dict(rows[0])
             row.pop("user_id", None)
             return sync_profile_times(_row_to_profile(row))
+        return None
     profiles = _load_json(USER_PROFILES_PATH, {})
     p = profiles.get(key) if isinstance(profiles, dict) else None
     if isinstance(p, dict):
         return sync_profile_times(p)
     return None
+
+
+def _merge_base(user_id: int | str) -> dict | None:
+    """Profile dict safe to merge into. None means the read failed — do not write."""
+    try:
+        existing = get_profile(user_id)
+    except ProfileReadError:
+        log.error("profile read failed, write skipped uid=%s", user_id)
+        return None
+    return dict(existing or {})
 
 
 def delete_profile(user_id: int | str) -> None:
@@ -314,14 +336,29 @@ def delete_profile(user_id: int | str) -> None:
             pass
 
 
-def update_profile(user_id: int | str, fields: dict) -> dict:
-    """Merge fields into existing profile and persist."""
+def update_profile(user_id: int | str, fields: dict) -> dict | None:
+    """Merge fields into the existing profile and persist.
+
+    Returns None when the current row could not be read, so a failed GET
+    cannot be saved back as an empty profile.
+    """
     key = str(user_id)
-    profile = sync_profile_times(dict(get_profile(user_id) or {}))
+    profile = _merge_base(user_id)
+    if profile is None:
+        log.error(
+            "update_profile aborted, profile read failed uid=%s fields=%s",
+            key,
+            list(fields),
+        )
+        return None
+    profile = sync_profile_times(profile)
     profile.update(fields)
     sync_profile_times(profile)
     ok = upsert_profile(user_id, profile)
-    fresh = get_profile(user_id)
+    try:
+        fresh = get_profile(user_id)
+    except ProfileReadError:
+        fresh = None
     merged = fresh if isinstance(fresh, dict) else profile
     if _use_supabase and not ok:
         log.error("update_profile Supabase write failed uid=%s fields=%s", key, list(fields))
@@ -345,7 +382,10 @@ def patch_profile_times(
     if morning is None and evening is None:
         return None, "no_times"
 
-    profile = sync_profile_times(dict(get_profile(user_id) or {}))
+    profile = _merge_base(user_id)
+    if profile is None:
+        return None, "save_failed"
+    profile = sync_profile_times(profile)
     if morning:
         profile["morning_time"] = morning
         profile["daily_time"] = morning
@@ -372,7 +412,7 @@ def patch_profile_times(
         json=body,
         headers={**_headers(), "Prefer": "return=representation"},
     )
-    if not result and not _supabase_profile_exists(key):
+    if not result and _supabase_profile_exists(key) is False:
         insert_body = dict(body)
         insert_body["user_id"] = int(key)
         if "name" in cols and not profile.get("name"):
@@ -388,7 +428,10 @@ def patch_profile_times(
         log.error("patch_profile_times failed uid=%s body=%s", key, body)
         return None, "save_failed"
 
-    fresh = get_profile(user_id)
+    try:
+        fresh = get_profile(user_id)
+    except ProfileReadError:
+        fresh = None
     out = sync_profile_times(fresh if isinstance(fresh, dict) else profile)
     profiles = _load_json(USER_PROFILES_PATH, {})
     if not isinstance(profiles, dict):
@@ -456,8 +499,10 @@ def milestone_already_shown(profile: dict, days: int) -> bool:
     return bool(profile.get(f"milestone_shown_{days}"))
 
 
-def mark_milestone_shown(user_id: int | str, days: int) -> dict:
-    profile = dict(get_profile(user_id) or {})
+def mark_milestone_shown(user_id: int | str, days: int) -> dict | None:
+    profile = _merge_base(user_id)
+    if profile is None:
+        return None
     ms = profile.get("milestones_shown")
     if not isinstance(ms, dict):
         ms = {}
@@ -475,8 +520,10 @@ def weekly_recap_sent_today(profile: dict, today: str) -> bool:
     return bool(profile.get(f"weekly_sent_{today}"))
 
 
-def mark_weekly_recap_sent(user_id: int | str, today: str) -> dict:
-    profile = dict(get_profile(user_id) or {})
+def mark_weekly_recap_sent(user_id: int | str, today: str) -> dict | None:
+    profile = _merge_base(user_id)
+    if profile is None:
+        return None
     profile["last_weekly_recap_date"] = today
     profile[f"weekly_sent_{today}"] = True
     upsert_profile(user_id, profile)
@@ -517,8 +564,10 @@ def cycle_flag_sent(profile: dict, flag_key: str) -> bool:
     return bool(profile.get(flag_key))
 
 
-def mark_cycle_flag(user_id: int | str, flag_key: str) -> dict:
-    profile = dict(get_profile(user_id) or {})
+def mark_cycle_flag(user_id: int | str, flag_key: str) -> dict | None:
+    profile = _merge_base(user_id)
+    if profile is None:
+        return None
     cf = profile.get("cycle_flags")
     if not isinstance(cf, dict):
         cf = {}
@@ -612,7 +661,9 @@ def load_subscribers() -> set[int]:
 
 
 def save_subscriber(user_id: int, enabled: bool) -> None:
-    p = get_profile(user_id) or {}
+    p = _merge_base(user_id)
+    if p is None:
+        return
     p["daily_enabled"] = enabled
     upsert_profile(user_id, p)
 

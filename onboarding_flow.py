@@ -2776,6 +2776,28 @@ def start_resume_incomplete_onboarding(
     return "complete"
 
 
+_PERSIST_KEEP_KEYS = (
+    "streak",
+    "weekly_score",
+    "completed_tasks",
+    "missed_tasks",
+    "current_week",
+    "trial_start_date",
+    "cycle_start_date",
+    "cycle_flags",
+    "is_premium",
+    "subscription_end",
+    "plan",
+    "milestones_shown",
+    "last_morning_sent_date",
+    "last_evening_sent_date",
+    "last_daily_sent_date",
+    "last_user_message_date",
+    "last_weekly_recap_date",
+    "reengagement_sent_date",
+)
+
+
 def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
     morning = str(st.get("morning_time", "09:30"))
     evening = str(st.get("evening_time", "21:00"))
@@ -2789,9 +2811,6 @@ def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
         "daily_time": morning,
         "timezone": str(st.get("timezone") or _default_timezone()),
         "daily_enabled": True,
-        "last_morning_sent_date": None,
-        "last_evening_sent_date": None,
-        "last_daily_sent_date": None,
         "has_kids": st.get("has_kids"),
         "raw_goal": str(st.get("main_goal", "")).strip()[:2000],
         "final_goal": str(st.get("main_goal", "")).strip()[:2000],
@@ -2810,12 +2829,34 @@ def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
         tz = ZoneInfo(str(profile.get("timezone") or _default_timezone()))
     except Exception:
         tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
-    profile["cycle_start_date"] = datetime.now(tz).date().isoformat()
-    profile["trial_start_date"] = profile["cycle_start_date"]
+    today_iso = datetime.now(tz).date().isoformat()
+    try:
+        existing = db.get_profile(cid) or {}
+    except db.ProfileReadError:
+        log.error("persist_profile skipped write, profile read failed cid=%s", cid)
+        if not str(profile.get("cycle_start_date") or "").strip():
+            profile["cycle_start_date"] = today_iso
+        if not str(profile.get("trial_start_date") or "").strip():
+            profile["trial_start_date"] = profile["cycle_start_date"]
+        return profile
+    for key in _PERSIST_KEEP_KEYS:
+        if key not in existing:
+            continue
+        value = existing.get(key)
+        if value is None or value == "":
+            continue
+        profile[key] = value
+    if not str(profile.get("cycle_start_date") or "").strip():
+        profile["cycle_start_date"] = today_iso
+    if not str(profile.get("trial_start_date") or "").strip():
+        profile["trial_start_date"] = profile["cycle_start_date"]
     db.upsert_profile(cid, profile)
     db.save_subscriber(cid, True)
     save_onboarding_summary(cid, profile, model_names)
-    fresh = db.get_profile(cid)
+    try:
+        fresh = db.get_profile(cid)
+    except db.ProfileReadError:
+        fresh = None
     return fresh if isinstance(fresh, dict) else profile
 
 

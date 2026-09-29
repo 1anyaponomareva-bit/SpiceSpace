@@ -1796,10 +1796,7 @@ def _auth_telegram_id(request: Request, telegram_id: str | None) -> str:
                 )
             raise HTTPException(status_code=401, detail="invalid init data")
         return str(user_obj["id"])
-    tid = (telegram_id or "").strip()
-    if tid.isdigit():
-        return tid
-    raise HTTPException(status_code=400, detail="telegram_id is required")
+    raise HTTPException(status_code=401, detail="init data required")
 
 
 def _profile_has_goals(prof: dict | None) -> bool:
@@ -2311,7 +2308,8 @@ async def _check_and_send_milestone(
         message = await asyncio.to_thread(gen)
         await bot.send_message(chat_id=cid, text=message)
         updated = db_store.mark_milestone_shown(cid, active_days)
-        user_profiles[tid] = updated
+        if isinstance(updated, dict):
+            user_profiles[tid] = updated
         log.info("milestone sent cid=%s days=%s", cid, active_days)
     except Exception as e:
         log.warning("milestone check failed cid=%s: %s", cid, e)
@@ -2864,7 +2862,8 @@ async def _append_trial_day2_morning_ps(
         profile, model_names, extra_hint=hint
     )
     updated = db_store.mark_cycle_flag(cid, flag_key)
-    user_profiles[str(cid)] = updated
+    if isinstance(updated, dict):
+        user_profiles[str(cid)] = updated
     return f"{text}\n\nP.S. {ps}"
 
 
@@ -2919,7 +2918,8 @@ async def _maybe_send_trial_day3_subscription_message(
             reply_markup=_trial_subscription_continue_keyboard(lang),
         )
         updated = db_store.mark_cycle_flag(cid, flag_key)
-        user_profiles[str(cid)] = updated
+        if isinstance(updated, dict):
+            user_profiles[str(cid)] = updated
         log.info("trial_day3_subscription sent cid=%s start=%s", cid, start_raw)
     except Exception as e:
         log.warning("trial_day3_subscription failed cid=%s: %s", cid, e)
@@ -2966,7 +2966,8 @@ async def _run_trial_expiry_offer(
             reply_markup=_trial_subscription_return_keyboard(lang),
         )
         updated = db_store.mark_cycle_flag(cid, flag_key)
-        user_profiles[str(cid)] = updated
+        if isinstance(updated, dict):
+            user_profiles[str(cid)] = updated
         log.info("trial_day4_subscription sent cid=%s start=%s", cid, start_raw)
     except Exception as e:
         log.warning("trial_day4_subscription failed cid=%s: %s", cid, e)
@@ -3143,7 +3144,8 @@ async def successful_payment_handler(
             "plan": payload,
         },
     )
-    user_profiles[str(cid)] = updated
+    if isinstance(updated, dict):
+        user_profiles[str(cid)] = updated
     subscribers.add(cid)
     db_store.save_subscriber(cid, True)
 
@@ -3207,7 +3209,8 @@ async def _run_subscription_maintenance(
                             ),
                         )
                         updated = db_store.mark_cycle_flag(cid, f"sub_expired_{end_raw}")
-                        user_profiles[str(cid)] = updated
+                        if isinstance(updated, dict):
+                            user_profiles[str(cid)] = updated
                     except Exception as e:
                         log.warning("subscription expired notify failed cid=%s: %s", cid, e)
                 return
@@ -3221,7 +3224,8 @@ async def _run_subscription_maintenance(
                         text=ob.ob_text("subscription_expiring", lang, name=name),
                     )
                     updated = db_store.mark_cycle_flag(cid, reminder_key)
-                    user_profiles[str(cid)] = updated
+                    if isinstance(updated, dict):
+                        user_profiles[str(cid)] = updated
                 except Exception as e:
                     log.warning("subscription reminder failed cid=%s: %s", cid, e)
 
@@ -3795,14 +3799,20 @@ async def _deliver_weekly_recap_evening(
             days_since_start=days_since_start,
         )
         await bot.send_message(chat_id=cid, text=sanitize_bot_reply(recap))
-        profile = db_store.mark_cycle_flag(cid, weekly_sent_key)
-        profile = db_store.mark_weekly_recap_sent(cid, today)
+        updated_profile = db_store.mark_cycle_flag(cid, weekly_sent_key)
+        if isinstance(updated_profile, dict):
+            profile = updated_profile
+        updated_profile = db_store.mark_weekly_recap_sent(cid, today)
+        if isinstance(updated_profile, dict):
+            profile = updated_profile
         patch: dict = {"last_weekly_recap_date": today}
         if claim_evening_slot:
             if db_store.claim_send_slot(cid, "last_evening_sent_date", today):
                 patch["last_evening_sent_date"] = today
-        profile = db_store.update_profile(cid, patch)
-        user_profiles[str(cid)] = profile
+        updated_profile = db_store.update_profile(cid, patch)
+        if isinstance(updated_profile, dict):
+            profile = updated_profile
+            user_profiles[str(cid)] = profile
         log.info(
             "weekly recap letter sent cid=%s day=%s",
             cid,
@@ -3819,8 +3829,10 @@ async def _deliver_weekly_recap_evening(
                     model_chain,
                 )
                 if kicked:
-                    profile = db_store.mark_cycle_flag(cid, dialog_key)
-                    user_profiles[str(cid)] = profile
+                    updated_profile = db_store.mark_cycle_flag(cid, dialog_key)
+                    if isinstance(updated_profile, dict):
+                        profile = updated_profile
+                        user_profiles[str(cid)] = profile
         return True
     except Exception as e:
         log.warning("weekly recap deliver failed cid=%s: %s", cid, e)
@@ -4461,16 +4473,10 @@ def _clear_flow_state(cid: int) -> None:
 
 
 def _prepare_bot_outgoing(
-    cid: int, text: str, profile: dict | None
+    cid: int, text: str, _profile: dict | None
 ) -> str:
+    # Identical replies must not drop onboarding, morning, or evening state.
     norm = _normalize_bot_outgoing(text)
-    if norm and _user_in_active_flow(cid):
-        last = last_bot_outgoing_text.get(cid, "")
-        if last and norm == last:
-            _clear_flow_state(cid)
-            escape = _flow_escape_message(profile)
-            last_bot_outgoing_text[cid] = _normalize_bot_outgoing(escape)
-            return escape
     if norm:
         last_bot_outgoing_text[cid] = norm
     return text
@@ -4718,7 +4724,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         cid,
         {"language_code": lang, "daily_enabled": True},
     )
-    user_profiles[tid] = prof
+    if not isinstance(prof, dict):
+        cached = user_profiles.get(tid)
+        prof = cached if isinstance(cached, dict) else {}
+    else:
+        user_profiles[tid] = prof
     db_store.save_subscriber(cid, True)
 
     start_arg = (context.args[0] if context.args else "").strip().lower()
@@ -4937,6 +4947,9 @@ async def cmd_weektest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "last_evening_sent_date": None,
             },
         )
+        if not isinstance(prof, dict):
+            await _bot_reply(update.message, "Не удалось сохранить: профиль не прочитался.")
+            return
         user_profiles[str(cid)] = prof
         onboarding.pop(cid, None)
         await _bot_reply(
@@ -4954,6 +4967,9 @@ async def cmd_weektest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "last_morning_sent_date": None,
             },
         )
+        if not isinstance(prof, dict):
+            await _bot_reply(update.message, "Не удалось сохранить: профиль не прочитался.")
+            return
         user_profiles[str(cid)] = prof
         onboarding.pop(cid, None)
         for k in list(prof.keys()):
@@ -5015,6 +5031,9 @@ async def cmd_weektest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "cycle_flags": {},
             },
         )
+        if not isinstance(prof, dict):
+            await _bot_reply(update.message, "Не удалось сохранить: профиль не прочитался.")
+            return
         user_profiles[str(cid)] = prof
         onboarding.pop(cid, None)
         await _bot_reply(
@@ -6650,7 +6669,10 @@ def _ensure_cycle_start_date(
             inferred = today.isoformat()
     else:
         inferred = (today - timedelta(days=journey - 1)).isoformat()
-    profile = db_store.update_profile(cid, {"cycle_start_date": inferred})
+    updated_profile = db_store.update_profile(cid, {"cycle_start_date": inferred})
+    if not isinstance(updated_profile, dict):
+        return profile
+    profile = updated_profile
     user_profiles[str(cid)] = profile
     log.info(
         "cycle_start_date backfilled cid=%s start=%s journey=%s",
@@ -7091,13 +7113,21 @@ async def _bootstrap_bot() -> None:
                 profile = user_profiles.get(key)
                 if not isinstance(profile, dict):
                     # Not in memory — try loading from Supabase
-                    profile = db_store.get_profile(key)
+                    try:
+                        profile = db_store.get_profile(key)
+                    except db_store.ProfileReadError:
+                        log.warning("daily_check profile read failed cid=%s", cid)
+                        continue
                     if not isinstance(profile, dict):
                         continue
                     user_profiles[key] = profile
 
                 # Always reload fresh profile from DB to pick up time changes
-                fresh = db_store.get_profile(key)
+                try:
+                    fresh = db_store.get_profile(key)
+                except db_store.ProfileReadError:
+                    log.warning("daily_check profile read failed cid=%s", cid)
+                    continue
                 if isinstance(fresh, dict):
                     profile = fresh
                     user_profiles[key] = fresh
@@ -7211,7 +7241,10 @@ async def _bootstrap_bot() -> None:
                     current_week = max(
                         1, min(12, (days_since_start // 7) + 1)
                     )
-                    fresh = db_store.get_profile(key)
+                    try:
+                        fresh = db_store.get_profile(key)
+                    except db_store.ProfileReadError:
+                        fresh = None
                     if isinstance(fresh, dict):
                         profile = fresh
                         user_profiles[key] = fresh
@@ -8014,7 +8047,8 @@ async def get_milestone(
     message = await asyncio.to_thread(generate_message)
 
     fresh_profile = db_store.mark_milestone_shown(int(tid), completed_days)
-    user_profiles[tid] = fresh_profile
+    if isinstance(fresh_profile, dict):
+        user_profiles[tid] = fresh_profile
 
     return {
         "milestone": {
