@@ -1485,8 +1485,17 @@
 
     document.getElementById('btn-reset')?.addEventListener('click', async () => {
       if (!confirm(t('confirm_reset'))) return;
-      await apiFetch('/api/profile/reset', { method: 'POST' });
-      if (tg) tg.close();
+      try {
+        const resp = await apiFetch('/api/profile/reset', { method: 'POST' });
+        if (!resp.ok) {
+          alert(t('save_failed') || 'Could not reset. Try again.');
+          return;
+        }
+        if (tg) tg.close();
+      } catch (e) {
+        console.error('reset failed:', e);
+        alert(t('save_failed') || 'Could not reset. Try again.');
+      }
     });
 
     document.getElementById('btn-change-12w')?.addEventListener('click', async () => {
