@@ -242,8 +242,6 @@ CHANGE_GOAL_TRIGGERS = [
     "давай поменяем цель",
     "хочу поменять цель",
     "поменяй цель",
-    "начать заново",
-    "новый цикл",
     "change goal",
     "new goal",
     "reset goal",
@@ -302,11 +300,10 @@ def _wants_to_add_second_12w_goal(text: str) -> bool:
 
 
 def _wants_to_change_12w_goal(text: str) -> bool:
+    """Start the 12-week goal flow only on an explicit request, not a day story."""
     text_lower = (text or "").lower()
     if _wants_to_add_second_12w_goal(text_lower):
         return False
-    if any(m in text_lower for m in REPLACE_12W_GOAL_MARKERS):
-        return True
     return any(t in text_lower for t in CHANGE_GOAL_TRIGGERS)
 
 
