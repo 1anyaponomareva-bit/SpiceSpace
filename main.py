@@ -2340,7 +2340,6 @@ async def _evening_message_text(
                         [{"role": "user", "content": user_message_with_fresh_time(profile, user_content)}],
                         system=refresh_user_time_in_system(profile, evening_system),
                         max_tokens=200,
-                        cache_core=False,
                     ).strip()
                 )
                 if text:
@@ -2396,7 +2395,6 @@ async def _check_and_send_milestone(
                         [{"role": "user", "content": prompt}],
                         system="Пиши тепло и лично.",
                         max_tokens=150,
-                        cache_core=False,
                     ).strip()
                     if text:
                         return sanitize_bot_reply(text)
@@ -2646,7 +2644,6 @@ async def _reengagement_message_text(
                     [{"role": "user", "content": user_content}],
                     system=system,
                     max_tokens=220,
-                    cache_core=False,
                 ).strip()
                 if text:
                     return text
@@ -2907,7 +2904,6 @@ async def _generate_trial_subscription_text(
                         [{"role": "user", "content": user}],
                         system=system,
                         max_tokens=220,
-                        cache_core=False,
                     )
                 ).strip()
                 if text:
@@ -3417,6 +3413,192 @@ def _save_tomorrows_task(chat_id: int, profile: dict, task: str) -> None:
     )
 
 
+def _task_from_dialog_json(text: str) -> str | None:
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+    data: object = None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(data, dict):
+        return None
+    task = data.get("task")
+    if not isinstance(task, str):
+        return None
+    cleaned = task.strip()
+    if not cleaned or cleaned.lower() == "null":
+        return None
+    return cleaned[:200]
+
+
+async def _capture_tomorrow_task_from_dialog(
+    chat_id: int,
+    profile: dict,
+    model_names: list[str],
+) -> None:
+    """После обычного ответа: если договорились о задаче на завтра — записать её."""
+    hist = histories.get(chat_id) or []
+    lines: list[str] = []
+    for turn in hist[-12:]:
+        if not isinstance(turn, dict):
+            continue
+        parts = turn.get("parts") or []
+        text = str(parts[0] if parts else "").strip()
+        if not text:
+            continue
+        who = "Пользователь" if turn.get("role") == "user" else "Бот"
+        lines.append(f"{who}: {text}")
+    if not lines:
+        return
+    prompt = (
+        "Был ли в этом диалоге план или задача на завтра? "
+        'Если да — верни JSON: {"task": "описание задачи"} '
+        'Если нет — верни {"task": null}\n\n'
+        "Диалог:\n"
+        + "\n".join(lines)[-4000:]
+    )
+    raw = ""
+    for mid in model_names:
+        if not mid:
+            continue
+        try:
+            raw = await asyncio.to_thread(
+                claude_generate,
+                mid,
+                [{"role": "user", "content": prompt}],
+                system="Отвечай только JSON, без пояснений.",
+                max_tokens=200,
+            )
+            break
+        except Exception as e:
+            log.warning(
+                "tomorrow task extract failed cid=%s model=%s: %s",
+                chat_id,
+                mid,
+                e,
+            )
+    task = _task_from_dialog_json(raw)
+    if task:
+        _save_tomorrows_task(chat_id, profile, task)
+
+
+def _goal_from_dialog_json(text: str) -> tuple[str | None, str | None]:
+    """(main_goal, weekly_goal). weekly_goal is None when Claude did not name one."""
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+    data: object = None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not match:
+            return None, None
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None, None
+    if not isinstance(data, dict):
+        return None, None
+    main = data.get("main_goal")
+    main_text = str(main).strip() if isinstance(main, str) else ""
+    if not main_text or main_text.lower() == "null":
+        return None, None
+    weekly = data.get("weekly_goal")
+    weekly_text = str(weekly).strip() if isinstance(weekly, str) else ""
+    if not weekly_text or weekly_text.lower() == "null":
+        weekly_text = ""
+    return main_text[:2000], weekly_text[:2000]
+
+
+async def _capture_goal_from_dialog(
+    chat_id: int,
+    profile: dict,
+    model_names: list[str],
+) -> None:
+    """Обычный диалог: если договорились о новой цели — записать main_goal и weekly_goal."""
+    hist = histories.get(chat_id) or []
+    lines: list[str] = []
+    for turn in hist[-12:]:
+        if not isinstance(turn, dict):
+            continue
+        parts = turn.get("parts") or []
+        text = str(parts[0] if parts else "").strip()
+        if not text:
+            continue
+        who = "Пользователь" if turn.get("role") == "user" else "Бот"
+        lines.append(f"{who}: {text}")
+    if not lines:
+        return
+    prompt = (
+        "Появилась ли в этом диалоге новая главная цель пользователя "
+        "(цель на 12 недель, не задача на сегодня и не план на завтра)? "
+        "Если да — верни JSON: "
+        '{"main_goal": "формулировка цели", "weekly_goal": "цель на эту неделю или null"}. '
+        'Если нет — верни {"main_goal": null, "weekly_goal": null}.\n\n'
+        "Диалог:\n"
+        + "\n".join(lines)[-4000:]
+    )
+    raw = ""
+    for mid in model_names:
+        if not mid:
+            continue
+        try:
+            raw = await asyncio.to_thread(
+                claude_generate,
+                mid,
+                [{"role": "user", "content": prompt}],
+                system="Отвечай только JSON, без пояснений.",
+                max_tokens=300,
+            )
+            break
+        except Exception as e:
+            log.warning(
+                "goal extract failed cid=%s model=%s: %s",
+                chat_id,
+                mid,
+                e,
+            )
+    main_goal, weekly_goal = _goal_from_dialog_json(raw)
+    if not main_goal:
+        return
+    current = str(profile.get("main_goal") or "").strip()
+    if main_goal.casefold() == current.casefold():
+        return
+    saved = db_store.update_profile_field(chat_id, "main_goal", main_goal)
+    saved = db_store.update_profile_field(chat_id, "weekly_goal", weekly_goal or "") or saved
+    fresh = saved if isinstance(saved, dict) else None
+    if fresh is None:
+        try:
+            fresh = db_store.get_profile(chat_id)
+        except db_store.ProfileReadError:
+            fresh = None
+    if isinstance(fresh, dict):
+        profile.clear()
+        profile.update(fresh)
+        user_profiles[str(chat_id)] = fresh
+    else:
+        profile["main_goal"] = main_goal
+        profile["weekly_goal"] = weekly_goal or ""
+        user_profiles[str(chat_id)] = profile
+    log.info(
+        "dialog goal saved cid=%s main=%s weekly=%s",
+        chat_id,
+        main_goal[:50],
+        (weekly_goal or "")[:50],
+    )
+
+
 async def _try_save_task_from_message(
     chat_id: int,
     bot_reply: str,
@@ -3853,7 +4035,6 @@ Rules:
                     [{"role": "user", "content": prompt}],
                     system=system,
                     max_tokens=450,
-                    cache_core=False,
                 ).strip()
                 if text:
                     return sanitize_bot_reply(text)
@@ -4168,7 +4349,6 @@ async def _coach_reply_photo(
                     _VISION_MODEL,
                     messages,
                     system=refresh_user_time_in_system(prof, system),
-                    cache_core=False,
                 )
             )
             log.info("Claude vision ответ через модель %s", _VISION_MODEL)
@@ -4440,7 +4620,6 @@ async def _classify_change_12w_choice(
                     [{"role": "user", "content": "Classify the response above."}],
                     system=system,
                     max_tokens=16,
-                    cache_core=False,
                 ).strip()
                 parsed = _parse_change_12w_classification(text)
                 if parsed in ("new_cycle", "adjust", "unclear"):
@@ -5708,6 +5887,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         future_task = _extract_future_task(raw)
         if future_task:
             _save_tomorrows_task(cid, prof_d, future_task)
+        try:
+            await _capture_tomorrow_task_from_dialog(cid, prof_d, model_names)
+        except Exception as e:
+            log.warning("tomorrow task capture failed cid=%s: %s", cid, e)
+        try:
+            await _capture_goal_from_dialog(cid, prof_d, model_names)
+        except Exception as e:
+            log.warning("dialog goal capture failed cid=%s: %s", cid, e)
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -6002,7 +6189,6 @@ async def _today_task_options_message_text(
                         [{"role": "user", "content": prompt}],
                         system=refresh_user_time_in_system(profile, system),
                         max_tokens=280,
-                        cache_core=False,
                     )
                 ).strip()
                 low = text.lower()
@@ -6048,7 +6234,6 @@ async def _generate_today_task(profile: dict, model_names: list[str]) -> str:
                     [{"role": "user", "content": prompt}],
                     system=refresh_user_time_in_system(profile, system),
                     max_tokens=120,
-                    cache_core=False,
                 ).strip()
                 if text:
                     return text.strip().strip('"')[:140]
@@ -6207,7 +6392,6 @@ async def _task_day_followup_text(
                         [{"role": "user", "content": prompt}],
                         system=refresh_user_time_in_system(profile, system),
                         max_tokens=200,
-                        cache_core=False,
                     )
                 ).strip()
                 if text:
@@ -6320,7 +6504,6 @@ async def _classify_morning_user_reply(
                     [{"role": "user", "content": prompt}],
                     system=system,
                     max_tokens=120,
-                    cache_core=False,
                 ).strip()
                 parsed = _parse_morning_reply_json(text)
                 if parsed:
@@ -7070,13 +7253,15 @@ def _calculate_user_level(completed_tasks: int) -> dict:
     }
 
 
-def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> dict:
+def _enrich_profile_for_api(
+    profile: dict,
+    telegram_id: str | None = None,
+    *,
+    with_summaries: bool = True,
+) -> dict:
     """Старые профили без новых полей получают разумные дефолты при отдаче в Mini App."""
     p = dict(profile)
-    if not p.get("main_goal"):
-        p["main_goal"] = (
-            p.get("final_goal") or p.get("raw_goal") or p.get("amount") or ""
-        ).strip()
+    p["main_goal"] = str(p.get("main_goal") or "").strip()
     if not p.get("raw_goal"):
         p["raw_goal"] = p.get("main_goal") or ""
     if not p.get("final_goal"):
@@ -7104,7 +7289,7 @@ def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> di
 
     tid = telegram_id or str(p.get("telegram_id") or "")
     today = _profile_local_date(p)
-    if tid:
+    if with_summaries and tid:
         summ = db_store.get_daily_summary(tid, today)
         if isinstance(summ, dict):
             task_raw = str(summ.get("task") or "").strip()
@@ -7116,10 +7301,17 @@ def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> di
             p["task_completed"] = tc
             p["today_completed"] = tc == "true"
 
-    p["week_scores"] = _week_scores_array(p, tid or None)
-    if tid:
-        p["week_cycle_days"] = _build_week_cycle_days(p, tid)
+    if with_summaries:
+        p["week_scores"] = _week_scores_array(p, tid or None)
+        if tid:
+            p["week_cycle_days"] = _build_week_cycle_days(p, tid)
+        else:
+            p["week_cycle_days"] = []
     else:
+        cw = max(1, min(12, int(p.get("current_week") or 1)))
+        scores = [0] * 12
+        scores[cw - 1] = int(p.get("weekly_score") or 0)
+        p["week_scores"] = scores
         p["week_cycle_days"] = []
     day_in_week = _cycle_week_day_streak(p)
     if day_in_week is not None:
@@ -7131,7 +7323,7 @@ def _enrich_profile_for_api(profile: dict, telegram_id: str | None = None) -> di
         p["program_day"] = journey_days
     else:
         p["program_day"] = max(1, int(p.get("streak") or 0))
-    if tid:
+    if with_summaries and tid:
         summaries = db_store.list_daily_summaries(tid)
         completed_count = sum(
             1 for s in summaries if s.get("task_completed") == "true"
@@ -7823,11 +8015,12 @@ async def get_profile(
     if not isinstance(profile, dict):
         log.info("api/profile 404 user_id=%s (нет профиля в БД)", tid)
         raise HTTPException(status_code=404, detail="profile not found")
+    user_profiles.pop(tid, None)
     user_profiles[tid] = profile
 
     user_obj = _validate_init_data(_extract_init_data(request))
     return {
-        "profile": _enrich_profile_for_api(profile, tid),
+        "profile": _enrich_profile_for_api(profile, None, with_summaries=False),
         "user": user_obj if isinstance(user_obj, dict) else None,
     }
 
@@ -8159,7 +8352,6 @@ async def get_milestone(
                     [{"role": "user", "content": prompt}],
                     system="Пиши тепло и лично. Только текст поздравления.",
                     max_tokens=150,
-                    cache_core=False,
                 ).strip()
                 if text:
                     return sanitize_bot_reply(text)
@@ -8470,7 +8662,6 @@ No markdown, no quotes, no emoji."""
                 [{"role": "user", "content": prompt}],
                 system=system,
                 max_tokens=120,
-                cache_core=False,
             ).strip()
             if "|" in raw:
                 a, b = raw.split("|", 1)

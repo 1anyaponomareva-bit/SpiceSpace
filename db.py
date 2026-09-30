@@ -338,6 +338,11 @@ def delete_profile(user_id: int | str) -> None:
             pass
 
 
+def update_profile_field(user_id: int | str, field: str, value: object) -> dict | None:
+    """Update one profile column and return the saved profile."""
+    return update_profile(user_id, {field: value})
+
+
 def update_profile(user_id: int | str, fields: dict) -> dict | None:
     """Merge fields into the existing profile and persist.
 
@@ -908,11 +913,7 @@ def _row_to_profile(row: dict) -> dict:
         p["last_weekly_recap_date"] = str(p["last_weekly_recap_date"])[:10]
         p[f"weekly_sent_{p['last_weekly_recap_date']}"] = True
     sync_profile_times(p)
-    merged_goal = str(
-        p.get("main_goal") or p.get("final_goal") or p.get("raw_goal") or ""
-    ).strip()
-    if merged_goal:
-        p["main_goal"] = merged_goal
+    p["main_goal"] = str(p.get("main_goal") or "").strip()
     p.setdefault("raw_goal", p.get("main_goal") or p.get("raw_goal") or "")
     p.setdefault("final_goal", p.get("main_goal") or p.get("final_goal") or "")
     p.setdefault("goal_type", "qualitative")

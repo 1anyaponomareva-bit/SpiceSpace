@@ -7,8 +7,6 @@ import os
 
 import anthropic
 
-from prompts import SPICESPACE_CORE_SYSTEM
-
 log = logging.getLogger("coach_bot")
 
 _client: anthropic.Anthropic | None = None
@@ -74,19 +72,15 @@ def response_text(response: object) -> str:
 def _system_blocks(system: str, *, cache_core: bool) -> list[dict] | str:
     if not system:
         return ""
-    if not cache_core or not system.startswith(SPICESPACE_CORE_SYSTEM):
+    if not cache_core:
         return system
-    suffix = system[len(SPICESPACE_CORE_SYSTEM) :].lstrip("\n")
-    blocks: list[dict] = [
+    return [
         {
             "type": "text",
-            "text": SPICESPACE_CORE_SYSTEM,
+            "text": system,
             "cache_control": {"type": "ephemeral"},
-        },
+        }
     ]
-    if suffix:
-        blocks.append({"type": "text", "text": suffix})
-    return blocks
 
 
 def generate(

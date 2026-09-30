@@ -543,10 +543,7 @@
   }
 
   function profileHasGoals(prof) {
-    const g = String(
-      prof?.main_goal || prof?.final_goal || prof?.raw_goal || '',
-    ).trim();
-    return Boolean(g);
+    return Boolean(String(prof?.main_goal || '').trim());
   }
 
   function openBotChat(startPayload) {
@@ -877,7 +874,7 @@
     if (wg) return wg;
     const method = (prof.method || '').trim();
     if (method) return method;
-    const main = (prof.main_goal || prof.final_goal || '').trim();
+    const main = String(prof.main_goal || '').trim();
     if (main.length > 100) return `${main.slice(0, 97)}…`;
     return main || t('weekly_fallback');
   }
@@ -941,7 +938,7 @@
   }
 
   function renderMonthGoal(prof) {
-    const text = (prof.main_goal || prof.final_goal || prof.raw_goal || '—').trim();
+    const text = String(prof?.main_goal || '').trim() || '—';
     document.getElementById('month-goal').textContent = text;
   }
 
