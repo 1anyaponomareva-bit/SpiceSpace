@@ -7,6 +7,7 @@ import logging
 import os
 import re
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 import httpx
@@ -53,6 +54,7 @@ _SUPABASE_PROFILE_COLUMNS_FALLBACK = frozenset(
         "weekly_score",
         "time_per_day",
         "cycle_start_date",
+        "goal_start_date",
         "last_weekly_recap_date",
         "morning_time",
         "last_user_message_date",
@@ -343,6 +345,15 @@ def update_profile_field(user_id: int | str, field: str, value: object) -> dict 
     return update_profile(user_id, {field: value})
 
 
+def _profile_local_today(profile: dict) -> str:
+    tz_name = str(profile.get("timezone") or "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("UTC")
+    return datetime.now(tz).date().isoformat()
+
+
 def update_profile(user_id: int | str, fields: dict) -> dict | None:
     """Merge fields into the existing profile and persist.
 
@@ -359,6 +370,12 @@ def update_profile(user_id: int | str, fields: dict) -> dict | None:
         )
         return None
     profile = sync_profile_times(profile)
+    if "main_goal" in fields:
+        new_goal = str(fields.get("main_goal") or "").strip()
+        old_goal = str(profile.get("main_goal") or "").strip()
+        if new_goal and new_goal != old_goal:
+            fields = dict(fields)
+            fields["goal_start_date"] = _profile_local_today(profile)
     profile.update(fields)
     sync_profile_times(profile)
     ok = upsert_profile(user_id, profile)
@@ -810,15 +827,15 @@ def list_daily_summaries(user_id: int | str) -> list[dict]:
     key = str(user_id)
     out: list[dict] = []
     if _use_supabase:
-        rows = (
-            _request(
-                "GET",
-                f"daily_summaries?user_id=eq.{key}"
-                "&select=summary_date,task_completed,completed,summary,mood,key_detail"
-                "&order=summary_date.asc",
-            )
-            or []
+        rows = _request(
+            "GET",
+            f"daily_summaries?user_id=eq.{key}"
+            "&select=summary_date,task,task_completed,completed,summary,mood,key_detail"
+            "&order=summary_date.asc",
         )
+        if rows is None:
+            log.warning("daily summaries list failed uid=%s", key)
+            return []
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -829,6 +846,7 @@ def list_daily_summaries(user_id: int | str) -> list[dict]:
             out.append(
                 {
                     "date": d,
+                    "task": str(row.get("task") or ""),
                     "task_completed": normalize_task_completed(tc),
                     "completed": row.get("completed"),
                     "summary": str(row.get("summary") or ""),
@@ -836,8 +854,7 @@ def list_daily_summaries(user_id: int | str) -> list[dict]:
                     "key_detail": str(row.get("key_detail") or ""),
                 }
             )
-        if out:
-            return out
+        return out
     store = _load_json(DAILY_SUMMARIES_PATH, {})
     user_days = store.get(key, {}) if isinstance(store, dict) else {}
     if not isinstance(user_days, dict):
@@ -845,11 +862,12 @@ def list_daily_summaries(user_id: int | str) -> list[dict]:
     for d, row in sorted(user_days.items()):
         if not isinstance(row, dict):
             continue
-        tc = row.get("task_completed")
-        out.append(
-            {
-                "date": str(d)[:10],
-                "task_completed": normalize_task_completed(tc),
+            tc = row.get("task_completed")
+            out.append(
+                {
+                    "date": str(d)[:10],
+                    "task": str(row.get("task") or ""),
+                    "task_completed": normalize_task_completed(tc),
                 "completed": row.get("completed"),
                 "summary": str(row.get("summary") or ""),
                 "mood": str(row.get("mood") or ""),
@@ -886,6 +904,7 @@ def _profile_to_row(p: dict) -> dict:
         "weekly_score": p.get("weekly_score", 0),
         "time_per_day": p.get("time_per_day"),
         "cycle_start_date": p.get("cycle_start_date"),
+        "goal_start_date": p.get("goal_start_date") or "",
         "milestones_shown": _milestones_shown_for_row(p),
         "last_weekly_recap_date": p.get("last_weekly_recap_date") or None,
         "last_user_message_date": p.get("last_user_message_date") or "",
@@ -927,6 +946,7 @@ def _row_to_profile(row: dict) -> dict:
     p.setdefault("weekly_goal", p.get("weekly_goal") or "")
     p.setdefault("time_per_day", p.get("time_per_day") or "")
     p.setdefault("cycle_start_date", p.get("cycle_start_date") or "")
+    p["goal_start_date"] = str(p.get("goal_start_date") or "")[:10]
     p.setdefault("last_weekly_recap_date", p.get("last_weekly_recap_date") or "")
     p.setdefault("language_code", p.get("language_code") or "en")
     p.setdefault("last_user_message_date", p.get("last_user_message_date") or "")

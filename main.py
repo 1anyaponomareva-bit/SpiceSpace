@@ -245,14 +245,13 @@ CHANGE_GOAL_TRIGGERS = [
     "change goal",
     "new goal",
     "reset goal",
-    "поменять недельную цель",
-    "изменить цель на неделю",
-    "другая задача на неделю",
 ]
 
 CHANGE_WEEKLY_TRIGGERS = [
     "поменять цель на неделю",
     "изменить недельную цель",
+    "поменять недельную цель",
+    "изменить цель на неделю",
     "другая цель на эту неделю",
     "поменяй недельную",
     "давай поменяем план на неделю",
@@ -302,9 +301,17 @@ def _wants_to_add_second_12w_goal(text: str) -> bool:
 def _wants_to_change_12w_goal(text: str) -> bool:
     """Start the 12-week goal flow only on an explicit request, not a day story."""
     text_lower = (text or "").lower()
-    if _wants_to_add_second_12w_goal(text_lower):
+    if "на неделю" in text_lower or "недельн" in text_lower:
         return False
-    return any(t in text_lower for t in CHANGE_GOAL_TRIGGERS)
+    for phrase in CHANGE_GOAL_TRIGGERS:
+        idx = text_lower.find(phrase)
+        if idx < 0:
+            continue
+        prefix = text_lower[max(0, idx - 16):idx]
+        if re.search(r"(^|[\s,])(не|нет|don't|do not)\b", prefix):
+            continue
+        return True
+    return False
 
 
 def _wants_to_change_weekly_goal(text: str) -> bool:
@@ -647,6 +654,25 @@ CHAT_ONE_QUESTION_RULE_EN = """CRITICALLY IMPORTANT — questions:
 In every message ask AT MOST ONE question.
 Never ask two questions in a row.
 If you want to ask several things — pick the single most important question."""
+
+
+def _current_goal_only_rule(profile: dict) -> str:
+    goal = str(profile.get("main_goal") or "").strip() or "не указана"
+    if str(profile.get("language_code") or "en").lower().startswith("ru"):
+        return (
+            f"Текущая цель пользователя: {goal}\n"
+            "Работай ТОЛЬКО с текущей целью.\n"
+            "НЕ упоминай старые цели, старые планы или "
+            "прошлые разговоры про другие проекты если "
+            "пользователь сам их не поднял."
+        )
+    shown = goal if goal != "не указана" else "not set"
+    return (
+        f"User's current goal: {shown}\n"
+        "Work ONLY with the current goal.\n"
+        "Do NOT mention old goals, old plans, or past conversations "
+        "about other projects unless the user brought them up."
+    )
 
 
 def _chat_one_question_rule(profile: dict) -> str:
@@ -2139,21 +2165,43 @@ def _format_time_per_day_for_prompt(profile: dict) -> str:
     return f"{raw} минут" if ru else f"{raw} minutes"
 
 
-async def _morning_message_text(
-    chat_id: int,
-    profile: dict,
-    model_names: list[str],
-) -> str:
+async def _last_dialog_messages(chat_id: int, *, ru: bool, limit: int = 5) -> str:
+    """Last 3–5 dialog turns for morning/evening prompts."""
+    hist = list(histories.get(chat_id) or [])
+    if not hist:
+        try:
+            loaded = await asyncio.to_thread(db_store.load_history, chat_id, limit)
+        except Exception as e:
+            log.warning("load last dialog failed cid=%s: %s", chat_id, e)
+            loaded = []
+        if loaded:
+            histories[chat_id] = loaded
+            hist = loaded
+    user_l = "Пользователь" if ru else "User"
+    bot_l = "Спейс" if ru else "Space"
+    empty = "нет предыдущих сообщений" if ru else "no previous messages"
+    lines: list[str] = []
+    for turn in hist[-limit:]:
+        role = turn.get("role")
+        parts = turn.get("parts") or []
+        content = turn.get("content") or (parts[0] if parts else "")
+        text = str(content or "").strip()
+        if not text:
+            continue
+        label = user_l if role == "user" else bot_l
+        lines.append(f"{label}: {text[:400]}")
+    return "\n".join(lines) if lines else empty
+
+
+def _morning_message_fallback(chat_id: int, profile: dict) -> str:
     lang = str(profile.get("language_code") or "en")
     ru = lang.lower().startswith("ru")
     name = str(profile.get("name", "")).strip()
     display_name = name or ("подруга" if ru else "friend")
-
     yesterday_date = _profile_local_date(profile) - timedelta(days=1)
     yesterday = db_store.get_daily_summary(chat_id, yesterday_date) or {}
     yesterday_task = str(yesterday.get("task") or "").strip()
     yesterday_done = yesterday.get("completed") is True
-
     if yesterday_task and not yesterday_done:
         if ru:
             return (
@@ -2166,10 +2214,72 @@ async def _morning_message_text(
             f"Yesterday you mentioned: {yesterday_task}\n\n"
             f"Still on track or want to change it?"
         )
-
     if ru:
         return f"{display_name}, доброе утро 🌅\n\nЧто планируешь сегодня?"
     return f"{display_name}, good morning 🌅\n\nWhat are you planning for today?"
+
+
+async def _morning_message_text(
+    chat_id: int,
+    profile: dict,
+    model_names: list[str],
+) -> str:
+    lang = str(profile.get("language_code") or "en")
+    ru = lang.lower().startswith("ru")
+    name = str(profile.get("name", "")).strip()
+    display_name = name or ("подруга" if ru else "friend")
+    last_messages = await _last_dialog_messages(chat_id, ru=ru, limit=5)
+    name_instruction = _exact_name_prompt_instruction(profile, chat_id)
+    if ru:
+        morning_body = (
+            f"{_morning_personal_system(lang)}\n\n"
+            f"{_current_goal_only_rule(profile)}\n\n"
+            f"Это утреннее сообщение. Вот последний разговор с пользователем: {last_messages}\n"
+            "Учитывай этот контекст — не начинай с нуля.\n"
+            "Если вчера обсуждали что-то конкретное — продолжи оттуда.\n\n"
+            f"{name_instruction}"
+        )
+        user_content = f"Напиши утреннее сообщение для {display_name}."
+    else:
+        morning_body = (
+            f"{_morning_personal_system(lang)}\n\n"
+            f"{_current_goal_only_rule(profile)}\n\n"
+            "This is the morning message. Here is the latest conversation "
+            f"with the user: {last_messages}\n"
+            "Use this context — don't start from scratch.\n"
+            "If you discussed something specific yesterday — continue from there.\n\n"
+            f"{name_instruction}"
+        )
+        user_content = f"Write the morning message for {display_name}."
+    morning_system = prepend_user_time(profile, morning_body)
+    if not ru:
+        morning_system = (
+            "CRITICAL: Write ONLY in English. Not a single Russian word.\n\n"
+        ) + morning_system
+
+    def call() -> str:
+        for mid in model_names:
+            if not mid:
+                continue
+            try:
+                text = sanitize_bot_reply(
+                    claude_generate(
+                        mid,
+                        [{
+                            "role": "user",
+                            "content": user_message_with_fresh_time(profile, user_content),
+                        }],
+                        system=refresh_user_time_in_system(profile, morning_system),
+                        max_tokens=200,
+                    ).strip()
+                )
+                if text:
+                    return text
+            except Exception as e:
+                log.warning("morning personal message %s: %s", mid, e)
+        return _morning_message_fallback(chat_id, profile)
+
+    return await asyncio.to_thread(call)
 
 
 _EVENING_PERSONAL_SYSTEM_RU = (
@@ -2225,6 +2335,7 @@ async def _evening_message_text(
 ) -> str:
     lang = str(profile.get("language_code") or "en")
     ru = lang.lower().startswith("ru")
+    last_messages = await _last_dialog_messages(chat_id, ru=ru, limit=5)
     today = _profile_local_date(profile)
     today_summary = db_store.get_daily_summary(chat_id, today) or {}
     today_context = str(today_summary.get("summary") or "").strip()
@@ -2303,8 +2414,24 @@ async def _evening_message_text(
     evening_extra = "\n\n".join(
         b for b in (facts_block, personality_block) if b
     )
+    if ru:
+        dialog_rule = (
+            f"Это вечернее сообщение. Вот последний разговор с пользователем: {last_messages}\n"
+            "Учитывай этот контекст — не начинай с нуля.\n"
+            "Если вчера обсуждали что-то конкретное — продолжи оттуда."
+        )
+    else:
+        dialog_rule = (
+            "This is the evening message. Here is the latest conversation "
+            f"with the user: {last_messages}\n"
+            "Use this context — don't start from scratch.\n"
+            "If you discussed something specific yesterday — continue from there."
+        )
     evening_body = (
-        f"{_evening_personal_system(lang)}\n\n{name_instruction}"
+        f"{_evening_personal_system(lang)}\n\n"
+        f"{dialog_rule}\n\n"
+        f"{_current_goal_only_rule(profile)}\n\n"
+        f"{name_instruction}"
         + (f"\n\n{evening_extra}" if evening_extra else "")
     )
     if today_context:
@@ -3437,15 +3564,11 @@ def _task_from_dialog_json(text: str) -> str | None:
     return cleaned[:200]
 
 
-async def _capture_tomorrow_task_from_dialog(
-    chat_id: int,
-    profile: dict,
-    model_names: list[str],
-) -> None:
-    """После обычного ответа: если договорились о задаче на завтра — записать её."""
+def _last_exchange_lines(chat_id: int) -> list[str]:
+    """Only the latest user line and the bot reply, not older history."""
     hist = histories.get(chat_id) or []
     lines: list[str] = []
-    for turn in hist[-12:]:
+    for turn in hist[-2:]:
         if not isinstance(turn, dict):
             continue
         parts = turn.get("parts") or []
@@ -3454,14 +3577,26 @@ async def _capture_tomorrow_task_from_dialog(
             continue
         who = "Пользователь" if turn.get("role") == "user" else "Бот"
         lines.append(f"{who}: {text}")
+    return lines
+
+
+async def _capture_tomorrow_task_from_dialog(
+    chat_id: int,
+    profile: dict,
+    model_names: list[str],
+) -> None:
+    """После обычного ответа: если в последней реплике договорились о задаче на завтра."""
+    lines = _last_exchange_lines(chat_id)
     if not lines:
         return
     prompt = (
-        "Был ли в этом диалоге план или задача на завтра? "
-        'Если да — верни JSON: {"task": "описание задачи"} '
-        'Если нет — верни {"task": null}\n\n'
-        "Диалог:\n"
-        + "\n".join(lines)[-4000:]
+        "В ПОСЛЕДНЕЙ реплике пользователя есть договорённость о задаче именно на завтра? "
+        "Рассказ про сегодня, еду, спорт, настроение или уже прошедший день — это не задача на завтра. "
+        "Если не уверен — верни {\"task\": null}. "
+        'Если да — верни JSON: {"task": "короткая задача"}. '
+        'Если нет — верни {"task": null}.\n\n'
+        "Последний обмен:\n"
+        + "\n".join(lines)[-2000:]
     )
     raw = ""
     for mid in model_names:
@@ -3514,8 +3649,19 @@ def _goal_from_dialog_json(text: str) -> tuple[str | None, str | None]:
     weekly = data.get("weekly_goal")
     weekly_text = str(weekly).strip() if isinstance(weekly, str) else ""
     if not weekly_text or weekly_text.lower() == "null":
-        weekly_text = ""
+        return main_text[:2000], None
     return main_text[:2000], weekly_text[:2000]
+
+
+def _same_saved_goal(new_goal: str, current: str) -> bool:
+    def norm(value: str) -> str:
+        return re.sub(r"\s+", " ", (value or "").casefold()).strip()
+
+    left = norm(new_goal)
+    right = norm(current)
+    if not left or not right:
+        return False
+    return left == right or left in right or right in left
 
 
 async def _capture_goal_from_dialog(
@@ -3523,28 +3669,22 @@ async def _capture_goal_from_dialog(
     profile: dict,
     model_names: list[str],
 ) -> None:
-    """Обычный диалог: если договорились о новой цели — записать main_goal и weekly_goal."""
-    hist = histories.get(chat_id) or []
-    lines: list[str] = []
-    for turn in hist[-12:]:
-        if not isinstance(turn, dict):
-            continue
-        parts = turn.get("parts") or []
-        text = str(parts[0] if parts else "").strip()
-        if not text:
-            continue
-        who = "Пользователь" if turn.get("role") == "user" else "Бот"
-        lines.append(f"{who}: {text}")
+    """Только если в последней реплике пользователь явно назвал новую цель на 12 недель."""
+    lines = _last_exchange_lines(chat_id)
     if not lines:
         return
+    current = str(profile.get("main_goal") or "").strip()
     prompt = (
-        "Появилась ли в этом диалоге новая главная цель пользователя "
-        "(цель на 12 недель, не задача на сегодня и не план на завтра)? "
+        "В ПОСЛЕДНЕЙ реплике пользователь явно поставил новую цель на 12 недель "
+        "взамен текущей? Текущая цель: "
+        f"«{current or 'не задана'}». "
+        "Рассказ про день, еду, спорт, настроение, задачу на сегодня или план на завтра "
+        "— это НЕ новая цель. Пересказ старой цели другими словами — тоже не новая. "
+        "Если не уверен — верни {\"main_goal\": null, \"weekly_goal\": null}. "
         "Если да — верни JSON: "
-        '{"main_goal": "формулировка цели", "weekly_goal": "цель на эту неделю или null"}. '
-        'Если нет — верни {"main_goal": null, "weekly_goal": null}.\n\n'
-        "Диалог:\n"
-        + "\n".join(lines)[-4000:]
+        '{"main_goal": "формулировка", "weekly_goal": "цель на эту неделю или null"}.\n\n'
+        "Последний обмен:\n"
+        + "\n".join(lines)[-2000:]
     )
     raw = ""
     for mid in model_names:
@@ -3569,11 +3709,11 @@ async def _capture_goal_from_dialog(
     main_goal, weekly_goal = _goal_from_dialog_json(raw)
     if not main_goal:
         return
-    current = str(profile.get("main_goal") or "").strip()
-    if main_goal.casefold() == current.casefold():
+    if _same_saved_goal(main_goal, current):
         return
     saved = db_store.update_profile_field(chat_id, "main_goal", main_goal)
-    saved = db_store.update_profile_field(chat_id, "weekly_goal", weekly_goal or "") or saved
+    if weekly_goal:
+        saved = db_store.update_profile_field(chat_id, "weekly_goal", weekly_goal) or saved
     fresh = saved if isinstance(saved, dict) else None
     if fresh is None:
         try:
@@ -3586,7 +3726,8 @@ async def _capture_goal_from_dialog(
         user_profiles[str(chat_id)] = fresh
     else:
         profile["main_goal"] = main_goal
-        profile["weekly_goal"] = weekly_goal or ""
+        if weekly_goal:
+            profile["weekly_goal"] = weekly_goal
         user_profiles[str(chat_id)] = profile
     log.info(
         "dialog goal saved cid=%s main=%s weekly=%s",
@@ -4169,7 +4310,10 @@ async def _coach_reply(
             f"Достижения: {last_week.get('achievements', '')}\n"
             f"Сложности: {last_week.get('challenges', '')}"
         )
-    extra_parts: list[str] = [_chat_one_question_rule(prof)]
+    extra_parts: list[str] = [
+        _current_goal_only_rule(prof),
+        _chat_one_question_rule(prof),
+    ]
     if facts_text:
         extra_parts.append(f"Важные факты:\n{facts_text}")
     if personality_text:
@@ -4296,7 +4440,9 @@ async def _coach_reply_photo(
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
     lang = str(prof.get("language_code") or "en")
     is_russian = lang.lower().startswith("ru")
-    photo_extra = _chat_one_question_rule(prof)
+    photo_extra = (
+        _current_goal_only_rule(prof) + "\n\n" + _chat_one_question_rule(prof)
+    )
     if not is_russian:
         photo_extra = (
             "CRITICAL: This user speaks ONLY English. "
@@ -4581,10 +4727,13 @@ def _change_12w_give_up_message(lang: str) -> str:
 
 
 def _change_12w_classify_system(user_message: str) -> str:
-    return f"""Classify the user's response into one of two categories:
-- 'new_cycle' if they want to start fresh with a new goal
-- 'adjust' if they want to refine their current goal
-- 'unclear' if the response doesn't match either
+    return f"""The user was asked only: start a new 12-week cycle, or adjust the current goal.
+Classify their reply:
+- 'new_cycle' only if they clearly choose to start over
+- 'adjust' only if they clearly choose to edit the current goal
+- 'unclear' if they talk about their day, mood, food, sport, plans, or answer something else
+
+A story is unclear. If you are not sure, reply unclear.
 
 User's response: {(user_message or '').strip()}
 
@@ -5915,10 +6064,17 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if not user_profiles.get(str(cid)):
-        lang = (update.effective_user.language_code if update.effective_user else None) or "en"
-        ob.start_new_onboarding(onboarding, cid, lang)
-        await _bot_reply(msg, ob.get_greeting_new(lang))
-        return
+        try:
+            existing = db_store.get_profile(cid)
+        except db_store.ProfileReadError:
+            existing = None
+        if isinstance(existing, dict):
+            user_profiles[str(cid)] = existing
+        else:
+            lang = (update.effective_user.language_code if update.effective_user else None) or "en"
+            ob.start_new_onboarding(onboarding, cid, lang)
+            await _bot_reply(msg, ob.get_greeting_new(lang))
+            return
 
     prof_photo = user_profiles.get(str(cid)) or db_store.get_profile(cid)
     if isinstance(prof_photo, dict):
@@ -6886,8 +7042,10 @@ def _cycle_week_day_streak(profile: dict) -> int | None:
 
 
 def _program_journey_days(profile: dict) -> int | None:
-    """Calendar day in 12-week program (day 1 = cycle_start_date)."""
-    cycle_start_raw = str(profile.get("cycle_start_date") or "").strip()
+    """Day with the current goal (day 1 = goal_start_date, not account signup)."""
+    cycle_start_raw = str(
+        profile.get("goal_start_date") or profile.get("cycle_start_date") or ""
+    ).strip()[:10]
     if not cycle_start_raw:
         return None
     try:
@@ -7250,11 +7408,66 @@ def _calculate_user_level(completed_tasks: int) -> dict:
     }
 
 
+def _apply_summary_snapshot(p: dict, summaries: list[dict]) -> None:
+    """Fill today task, week dots and level from one already loaded summary list."""
+    by_date: dict[str, dict] = {}
+    for row in summaries:
+        if not isinstance(row, dict):
+            continue
+        day = str(row.get("date") or "")[:10]
+        if day:
+            by_date[day] = row
+    today = _profile_local_date(p)
+    today_row = by_date.get(today.isoformat())
+    if isinstance(today_row, dict):
+        task_raw = str(today_row.get("task") or "").strip()
+        weekly = str(p.get("weekly_goal") or "").strip()
+        task_clean = _sanitize_today_task(task_raw, weekly_goal=weekly)
+        if task_clean:
+            p["today_task"] = task_clean
+        tc = db_store.normalize_task_completed(today_row.get("task_completed"))
+        p["task_completed"] = tc
+        p["today_completed"] = tc == "true"
+
+    week_start = _cycle_week_start(p, today)
+    cycle: list[dict] = []
+    total = 0.0
+    if week_start:
+        for i in range(WEEK_CYCLE_LEN):
+            day = week_start + timedelta(days=i)
+            summ = by_date.get(day.isoformat()) if day <= today else None
+            done = _effective_task_completed(summ) if summ else None
+            cycle.append(
+                {
+                    "day": i + 1,
+                    "date": day.isoformat(),
+                    "task_completed": done,
+                    "is_recap_day": i == WEEK_CYCLE_LEN - 1,
+                    "is_today": day == today,
+                    "is_future": day > today,
+                }
+            )
+            if day <= today:
+                total += _day_score_points(done, is_recap_day=(i == WEEK_CYCLE_LEN - 1))
+        p["weekly_score"] = min(100, int(round(total)))
+    p["week_cycle_days"] = cycle
+    cw = max(1, min(12, int(p.get("current_week") or 1)))
+    scores = [0] * 12
+    scores[cw - 1] = int(p.get("weekly_score") or 0)
+    p["week_scores"] = scores
+    completed_count = sum(
+        1 for row in summaries if isinstance(row, dict) and row.get("task_completed") == "true"
+    )
+    p["completed_tasks_count"] = completed_count
+    p["level"] = _calculate_user_level(completed_count)
+
+
 def _enrich_profile_for_api(
     profile: dict,
     telegram_id: str | None = None,
     *,
     with_summaries: bool = True,
+    summaries: list[dict] | None = None,
 ) -> dict:
     """Старые профили без новых полей получают разумные дефолты при отдаче в Mini App."""
     p = dict(profile)
@@ -7286,7 +7499,9 @@ def _enrich_profile_for_api(
 
     tid = telegram_id or str(p.get("telegram_id") or "")
     today = _profile_local_date(p)
-    if with_summaries and tid:
+    if summaries is not None:
+        _apply_summary_snapshot(p, summaries)
+    elif with_summaries and tid:
         summ = db_store.get_daily_summary(tid, today)
         if isinstance(summ, dict):
             task_raw = str(summ.get("task") or "").strip()
@@ -7298,13 +7513,13 @@ def _enrich_profile_for_api(
             p["task_completed"] = tc
             p["today_completed"] = tc == "true"
 
-    if with_summaries:
+    if summaries is None and with_summaries:
         p["week_scores"] = _week_scores_array(p, tid or None)
         if tid:
             p["week_cycle_days"] = _build_week_cycle_days(p, tid)
         else:
             p["week_cycle_days"] = []
-    else:
+    elif summaries is None:
         cw = max(1, min(12, int(p.get("current_week") or 1)))
         scores = [0] * 12
         scores[cw - 1] = int(p.get("weekly_score") or 0)
@@ -7320,6 +7535,8 @@ def _enrich_profile_for_api(
         p["program_day"] = journey_days
     else:
         p["program_day"] = max(1, int(p.get("streak") or 0))
+    if summaries is not None:
+        return p
     if with_summaries and tid:
         summaries = db_store.list_daily_summaries(tid)
         completed_count = sum(
@@ -8014,10 +8231,13 @@ async def get_profile(
         raise HTTPException(status_code=404, detail="profile not found")
     user_profiles.pop(tid, None)
     user_profiles[tid] = profile
+    summaries = db_store.list_daily_summaries(tid)
 
     user_obj = _validate_init_data(_extract_init_data(request))
     return {
-        "profile": _enrich_profile_for_api(profile, None, with_summaries=False),
+        "profile": _enrich_profile_for_api(
+            profile, tid, with_summaries=False, summaries=summaries
+        ),
         "user": user_obj if isinstance(user_obj, dict) else None,
     }
 
