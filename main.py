@@ -39,6 +39,13 @@ import db as db_store
 import onboarding_flow as ob
 from bot_ui import ui_lang, ui_text
 from bot_typing import typing_while
+from claude_budget import (
+    is_telegram_block_error,
+    parse_structured_reply,
+    profile_is_blocked,
+    recent_history,
+)
+from claude_client import ClaudeBillingError
 from claude_client import build_model_chain, configure as configure_claude, generate as claude_generate
 from claude_client import select_model_id
 from prompts import (
@@ -57,7 +64,7 @@ from prompts import (
     get_current_time_for_user,
     user_message_with_fresh_time,
 )
-from summaries import maybe_save_daily_summary
+from summaries import ensure_daily_summary_once
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from dotenv import load_dotenv
@@ -1636,6 +1643,9 @@ async def _run_task_reminders(bot) -> None:
         tid = int(task.get("telegram_id") or 0)
         if not tid:
             continue
+        prof_gate = user_profiles.get(str(tid))
+        if isinstance(prof_gate, dict) and profile_is_blocked(prof_gate):
+            continue
         tz_name = str(task.get("timezone") or "Asia/Ho_Chi_Minh")
         tz = _zone_or_default(tz_name)
         now_local = datetime.now(tz=tz)
@@ -1649,6 +1659,8 @@ async def _run_task_reminders(bot) -> None:
             _mark_task_last_sent(task_id)
             last_reminder_task_id[tid] = task_id
         except Exception as e:
+            if is_telegram_block_error(e):
+                _mark_telegram_blocked(tid, prof if isinstance(prof, dict) else {})
             log.warning("task reminder send failed chat_id=%s task=%s: %s", tid, task_id, e)
 
 
@@ -2271,6 +2283,8 @@ async def _morning_message_text(
                         }],
                         system=refresh_user_time_in_system(profile, morning_system),
                         max_tokens=200,
+                        feature="morning",
+                        user_id=chat_id,
                     ).strip()
                 )
                 if text:
@@ -2464,6 +2478,8 @@ async def _evening_message_text(
                         [{"role": "user", "content": user_message_with_fresh_time(profile, user_content)}],
                         system=refresh_user_time_in_system(profile, evening_system),
                         max_tokens=200,
+                        feature="evening",
+                        user_id=chat_id,
                     ).strip()
                 )
                 if text:
@@ -2494,40 +2510,8 @@ async def _check_and_send_milestone(
             return
 
         name = str(fresh.get("name") or "").strip()
-        main_goal = str(fresh.get("main_goal") or "").strip()
-        vision = str(fresh.get("vision") or "").strip()
-
-        prompt = f"""Напиши короткое тёплое сообщение пользователю который {active_days} дней использует бота.
-
-Имя: {name}
-Цель на 12 недель: {main_goal}
-Мечта: {vision}
-
-Правила:
-- 2-3 предложения
-- Говори про её конкретную цель
-- Тон: подруга которая рада что человек здесь
-- Упомяни {active_days} дней
-- НЕ важно выполняла ли она задачи — просто факт что она здесь {active_days} дней
-- Без markdown, один эмодзи максимум"""
-
-        def gen() -> str:
-            for mid in model_chain:
-                try:
-                    text = claude_generate(
-                        mid,
-                        [{"role": "user", "content": prompt}],
-                        system="Пиши тепло и лично.",
-                        max_tokens=150,
-                    ).strip()
-                    if text:
-                        return sanitize_bot_reply(text)
-                except Exception as e:
-                    log.warning("milestone telegram generate %s: %s", mid, e)
-            display_name = name or "подруга"
-            return f"{display_name}, {active_days} дней вместе — это уже что-то 💚"
-
-        message = await asyncio.to_thread(gen)
+        display_name = name or "подруга"
+        message = f"{display_name}, {active_days} дней вместе — это уже что-то 💚"
         await bot.send_message(chat_id=cid, text=message)
         updated = db_store.mark_milestone_shown(cid, active_days)
         if isinstance(updated, dict):
@@ -2768,6 +2752,8 @@ async def _reengagement_message_text(
                     [{"role": "user", "content": user_content}],
                     system=system,
                     max_tokens=220,
+                    feature="reengagement",
+                    user_id=str(profile.get("user_id") or ""),
                 ).strip()
                 if text:
                     return text
@@ -2796,9 +2782,17 @@ async def _send_reengagement_message(
     days_silent: int,
     slot: str,
 ) -> bool:
+    if profile_is_blocked(profile):
+        return False
     sent = _parse_reengagement_sent(profile.get("reengagement_sent_date"))
     if sent.get(slot):
         return False
+    sent[slot] = today
+    profile["reengagement_sent_date"] = _serialize_reengagement_sent(sent)
+    db_store.update_profile(
+        cid,
+        {"reengagement_sent_date": profile["reengagement_sent_date"]},
+    )
     lang = ui_lang(profile)
     try:
         async with typing_while(bot, cid):
@@ -2814,6 +2808,10 @@ async def _send_reengagement_message(
         return True
     except Exception as e:
         log.warning("reengagement send failed cid=%s: %s", cid, e)
+        if is_telegram_block_error(e):
+            _mark_telegram_blocked(cid, profile)
+        if isinstance(e, ClaudeBillingError):
+            raise
         return False
 
 
@@ -4282,6 +4280,72 @@ async def _refresh_profile_timezone(chat_id: int, prof: dict) -> dict:
     return prof
 
 
+def _apply_chat_state_updates(
+    chat_id: int,
+    profile: dict,
+    user_text: str,
+    updates: dict,
+) -> None:
+    """Persist fields the main Claude reply already decided. No extra API call."""
+    if not isinstance(profile, dict) or not isinstance(updates, dict):
+        return
+    completed = updates.get("task_completed")
+    if completed is True:
+        _apply_task_outcome_to_profile(
+            chat_id, profile, "true", telegram_id=str(chat_id)
+        )
+    elif completed is False:
+        _apply_task_outcome_to_profile(
+            chat_id, profile, "false", telegram_id=str(chat_id)
+        )
+    new_task = str(updates.get("new_task") or "").strip()
+    if new_task:
+        if _is_future_task(user_text) or _is_future_task(new_task):
+            _save_tomorrows_task(chat_id, profile, new_task)
+        else:
+            save_daily_task(chat_id, profile, new_task, source="conversation")
+    new_goal = str(updates.get("new_goal") or "").strip()
+    current = str(profile.get("main_goal") or "").strip()
+    if new_goal and not _same_saved_goal(new_goal, current):
+        saved = db_store.update_profile_field(chat_id, "main_goal", new_goal)
+        fresh = saved if isinstance(saved, dict) else None
+        if isinstance(fresh, dict):
+            profile.clear()
+            profile.update(fresh)
+            user_profiles[str(chat_id)] = fresh
+        else:
+            profile["main_goal"] = new_goal
+            user_profiles[str(chat_id)] = profile
+    weekly = str(updates.get("weekly_goal_update") or "").strip()
+    if weekly:
+        db_store.update_profile_field(chat_id, "weekly_goal", weekly)
+        profile["weekly_goal"] = weekly
+    fact = str(updates.get("important_fact") or "").strip()
+    if fact:
+        db_store.save_user_fact(
+            chat_id,
+            fact,
+            str(updates.get("important_fact_category") or "personal"),
+        )
+
+
+def _mark_telegram_blocked(cid: int, profile: dict | None) -> None:
+    if not isinstance(profile, dict):
+        profile = {}
+    profile["telegram_blocked"] = True
+    profile["daily_enabled"] = False
+    flags = profile.get("cycle_flags")
+    if not isinstance(flags, dict):
+        flags = {}
+    flags = dict(flags)
+    flags["telegram_blocked"] = True
+    profile["cycle_flags"] = flags
+    user_profiles[str(cid)] = profile
+    db_store.update_profile(cid, {"daily_enabled": False, "telegram_blocked": True})
+    db_store.mark_cycle_flag(cid, "telegram_blocked")
+    subscribers.discard(cid)
+
+
 async def _coach_reply(
     chat_id: int,
     user_text: str,
@@ -4365,12 +4429,11 @@ async def _coach_reply(
     effective_text = _user_text_with_reply_context(user_text, reply_context)
 
     hist = histories.setdefault(chat_id, [])
+    hist_recent = recent_history(hist)
     if reply_context:
         history_prefixes: list[list[dict]] = [[]]
     else:
-        history_prefixes = [list(hist)]
-        if len(hist) > 20:
-            history_prefixes.append(hist[-20:])
+        history_prefixes = [hist_recent]
 
     last_err: BaseException | None = None
 
@@ -4383,8 +4446,12 @@ async def _coach_reply(
         for mid in model_names:
             try:
                 fresh_system = refresh_user_time_in_system(prof, system)
-                reply_text = sanitize_bot_reply(
-                    claude_generate(mid, messages, system=fresh_system)
+                reply_text = claude_generate(
+                    mid,
+                    messages,
+                    system=fresh_system,
+                    feature="chat",
+                    user_id=chat_id,
                 )
                 log.info("Claude ответ через модель %s", mid)
                 return reply_text
@@ -4408,13 +4475,12 @@ async def _coach_reply(
             raise last_err
         raise RuntimeError("Ни одна модель Claude не ответила")
 
+    parsed = parse_structured_reply(reply)
+    reply = sanitize_bot_reply(parsed["reply"] or reply)
+    _apply_chat_state_updates(chat_id, prof, effective_text, parsed["state_updates"])
+
     if append_history:
         _append_history_turn(chat_id, effective_text, reply)
-        asyncio.create_task(
-            maybe_save_daily_summary(
-                chat_id, prof, histories.get(chat_id, []), model_names
-            )
-        )
 
     return reply
 
@@ -4473,12 +4539,11 @@ async def _coach_reply_photo(
     ]
 
     hist = histories.setdefault(chat_id, [])
+    hist_recent = recent_history(hist)
     if reply_context:
         history_prefixes: list[list[dict]] = [[]]
     else:
-        history_prefixes = [list(hist)]
-        if len(hist) > 20:
-            history_prefixes.append(hist[-20:])
+        history_prefixes = [hist_recent]
 
     last_err: BaseException | None = None
 
@@ -4487,12 +4552,12 @@ async def _coach_reply_photo(
         messages = _hist_to_claude_messages(hist_prefix, None)
         messages.append({"role": "user", "content": user_content})
         try:
-            reply_text = sanitize_bot_reply(
-                claude_generate(
-                    _VISION_MODEL,
-                    messages,
-                    system=refresh_user_time_in_system(prof, system),
-                )
+            reply_text = claude_generate(
+                _VISION_MODEL,
+                messages,
+                system=refresh_user_time_in_system(prof, system),
+                feature="photo",
+                user_id=chat_id,
             )
             log.info("Claude vision ответ через модель %s", _VISION_MODEL)
             return reply_text
@@ -4518,10 +4583,12 @@ async def _coach_reply_photo(
             raise last_err
         raise RuntimeError("Claude vision не ответила")
 
-    _append_history_turn(chat_id, user_label, reply)
-    asyncio.create_task(
-        maybe_save_daily_summary(chat_id, prof, histories.get(chat_id, []), model_names)
+    parsed_photo = parse_structured_reply(reply)
+    reply = sanitize_bot_reply(parsed_photo["reply"] or reply)
+    _apply_chat_state_updates(
+        chat_id, prof, caption_body, parsed_photo["state_updates"]
     )
+    _append_history_turn(chat_id, user_label, reply)
     return reply
 
 
@@ -5548,13 +5615,11 @@ async def _deliver_scheduled_morning(
         return True
     except Exception as e:
         log.warning("Morning message failed for %s: %s", cid, e)
-        db_store.update_profile(
-            cid,
-            {"last_morning_sent_date": None, "last_daily_sent_date": None},
-        )
-        profile["last_morning_sent_date"] = None
-        profile["last_daily_sent_date"] = None
-        user_profiles[key] = profile
+        if is_telegram_block_error(e):
+            _mark_telegram_blocked(cid, profile)
+        if isinstance(e, ClaudeBillingError):
+            raise
+        # Slot stays claimed so the next scheduler minute does not call Claude again.
         return False
 
 
@@ -6033,14 +6098,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         future_task = _extract_future_task(raw)
         if future_task:
             _save_tomorrows_task(cid, prof_d, future_task)
-        try:
-            await _capture_tomorrow_task_from_dialog(cid, prof_d, model_names)
-        except Exception as e:
-            log.warning("tomorrow task capture failed cid=%s: %s", cid, e)
-        try:
-            await _capture_goal_from_dialog(cid, prof_d, model_names)
-        except Exception as e:
-            log.warning("dialog goal capture failed cid=%s: %s", cid, e)
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -7658,7 +7715,7 @@ async def _bootstrap_bot() -> None:
                     profile = fresh
                     user_profiles[key] = fresh
 
-                if not _profile_daily_enabled(profile):
+                if profile_is_blocked(profile) or not _profile_daily_enabled(profile):
                     continue
                 tz_name = _profile_timezone_name(profile)
                 try:
@@ -7896,6 +7953,23 @@ async def _bootstrap_bot() -> None:
                                     "date": today,
                                     "replied": False,
                                 }
+                                try:
+                                    await asyncio.to_thread(
+                                        ensure_daily_summary_once,
+                                        cid,
+                                        profile,
+                                        list(histories.get(cid) or []),
+                                        model_chain,
+                                        today,
+                                    )
+                                except ClaudeBillingError:
+                                    raise
+                                except Exception as summary_err:
+                                    log.warning(
+                                        "daily summary once failed cid=%s: %s",
+                                        cid,
+                                        summary_err,
+                                    )
                                 await _restore_history_from_db(
                                     cid, "evening message"
                                 )
@@ -7921,11 +7995,12 @@ async def _bootstrap_bot() -> None:
                                 log.warning(
                                     "Evening message failed for %s: %s", cid, e
                                 )
-                                db_store.update_profile(
-                                    cid, {"last_evening_sent_date": None}
-                                )
-                                profile["last_evening_sent_date"] = None
-                                user_profiles[key] = profile
+                                if is_telegram_block_error(e):
+                                    _mark_telegram_blocked(cid, profile)
+                                if isinstance(e, ClaudeBillingError):
+                                    raise
+        except ClaudeBillingError as e:
+            log.error("daily_check stopped: Claude billing error: %s", e)
         except Exception as e:
             log.exception("daily_check_job crashed: %s", e)
 

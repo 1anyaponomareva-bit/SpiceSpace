@@ -8,7 +8,16 @@ import os
 
 import anthropic
 
+from claude_budget import DYNAMIC_MARKER, is_billing_error, record_usage, usage_report
+
 log = logging.getLogger("coach_bot")
+
+
+class ClaudeBillingError(RuntimeError):
+    """Anthropic rejected the call because the credit balance is too low."""
+
+
+_billing_stopped = False
 
 _client: anthropic.Anthropic | None = None
 
@@ -100,6 +109,20 @@ def _system_blocks(system: str, *, cache_core: bool) -> list[dict] | str:
         return ""
     if not cache_core:
         return system
+    if DYNAMIC_MARKER in system:
+        static, dynamic = system.split(DYNAMIC_MARKER, 1)
+        blocks: list[dict] = []
+        if static.strip():
+            blocks.append(
+                {
+                    "type": "text",
+                    "text": static,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            )
+        if dynamic.strip():
+            blocks.append({"type": "text", "text": dynamic.strip()})
+        return blocks or ""
     return [
         {
             "type": "text",
@@ -116,7 +139,12 @@ def generate(
     system: str = "",
     max_tokens: int = 1024,
     cache_core: bool = True,
+    feature: str = "unspecified",
+    user_id: str | int = "",
 ) -> str:
+    global _billing_stopped
+    if _billing_stopped:
+        raise ClaudeBillingError("credit balance too low — further Claude calls are paused")
     client = get_client()
     kwargs: dict = {
         "model": model_id,
@@ -125,7 +153,14 @@ def generate(
     }
     if system:
         kwargs["system"] = _system_blocks(system, cache_core=cache_core)
-    response = client.messages.create(**kwargs)
+    try:
+        response = client.messages.create(**kwargs)
+    except Exception as exc:
+        if is_billing_error(exc):
+            _billing_stopped = True
+            log.error("claude billing stopped feature=%s: %s", feature, exc)
+            raise ClaudeBillingError(str(exc)) from exc
+        raise
     usage = getattr(response, "usage", None)
     read = created = input_tokens = output_tokens = 0
     if usage:
@@ -142,10 +177,19 @@ def generate(
         cache_status = "write"
     else:
         cache_status = "miss"
+    record_usage(
+        feature,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_input_tokens=read,
+        cache_creation_input_tokens=created,
+    )
     log.info(
-        "claude usage caller=%s model=%s system_tokens=%s cache_core=%s "
-        "cache_read_input_tokens=%s cache_creation_input_tokens=%s "
+        "claude_usage user=%s feature=%s caller=%s model=%s system_tokens=%s "
+        "cache_core=%s cache_read_input_tokens=%s cache_creation_input_tokens=%s "
         "input_tokens=%s output_tokens=%s cache=%s system_head=%s",
+        user_id,
+        feature,
         caller,
         model_id,
         system_tokens,
@@ -157,6 +201,7 @@ def generate(
         cache_status,
         system_head,
     )
+    log.info(usage_report())
     if read == 0:
         log.info(
             "claude cache_read_input_tokens=0 caller=%s model=%s cache=%s "

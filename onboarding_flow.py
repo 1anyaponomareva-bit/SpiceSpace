@@ -3435,8 +3435,10 @@ async def handle_onboarding_turn(
                 )
                 reply = (result.get("message") or "").strip() or reply
             if prev_reply and _questions_roughly_same(reply, prev_reply):
-                reply = await generate_dont_know_clarifying_question(
-                    turns, model_names, lang
+                reply = (
+                    "А если без цели — что в жизни сейчас сильнее всего напрягает?"
+                    if _is_ru(lang)
+                    else "Forget the goal label — what in life feels heaviest right now?"
                 )
                 result = {"message": reply, "ready_for_goal": False}
             if _user_turn_count(turns) >= _DIG_USER_TURN_CAP:
@@ -3523,8 +3525,10 @@ async def handle_onboarding_turn(
                 )
                 reply = (result.get("message") or "").strip() or reply
             if prev_reply and _questions_roughly_same(reply, prev_reply):
-                reply = await generate_dont_know_clarifying_question(
-                    turns, model_names, lang
+                reply = (
+                    "Что из этого для тебя самое живое — если сказать одним предложением?"
+                    if _is_ru(lang)
+                    else "What in this feels most alive if you say it in one sentence?"
                 )
                 result = {"message": reply, "ready": False, "goal": ""}
             if (

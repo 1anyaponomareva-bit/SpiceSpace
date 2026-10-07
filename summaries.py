@@ -124,6 +124,8 @@ def save_summary_for_today(
 
     existing = get_daily_summary(user_id, today)
     existing_task = str((existing or {}).get("task") or "").strip()
+    if str((existing or {}).get("summary") or "").strip():
+        return
     if existing:
         created_at = str(
             existing.get("created_at") or existing.get("updated_at") or ""
@@ -163,6 +165,8 @@ def save_summary_for_today(
                 system=system,
                 max_tokens=400,
                 cache_core=False,
+                feature="daily_summary",
+                user_id=user_id,
             )
             parsed = _parse_summary_json(raw, weekly_goal=weekly_goal)
             if parsed:
@@ -473,18 +477,33 @@ async def maybe_save_daily_summary(
     hist: list[dict],
     model_names: list[str],
 ) -> None:
-    """After 2+ user messages today, generate/update summary."""
-    user_turns = sum(1 for t in hist if t.get("role") == "user")
-    if user_turns < 2:
+    """Chat no longer spends a Claude call on a rolling summary."""
+    return
+
+
+def summary_already_saved(profile: dict, today: str) -> bool:
+    flags = profile.get("cycle_flags")
+    if isinstance(flags, dict) and flags.get(f"summary_once_{today}"):
+        return True
+    return False
+
+
+def ensure_daily_summary_once(
+    user_id: int,
+    profile: dict,
+    hist: list[dict],
+    model_names: list[str],
+    today: str,
+) -> None:
+    """At most one summary Claude call per user per day."""
+    from db import cycle_flag_sent, mark_cycle_flag
+
+    if cycle_flag_sent(profile, f"summary_once_{today}"):
         return
-    await asyncio.to_thread(
-        save_summary_for_today, user_id, profile, hist, model_names
-    )
-    if user_turns % 5 == 0:
-        await asyncio.to_thread(
-            extract_and_save_facts, user_id, profile, hist, model_names
-        )
-    if user_turns % 10 == 0:
-        await asyncio.to_thread(
-            update_personality_profile, user_id, profile, hist, model_names
-        )
+    on_date = date.fromisoformat(str(today)[:10])
+    existing = get_daily_summary(user_id, on_date)
+    if str((existing or {}).get("summary") or "").strip():
+        mark_cycle_flag(user_id, f"summary_once_{today}")
+        return
+    mark_cycle_flag(user_id, f"summary_once_{today}")
+    save_summary_for_today(user_id, profile, hist, model_names)
