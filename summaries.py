@@ -488,6 +488,38 @@ def summary_already_saved(profile: dict, today: str) -> bool:
     return False
 
 
+def store_evening_summary(
+    user_id: int,
+    profile: dict,
+    today_iso: str,
+    data: dict,
+) -> None:
+    """Save the summary returned by the evening message. No second Claude call."""
+    from db import cycle_flag_sent, mark_cycle_flag
+
+    summary = str((data or {}).get("summary") or "").strip()
+    if not summary:
+        return
+    flag = f"summary_once_{str(today_iso)[:10]}"
+    if cycle_flag_sent(profile, flag):
+        return
+    on_date = date.fromisoformat(str(today_iso)[:10])
+    existing = get_daily_summary(user_id, on_date) or {}
+    if str(existing.get("summary") or "").strip():
+        mark_cycle_flag(user_id, flag)
+        return
+    mark_cycle_flag(user_id, flag)
+    patch_daily_summary(
+        user_id,
+        on_date,
+        summary=summary[:4000],
+        mood=str(data.get("mood") or "")[:200],
+        key_detail=str(data.get("key_detail") or "")[:500],
+        task=str(existing.get("task") or "").strip() or None,
+    )
+    log.info("daily_summary saved from evening user=%s date=%s", user_id, on_date)
+
+
 def ensure_daily_summary_once(
     user_id: int,
     profile: dict,

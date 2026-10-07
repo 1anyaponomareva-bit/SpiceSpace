@@ -8,6 +8,7 @@ from typing import Any
 
 DYNAMIC_MARKER = "\n---DYNAMIC---\n"
 CHAT_HISTORY_LIMIT = 12
+_EMPTY_DIALOG = {"нет предыдущих сообщений", "no previous messages"}
 PLAIN_CHAT_CLAUDE_CALLS = 1
 PHOTO_CLAUDE_CALLS = 1
 BUTTON_DONE_CLAUDE_CALLS = 0
@@ -83,6 +84,33 @@ def profile_is_blocked(profile: dict | None) -> bool:
     if isinstance(flags, dict) and flags.get("telegram_blocked"):
         return True
     return False
+
+
+def dialog_has_user_line(rendered: str) -> bool:
+    text = (rendered or "").strip()
+    if not text or text in _EMPTY_DIALOG:
+        return False
+    return text.startswith("Пользователь:") or text.startswith("User:") or "\nПользователь:" in text or "\nUser:" in text
+
+
+def spoke_on_or_after(last_user_date: str, boundary: str) -> bool:
+    raw = (last_user_date or "")[:10]
+    edge = (boundary or "")[:10]
+    return bool(raw and edge and raw >= edge)
+
+
+def morning_needs_model(last_user_date: str, yesterday: str, rendered: str) -> bool:
+    """Claude only if she wrote yesterday or today. A silent day stays a template."""
+    if spoke_on_or_after(last_user_date, yesterday):
+        return True
+    if not (last_user_date or "").strip() and dialog_has_user_line(rendered):
+        return True
+    return False
+
+
+def evening_needs_model(last_user_date: str, today: str) -> bool:
+    """Evening Claude only if she wrote today. Otherwise the opening template is enough."""
+    return (last_user_date or "")[:10] == (today or "")[:10]
 
 
 def recent_history(hist: list[dict] | None, limit: int = CHAT_HISTORY_LIMIT) -> list[dict]:
@@ -174,6 +202,84 @@ def parse_structured_reply(raw: str) -> dict[str, Any]:
             "important_fact": fact_text,
             "important_fact_category": fact_category,
         },
+    }
+
+
+def _blank_if_null(value: object) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.lower() in {"", "null", "none"}:
+        return ""
+    return text
+
+
+def parse_evening_bundle(raw: str) -> dict[str, str]:
+    """One evening call can return the Telegram text and the day's summary."""
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+        text = re.sub(r"\s*```$", "", text)
+    data: object = None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                data = None
+    empty = {"reply": (raw or "").strip(), "summary": "", "mood": "", "key_detail": ""}
+    if not isinstance(data, dict):
+        return empty
+    reply = str(data.get("reply") or "").strip()
+    if not reply:
+        return empty
+    return {
+        "reply": reply,
+        "summary": _blank_if_null(data.get("summary")),
+        "mood": _blank_if_null(data.get("mood")),
+        "key_detail": _blank_if_null(data.get("key_detail")),
+    }
+
+
+def parse_evening_bundle(raw: str) -> dict[str, str]:
+    """One evening call can return the Telegram text and the day's summary."""
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+        text = re.sub(r"\s*```$", "", text)
+    data: object = None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                data = None
+    empty = {"reply": (raw or "").strip(), "summary": "", "mood": "", "key_detail": ""}
+    if not isinstance(data, dict):
+        return empty
+    reply = str(data.get("reply") or "").strip()
+    if not reply:
+        return empty
+
+    def clean(value: object) -> str:
+        if value is None:
+            return ""
+        text_value = str(value).strip()
+        if text_value.lower() == "null":
+            return ""
+        return text_value
+
+    return {
+        "reply": reply,
+        "summary": clean(data.get("summary")),
+        "mood": clean(data.get("mood")),
+        "key_detail": clean(data.get("key_detail")),
     }
 
 

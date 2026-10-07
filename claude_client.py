@@ -43,6 +43,20 @@ def select_model_id() -> str:
     return "claude-sonnet-4-5"
 
 
+SCHEDULE_MODEL = "claude-haiku-4-5"
+
+
+def schedule_model_chain(model_names: list[str] | None = None) -> list[str]:
+    """Cheap model first for morning, evening, summary, and re-engagement."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for mid in [SCHEDULE_MODEL, *(model_names or [])]:
+        if mid and mid not in seen:
+            names.append(mid)
+            seen.add(mid)
+    return names
+
+
 def build_model_chain(primary: str) -> list[str]:
     names: list[str] = []
     seen: set[str] = set()

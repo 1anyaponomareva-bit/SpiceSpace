@@ -40,13 +40,21 @@ import onboarding_flow as ob
 from bot_ui import ui_lang, ui_text
 from bot_typing import typing_while
 from claude_budget import (
+    evening_needs_model,
     is_telegram_block_error,
+    morning_needs_model,
+    parse_evening_bundle,
     parse_structured_reply,
     profile_is_blocked,
     recent_history,
 )
 from claude_client import ClaudeBillingError
-from claude_client import build_model_chain, configure as configure_claude, generate as claude_generate
+from claude_client import (
+    build_model_chain,
+    configure as configure_claude,
+    generate as claude_generate,
+    schedule_model_chain,
+)
 from claude_client import select_model_id
 from prompts import (
     post_task_followup_prompt,
@@ -64,7 +72,7 @@ from prompts import (
     get_current_time_for_user,
     user_message_with_fresh_time,
 )
-from summaries import ensure_daily_summary_once
+from summaries import store_evening_summary
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from dotenv import load_dotenv
@@ -2241,6 +2249,15 @@ async def _morning_message_text(
     name = str(profile.get("name", "")).strip()
     display_name = name or ("подруга" if ru else "friend")
     last_messages = await _last_dialog_messages(chat_id, ru=ru, limit=5)
+    today = _profile_local_date(profile)
+    yesterday = (today - timedelta(days=1)).isoformat()
+    if not morning_needs_model(
+        str(profile.get("last_user_message_date") or ""),
+        yesterday,
+        last_messages,
+    ):
+        log.info("morning template cid=%s: no dialog yesterday or today", chat_id)
+        return _morning_message_fallback(chat_id, profile)
     name_instruction = _exact_name_prompt_instruction(profile, chat_id)
     if ru:
         morning_body = (
@@ -2270,7 +2287,7 @@ async def _morning_message_text(
         ) + morning_system
 
     def call() -> str:
-        for mid in model_names:
+        for mid in schedule_model_chain(model_names):
             if not mid:
                 continue
             try:
@@ -2289,6 +2306,8 @@ async def _morning_message_text(
                 )
                 if text:
                     return text
+            except ClaudeBillingError:
+                raise
             except Exception as e:
                 log.warning("morning personal message %s: %s", mid, e)
         return _morning_message_fallback(chat_id, profile)
@@ -2375,8 +2394,13 @@ async def _evening_message_text(
         task[:50] if task else "",
     )
 
+    today_iso = today.isoformat()
+    if not evening_needs_model(str(profile.get("last_user_message_date") or ""), today_iso):
+        log.info("evening template cid=%s: no dialog today", chat_id)
+        return evening_opening(has_task=has_task, lang=lang)
     if not summary_text and not today_context:
         return evening_opening(has_task=has_task, lang=lang)
+    need_summary = not summary_text
 
     name = str(profile.get("name", "")).strip()
     display_name = name or ("подруга" if ru else "friend")
@@ -2425,6 +2449,14 @@ async def _evening_message_text(
             personality_block=personality_block,
         )
     )
+    if need_summary:
+        user_content += (
+            "\n\nОтвет — один JSON с полями reply, summary, mood, key_detail. "
+            "В reply только текст сообщения, без markdown."
+            if ru
+            else "\n\nReply with one JSON object: reply, summary, mood, key_detail. "
+            "reply is only the message text, no markdown."
+        )
     evening_extra = "\n\n".join(
         b for b in (facts_block, personality_block) if b
     )
@@ -2463,6 +2495,16 @@ async def _evening_message_text(
                 "Use today's context — mention a specific detail. "
                 "FORBIDDEN to start from scratch."
             )
+    if need_summary:
+        evening_body += (
+            "\n\nВерни только JSON: {\"reply\":\"вечернее сообщение\","
+            "\"summary\":\"2-3 предложения, как прошёл день\","
+            "\"mood\":\"настроение одним словом\",\"key_detail\":\"одна деталь или null\"}."
+            if ru
+            else "\n\nReturn only JSON: {\"reply\":\"evening message\","
+            "\"summary\":\"2-3 sentences about the day\","
+            "\"mood\":\"mood in one word\",\"key_detail\":\"one detail or null\"}."
+        )
     evening_system = prepend_user_time(profile, evening_body)
     if not ru:
         evening_system = (
@@ -2470,20 +2512,27 @@ async def _evening_message_text(
         ) + evening_system
 
     def call() -> str:
-        for mid in model_names:
+        for mid in schedule_model_chain(model_names):
             try:
-                text = sanitize_bot_reply(
-                    claude_generate(
-                        mid,
-                        [{"role": "user", "content": user_message_with_fresh_time(profile, user_content)}],
-                        system=refresh_user_time_in_system(profile, evening_system),
-                        max_tokens=200,
-                        feature="evening",
-                        user_id=chat_id,
-                    ).strip()
-                )
+                raw = claude_generate(
+                    mid,
+                    [{"role": "user", "content": user_message_with_fresh_time(profile, user_content)}],
+                    system=refresh_user_time_in_system(profile, evening_system),
+                    max_tokens=500 if need_summary else 200,
+                    feature="evening",
+                    user_id=chat_id,
+                ).strip()
+                if need_summary:
+                    bundle = parse_evening_bundle(raw)
+                    if bundle.get("summary"):
+                        store_evening_summary(chat_id, profile, today_iso, bundle)
+                    text = sanitize_bot_reply(bundle.get("reply") or "")
+                else:
+                    text = sanitize_bot_reply(raw)
                 if text:
                     return text
+            except ClaudeBillingError:
+                raise
             except Exception as e:
                 log.warning("evening personal message %s: %s", mid, e)
         return evening_opening(has_task=has_task, lang=lang)
@@ -2745,7 +2794,7 @@ async def _reengagement_message_text(
         )
 
     def call() -> str:
-        for mid in model_names:
+        for mid in schedule_model_chain(model_names):
             try:
                 text = claude_generate(
                     mid,
@@ -2757,6 +2806,8 @@ async def _reengagement_message_text(
                 ).strip()
                 if text:
                     return text
+            except ClaudeBillingError:
+                raise
             except Exception as e:
                 log.warning("reengagement generate %s: %s", mid, e)
         if ru:
@@ -7953,23 +8004,6 @@ async def _bootstrap_bot() -> None:
                                     "date": today,
                                     "replied": False,
                                 }
-                                try:
-                                    await asyncio.to_thread(
-                                        ensure_daily_summary_once,
-                                        cid,
-                                        profile,
-                                        list(histories.get(cid) or []),
-                                        model_chain,
-                                        today,
-                                    )
-                                except ClaudeBillingError:
-                                    raise
-                                except Exception as summary_err:
-                                    log.warning(
-                                        "daily summary once failed cid=%s: %s",
-                                        cid,
-                                        summary_err,
-                                    )
                                 await _restore_history_from_db(
                                     cid, "evening message"
                                 )

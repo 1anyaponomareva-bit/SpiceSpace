@@ -8,8 +8,11 @@ from claude_budget import (
     PLAIN_CHAT_CLAUDE_CALLS,
     REMINDER_CLAUDE_CALLS,
     claim_day_slot,
+    evening_needs_model,
     is_billing_error,
     is_telegram_block_error,
+    morning_needs_model,
+    parse_evening_bundle,
     parse_structured_reply,
     profile_is_blocked,
     recent_history,
@@ -78,6 +81,25 @@ class SchedulerGateTests(unittest.TestCase):
         self.assertFalse(is_billing_error(RuntimeError("timeout")))
         self.assertTrue(is_telegram_block_error(RuntimeError("Forbidden: bot was blocked by the user")))
         self.assertFalse(is_telegram_block_error(RuntimeError("network down")))
+
+    def test_silent_day_skips_morning_and_evening_model(self):
+        self.assertFalse(
+            morning_needs_model("2026-10-01", "2026-10-06", "нет предыдущих сообщений")
+        )
+        self.assertFalse(evening_needs_model("2026-10-01", "2026-10-07"))
+        self.assertTrue(morning_needs_model("2026-10-06", "2026-10-06", ""))
+        self.assertTrue(evening_needs_model("2026-10-07", "2026-10-07"))
+        self.assertTrue(
+            morning_needs_model("", "2026-10-06", "Пользователь: вчера устала")
+        )
+
+    def test_evening_bundle_keeps_reply_and_summary(self):
+        parsed = parse_evening_bundle(
+            '{"reply":"Как день?","summary":"Устала, но написала.","mood":"устала","key_detail":null}'
+        )
+        self.assertEqual(parsed["reply"], "Как день?")
+        self.assertEqual(parsed["summary"], "Устала, но написала.")
+        self.assertEqual(parsed["key_detail"], "")
 
     def test_history_is_capped(self):
         hist = [{"role": "user", "parts": [str(i)]} for i in range(40)]
