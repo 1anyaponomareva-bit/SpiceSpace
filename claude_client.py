@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 
@@ -69,6 +70,31 @@ def response_text(response: object) -> str:
     return "Напиши ещё раз — я слушаю."
 
 
+def estimate_tokens(text: str) -> int:
+    """Local Claude-like estimate: ~4 Latin chars or ~2 non-Latin chars per token."""
+    if not text:
+        return 0
+    ascii_n = 0
+    other = 0
+    for ch in text:
+        if ord(ch) < 128:
+            ascii_n += 1
+        else:
+            other += 1
+    return (ascii_n + 3) // 4 + (other + 1) // 2
+
+
+def _caller_label() -> str:
+    try:
+        for frame in inspect.stack()[1:]:
+            if os.path.basename(frame.filename) == "claude_client.py":
+                continue
+            return f"{os.path.basename(frame.filename)}:{frame.function}:{frame.lineno}"
+    except Exception:
+        return "unknown"
+    return "unknown"
+
+
 def _system_blocks(system: str, *, cache_core: bool) -> list[dict] | str:
     if not system:
         return ""
@@ -101,9 +127,42 @@ def generate(
         kwargs["system"] = _system_blocks(system, cache_core=cache_core)
     response = client.messages.create(**kwargs)
     usage = getattr(response, "usage", None)
+    read = created = input_tokens = output_tokens = 0
     if usage:
-        read = getattr(usage, "cache_read_input_tokens", 0) or 0
-        created = getattr(usage, "cache_creation_input_tokens", 0) or 0
-        if read or created:
-            log.debug("prompt cache read=%s created=%s", read, created)
+        read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+        created = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+    system_tokens = estimate_tokens(system)
+    caller = _caller_label()
+    system_head = " ".join((system or "").split())[:80]
+    if read > 0:
+        cache_status = "hit"
+    elif created > 0:
+        cache_status = "write"
+    else:
+        cache_status = "miss"
+    log.info(
+        "claude usage caller=%s model=%s system_tokens=%s cache_core=%s "
+        "cache_read_input_tokens=%s cache_creation_input_tokens=%s "
+        "input_tokens=%s output_tokens=%s cache=%s system_head=%s",
+        caller,
+        model_id,
+        system_tokens,
+        cache_core,
+        read,
+        created,
+        input_tokens,
+        output_tokens,
+        cache_status,
+        system_head,
+    )
+    if read == 0:
+        log.info(
+            "claude cache_read_input_tokens=0 caller=%s model=%s cache=%s "
+            "— кэш на этом запросе не прочитан",
+            caller,
+            model_id,
+            cache_status,
+        )
     return response_text(response)
