@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+from urllib.parse import quote
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -1103,18 +1104,24 @@ def delete_history(user_id: int | str) -> None:
 
 
 def save_user_fact(user_id: int | str, fact: str, category: str = "general") -> None:
-    """Save a new fact about the user."""
+    """Save a fact. A newer overlapping fact replaces the older row."""
+    from goal_change import fact_update_plan
+
     key = str(user_id)
     if not _use_supabase or not fact or not fact.strip():
         return
-    existing = _request("GET", f"user_facts?user_id=eq.{key}&select=fact") or []
-    existing_facts = [
-        str(r.get("fact", "")).lower() for r in existing if isinstance(r, dict)
+    rows = _request("GET", f"user_facts?user_id=eq.{key}&select=fact") or []
+    existing = [
+        str(r.get("fact") or "")
+        for r in rows
+        if isinstance(r, dict) and r.get("fact")
     ]
-    new_fact_lower = fact.strip().lower()
-    for ef in existing_facts:
-        if new_fact_lower in ef or ef in new_fact_lower:
-            return
+    plan = fact_update_plan(existing, fact)
+    if plan["action"] != "insert":
+        return
+    for old in plan["drop"]:
+        encoded = quote(str(old), safe="")
+        _request("DELETE", f"user_facts?user_id=eq.{key}&fact=eq.{encoded}")
     _request(
         "POST",
         "user_facts",

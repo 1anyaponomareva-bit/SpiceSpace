@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 # Matches onboarding_flow.OB_GOAL_DIALOG. Kept here so tests do not import Telegram.
 GOAL_DIALOG_STEP = 5
 
@@ -219,3 +221,65 @@ def profile_patch_for_new_cycle(state: dict) -> dict:
 
 def patch_touches_unrelated(fields: dict) -> bool:
     return any(key not in _PATCH_KEYS for key in fields)
+
+
+def _norm_fact(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").casefold()).strip()
+
+
+def _fact_is_negated(text: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:^|[\s,])(?:не|нет|don't|do not|not|no longer)(?:$|[\s,])",
+            _norm_fact(text),
+        )
+    )
+
+
+def fact_update_plan(existing: list[str], new: str) -> dict:
+    """Decide whether a new fact is a duplicate, a replacement, or an addition.
+
+    A newer line replaces an older one only when one contains the other:
+    the polarity flipped, or the new line is the more specific version.
+    Unrelated facts stay. Storage columns do not change.
+    """
+    new_clean = re.sub(r"\s+", " ", (new or "").strip())
+    new_key = _norm_fact(new_clean)
+    if not new_key:
+        return {"action": "skip", "drop": []}
+    drop: list[str] = []
+    for old in existing:
+        old_clean = re.sub(r"\s+", " ", (old or "").strip())
+        old_key = _norm_fact(old_clean)
+        if not old_key:
+            continue
+        if old_key == new_key:
+            return {"action": "skip", "drop": []}
+        if old_key not in new_key and new_key not in old_key:
+            continue
+        flipped = _fact_is_negated(old_clean) != _fact_is_negated(new_clean)
+        if flipped or len(new_key) > len(old_key):
+            drop.append(old_clean)
+            continue
+        return {"action": "skip", "drop": []}
+    return {"action": "insert", "drop": drop}
+
+
+def should_store_fact(text: str) -> bool:
+    raw = re.sub(r"\s+", " ", (text or "").strip())
+    if len(raw) < 12 or looks_like_confusion(raw):
+        return False
+    if is_refusal_constraint(raw):
+        return True
+    if looks_like_emotion_or_obstacle(raw):
+        return False
+    return True
+
+
+def constraint_from_message(text: str) -> str | None:
+    """One explicit refusal from the user text. No model call."""
+    for part in re.split(r"[.!?\n]+", text or ""):
+        piece = re.sub(r"\s+", " ", part).strip(" ,;:-")
+        if should_store_fact(piece) and is_refusal_constraint(piece):
+            return piece[:200]
+    return None

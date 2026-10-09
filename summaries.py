@@ -477,7 +477,13 @@ async def maybe_save_daily_summary(
     hist: list[dict],
     model_names: list[str],
 ) -> None:
-    """Chat no longer spends a Claude call on a rolling summary."""
+    """No second Claude call on an ordinary chat message.
+
+    Disabled on purpose in 9b96e83 to stop a rolling summary plus a facts
+    call every 5 messages and a personality call every 10. The evening
+    message still writes the day's summary. Durable limits are saved from
+    the same chat reply, not from this function.
+    """
     return
 
 

@@ -39,7 +39,12 @@ import db as db_store
 import onboarding_flow as ob
 from bot_ui import ui_lang, ui_text
 from bot_typing import typing_while
-from goal_change import can_lock_as_goal
+from goal_change import (
+    can_lock_as_goal,
+    constraint_from_message,
+    is_refusal_constraint,
+    should_store_fact,
+)
 from claude_budget import (
     evening_needs_model,
     is_telegram_block_error,
@@ -621,17 +626,8 @@ COACH_STYLE_INSTRUCTION = """АНАЛИЗ СОСТОЯНИЯ ПОЛЬЗОВАТ�
 Если человек спрашивает «как достичь X / как заработать / что делать / с чего начать»:
 1) НЕ выдавай универсальный список («попробуй фриланс, продай вещи, найди подработку» и т.п.).
 2) НЕ выдавай 5–10 пунктов «возможных направлений».
-3) Сначала сделай одну короткую человеческую реплику-опору (1 строка)
-   и задай ОДИН уточняющий вопрос про текущую ситуацию.
-4) После ответа сузь до 1–2 наиболее подходящих направлений
-   и предложи ОДИН конкретный следующий шаг с объяснением «почему именно он».
-
-Диагностические вопросы (выбирай один, который сейчас важнее всего):
-— Чем ты сейчас занимаешься?
-— Что уже умеешь / что точно получается?
-— Есть ли уже аудитория / клиенты / контакты?
-— Сколько времени реально готов(а) выделять в неделю?
-— Что точно НЕ хочешь делать?
+3) Сначала ответь по сути того, что она уже сказала. Вопрос задавай только если без одной недостающей детали нельзя помочь.
+4) Потом сузь до 1–2 направлений и предложи ОДИН конкретный следующий шаг с объяснением «почему именно он».
 
 ЗАПРЕЩЕНО:
 — фразы «вот несколько направлений», «можно начать так:» с длинным списком,
@@ -669,21 +665,16 @@ One reply may contain at most one question. Zero questions is a normal reply. As
 
 
 def _current_goal_only_rule(profile: dict) -> str:
-    goal = str(profile.get("main_goal") or "").strip() or "не указана"
     if str(profile.get("language_code") or "en").lower().startswith("ru"):
         return (
-            f"Текущая цель пользователя: {goal}\n"
-            "Работай ТОЛЬКО с текущей целью.\n"
-            "НЕ упоминай старые цели, старые планы или "
-            "прошлые разговоры про другие проекты если "
-            "пользователь сам их не поднял."
+            "Активная цель уже указана в блоке профиля. Работай только с ней. "
+            "Ограничения и предпочтения — в блоке фактов, не подменяй ими цель. "
+            "Детали текущего разговора бери из последних реплик, не из старых фактов."
         )
-    shown = goal if goal != "не указана" else "not set"
     return (
-        f"User's current goal: {shown}\n"
-        "Work ONLY with the current goal.\n"
-        "Do NOT mention old goals, old plans, or past conversations "
-        "about other projects unless the user brought them up."
+        "The active goal is already in the profile block. Work only with that goal. "
+        "Limits and preferences are in the facts block; do not let them replace the goal. "
+        "Take details of the current talk from the latest replies, not from older facts."
     )
 
 
@@ -2927,22 +2918,12 @@ async def handle_reengagement_callback(
         db_store.update_profile(cid, {"daily_enabled": True})
         prof["daily_enabled"] = True
         user_profiles[str(cid)] = prof
-        ob.start_reengagement_goal(onboarding, cid, prof)
-        model_names: list[str] = context.bot_data.get("claude_model_names") or []
-        goal_ask, seed = await ob.build_change_goal_dialog_opening(
-            prof,
-            lang,
-            model_names,
-            mode="new_12w",
-            previous_goal=str(prof.get("main_goal") or ""),
+        opening = ob.start_change_12w(
+            onboarding, cid, prof, list(histories.get(cid) or [])
         )
-        st_re = onboarding.get(cid)
-        if isinstance(st_re, dict):
-            st_re["goal_turns"] = seed
-            st_re["step"] = OB_GOAL_DIALOG
         await context.bot.send_message(
             chat_id=cid,
-            text=goal_ask,
+            text=opening,
         )
         return
 
@@ -4369,12 +4350,13 @@ def _apply_chat_state_updates(
         db_store.update_profile_field(chat_id, "weekly_goal", weekly)
         profile["weekly_goal"] = weekly
     fact = str(updates.get("important_fact") or "").strip()
-    if fact:
-        db_store.save_user_fact(
-            chat_id,
-            fact,
-            str(updates.get("important_fact_category") or "personal"),
-        )
+    if not should_store_fact(fact):
+        fact = constraint_from_message(user_text) or ""
+    if fact and should_store_fact(fact):
+        category = str(updates.get("important_fact_category") or "").strip()
+        if not category:
+            category = "constraint" if is_refusal_constraint(fact) else "personal"
+        db_store.save_user_fact(chat_id, fact, category)
 
 
 def _mark_telegram_blocked(cid: int, profile: dict | None) -> None:
@@ -4410,7 +4392,7 @@ async def _coach_reply(
     tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name)
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
-    facts = await asyncio.to_thread(db_store.load_user_facts, chat_id, 10)
+    facts = await asyncio.to_thread(db_store.load_user_facts, chat_id, 3)
     facts_text = "\n".join(f"— {f}" for f in facts) if facts else ""
     personality = await asyncio.to_thread(db_store.load_personality, chat_id)
     personality_text = _personality_text_from_row(personality)
