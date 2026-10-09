@@ -16,6 +16,11 @@ from telegram.ext import ContextTypes
 
 import db
 from bot_typing import typing_while
+from goal_change import (
+    build_change_12w_state,
+    next_step_after_weekly,
+    profile_patch_for_new_cycle,
+)
 from claude_client import generate as claude_generate
 from prompts import (
     CHANGE_WEEKLY_GOAL_SYSTEM,
@@ -1001,16 +1006,14 @@ def change_12w_adjust_opening(main_goal: str, lang: str = "en") -> str:
     return ob_text("change_12w_adjust", lang, goal=g)
 
 
-def start_change_12w(onboarding: dict[int, dict], cid: int, profile: dict) -> None:
+def start_change_12w(onboarding: dict[int, dict], cid: int, profile: dict) -> str:
+    """Ask for a new 12-week goal and continue the existing goal dialog."""
     lang = _ob_lang(profile=profile)
-    st: dict = {
-        "step": OB_CHANGE_12W,
-        "change_12w_phase": "choice",
-        "lang": lang,
-        "language_code": lang,
-    }
-    _seed_from_profile(st, profile)
+    seeded = dict(profile or {})
+    seeded["language_code"] = lang
+    st, opening = build_change_12w_state(seeded)
     onboarding[cid] = st
+    return opening
 
 
 def _wants_new_cycle_reply(raw: str) -> bool:
@@ -2234,19 +2237,9 @@ async def _finish_change_12w(
     user_profiles: dict[str, dict],
     onboarding: dict[int, dict],
 ) -> str:
-    main_goal = str(st.get("main_goal") or "").strip()
-    weekly_goal = str(st.get("weekly_goal") or "").strip()
-    fields: dict = {
-        "main_goal": main_goal[:2000],
-        "weekly_goal": weekly_goal[:2000],
-        "raw_goal": main_goal[:2000],
-        "final_goal": main_goal[:2000],
-        "current_week": 1,
-        "weekly_score": 0,
-    }
-    vision = str(st.get("vision") or "").strip()
-    if vision:
-        fields["vision"] = vision[:4000]
+    fields = profile_patch_for_new_cycle(st)
+    main_goal = str(fields.get("main_goal") or "")
+    weekly_goal = str(fields.get("weekly_goal") or "")
     profile = db.update_profile(cid, fields)
     user_profiles[str(cid)] = profile
     onboarding.pop(cid, None)
@@ -3336,11 +3329,12 @@ async def handle_onboarding_turn(
         return
 
     if step == OB_CHANGE_12W:
-        phase = str(st.get("change_12w_phase") or "choice")
-        if phase == "choice":
-            await msg.reply_text(change_12w_choice_prompt(lang))
-            return
-        await msg.reply_text(ob_text("change_12w_broken", lang))
+        opening = start_change_12w(
+            onboarding,
+            cid,
+            user_profiles.get(str(cid)) or st,
+        )
+        await msg.reply_text(opening)
         return
 
     if step == OB_NAME:
@@ -3495,15 +3489,30 @@ async def handle_onboarding_turn(
         prev_reply = _last_assistant_reply(turns)
         same_streak = _assistant_same_question_streak(turns)
         goal_hint = _switch_approach_hint(lang)
-        why_extra = (
-            "Keep digging for emotional why before locking the goal wording. "
-            "ready=true only after user confirms a concrete goal."
-            if not _is_ru(lang)
-            else (
-                "Продолжай копать эмоциональное зачем до фиксации формулировки. "
-                "ready=true только после подтверждения конкретной цели."
+        if str(st.get("change_mode") or "") == "new_12w":
+            why_extra = (
+                "This is a goal change inside an existing chat, not a first meeting. "
+                "Do not greet and do not ask what is wrong in her life. "
+                "Help her word a new 12-week goal. "
+                "ready=true only after she confirms a concrete wording."
+                if not _is_ru(lang)
+                else (
+                    "Это смена цели в уже идущем разговоре, не первое знакомство. "
+                    "Не здоровайся и не спрашивай, что раздражает в жизни. "
+                    "Помоги сформулировать новую цель на 12 недель. "
+                    "ready=true только после подтверждения конкретной формулировки."
+                )
             )
-        )
+        else:
+            why_extra = (
+                "Keep digging for emotional why before locking the goal wording. "
+                "ready=true only after user confirms a concrete goal."
+                if not _is_ru(lang)
+                else (
+                    "Продолжай копать эмоциональное зачем до фиксации формулировки. "
+                    "ready=true только после подтверждения конкретной цели."
+                )
+            )
         async with typing_while(context.bot, cid):
             extra = goal_hint if same_streak >= 2 else why_extra
             result = await _claude_goal_dialog(
@@ -3566,15 +3575,7 @@ async def handle_onboarding_turn(
         return
 
     async def _complete_weekly_tactics_pick(weekly_goal: str) -> None:
-        if st.get("reengagement"):
-            after = "finish_reengagement"
-        else:
-            mode = str(st.get("change_mode") or "")
-            after = (
-                "finish_12w"
-                if mode in ("adjust_12w", "new_12w")
-                else "weekly_to_morning"
-            )
+        after = next_step_after_weekly(st)
         await _propose_goal_confirm(
             msg,
             st,

@@ -4824,97 +4824,6 @@ def _flow_escape_message(profile: dict | None) -> str:
     return "Got it, let's drop that. What's on your mind?"
 
 
-def _change_12w_reask_message(lang: str) -> str:
-    ru = str(lang or "en").lower().startswith("ru")
-    if ru:
-        return (
-            "Уточни: новая цель с нуля на 12 недель — "
-            "или подправить то, что уже есть?"
-        )
-    return (
-        "Quick check — a brand-new 12-week goal from scratch, "
-        "or fine-tune what you have now?"
-    )
-
-
-def _change_12w_give_up_message(lang: str) -> str:
-    ru = str(lang or "en").lower().startswith("ru")
-    if ru:
-        return "Ничего страшного, поговорим о другом. О чём хочешь?"
-    return "No worries, let's talk about something else. What's on your mind?"
-
-
-def _change_12w_classify_system(user_message: str) -> str:
-    return f"""The user was asked only: start a new 12-week cycle, or adjust the current goal.
-Classify their reply:
-- 'new_cycle' only if they clearly choose to start over
-- 'adjust' only if they clearly choose to edit the current goal
-- 'unclear' if they talk about their day, mood, food, sport, plans, or answer something else
-
-A story is unclear. If you are not sure, reply unclear.
-
-User's response: {(user_message or '').strip()}
-
-Reply with only one word: new_cycle, adjust, or unclear"""
-
-
-def _parse_change_12w_classification(text: str) -> str:
-    low = re.sub(r"[^\w\s]", " ", (text or "").strip().lower())
-    low = re.sub(r"\s+", " ", low).strip().replace(" ", "_")
-    if "new_cycle" in low or low == "newcycle":
-        return "new_cycle"
-    if low == "adjust" or low.startswith("adjust"):
-        return "adjust"
-    if "unclear" in low:
-        return "unclear"
-    return "unclear"
-
-
-async def _classify_change_12w_choice(
-    user_message: str,
-    model_names: list[str],
-) -> str:
-    system = _change_12w_classify_system(user_message)
-
-    def call() -> str:
-        for mid in model_names:
-            try:
-                text = claude_generate(
-                    mid,
-                    [{"role": "user", "content": "Classify the response above."}],
-                    system=system,
-                    max_tokens=16,
-                ).strip()
-                parsed = _parse_change_12w_classification(text)
-                if parsed in ("new_cycle", "adjust", "unclear"):
-                    return parsed
-            except Exception as e:
-                log.warning("change_12w classify %s: %s", mid, e)
-        if ob._wants_new_cycle_reply(user_message):
-            return "new_cycle"
-        if ob._wants_adjust_reply(user_message):
-            return "adjust"
-        low = (user_message or "").strip().lower()
-        if any(
-            p in low
-            for p in (
-                "new cycle",
-                "new goal",
-                "from scratch",
-                "start fresh",
-                "start over",
-                "brand-new",
-                "brand new",
-            )
-        ):
-            return "new_cycle"
-        if any(p in low for p in ("adjust", "refine", "fine-tune", "fine tune", "tweak")):
-            return "adjust"
-        return "unclear"
-
-    return await asyncio.to_thread(call)
-
-
 async def _try_handle_change_12w_choice(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -4929,68 +4838,16 @@ async def _try_handle_change_12w_choice(
 
     cid = update.effective_chat.id
     prof = profile if isinstance(profile, dict) else {}
-    lang = ui_lang(prof or st)
-    model_names: list[str] = context.bot_data.get("claude_model_names") or []
 
     if _user_wants_flow_escape(raw) or ob.user_wants_onboarding_pause(raw):
         await _exit_onboarding_pause(update, cid, raw, prof)
         return True
 
-    choice = await _classify_change_12w_choice(raw, model_names)
     flow_mismatch_streak.pop(cid, None)
-
-    if choice == "new_cycle":
-        st["change_12w_unclear_count"] = 0
-        st["change_mode"] = "new_12w"
-        st["change_12w_phase"] = "vision"
-        st["step"] = ob.OB_VISION_DIALOG
-        st["dont_know_streak"] = 0
-        prev_goal = str(st.get("main_goal") or prof.get("main_goal") or "").strip()
-        msg, seed = await ob.build_change_goal_dialog_opening(
-            prof if isinstance(prof, dict) else st,
-            lang,
-            model_names,
-            mode="new_12w",
-            previous_goal=prev_goal,
-            user_topic=raw,
-        )
-        st["vision_turns"] = seed
-        _append_history_turn(cid, raw, msg)
-        await _bot_reply(update.message, msg)
-        return True
-
-    if choice == "adjust":
-        st["change_12w_unclear_count"] = 0
-        st["change_mode"] = "adjust_12w"
-        st["change_12w_phase"] = "goal"
-        st["step"] = OB_GOAL_DIALOG
-        st["dont_know_streak"] = 0
-        prev_goal = str(st.get("main_goal") or prof.get("main_goal") or "").strip()
-        msg, seed = await ob.build_change_goal_dialog_opening(
-            prof if isinstance(prof, dict) else st,
-            lang,
-            model_names,
-            mode="adjust_12w",
-            previous_goal=prev_goal,
-            user_topic=raw,
-        )
-        st["goal_turns"] = seed
-        _append_history_turn(cid, raw, msg)
-        await _bot_reply(update.message, msg)
-        return True
-
-    count = int(st.get("change_12w_unclear_count") or 0) + 1
-    st["change_12w_unclear_count"] = count
-    if count >= 2:
-        _clear_flow_state(cid)
-        msg = _change_12w_give_up_message(lang)
-        _append_history_turn(cid, raw, msg)
-        await _bot_reply(update.message, msg)
-        return True
-
-    msg = _change_12w_reask_message(lang)
-    _append_history_turn(cid, raw, msg)
-    await _bot_reply(update.message, msg)
+    base = prof if prof else st
+    opening = ob.start_change_12w(onboarding, cid, base)
+    _append_history_turn(cid, raw, opening)
+    await _bot_reply(update.message, opening)
     return True
 
 
@@ -5293,9 +5150,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
     if start_arg in ("change_12w", "change-12w", "12w_goal", "main_goal"):
         if isinstance(prof, dict) and prof.get("name"):
-            ob.start_change_12w(onboarding, cid, prof)
-            plang = str(prof.get("language_code") or lang)
-            opening = ob.change_12w_choice_prompt(plang)
+            opening = ob.start_change_12w(onboarding, cid, prof)
             await _bot_reply(update.message, opening)
             return
     if start_arg in ("reonboard", "setup", "goals", "заново"):
@@ -6072,9 +5927,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
         if _wants_to_change_12w_goal(raw):
-            ob.start_change_12w(onboarding, cid, prof_d)
-            plang = str(prof_d.get("language_code") or "en")
-            opening = ob.change_12w_choice_prompt(plang)
+            opening = ob.start_change_12w(onboarding, cid, prof_d)
             await _bot_reply(update.message, opening)
             _append_history_turn(cid, raw, opening)
             return
@@ -8475,7 +8328,6 @@ async def _begin_goal_change_from_webapp(tid: str, mode: str) -> dict:
         raise HTTPException(status_code=400, detail="profile incomplete")
 
     cid = int(tid)
-    plang = str(profile.get("language_code") or "en")
     bot = telegram_app.bot if telegram_app else None
     model_chain = build_model_chain(select_model_id())
 
@@ -8490,8 +8342,7 @@ async def _begin_goal_change_from_webapp(tid: str, mode: str) -> dict:
             onboarding.pop(cid, None)
             raise HTTPException(status_code=502, detail="telegram send failed")
     elif mode == "12w":
-        ob.start_change_12w(onboarding, cid, profile)
-        message = ob.change_12w_choice_prompt(plang)
+        message = ob.start_change_12w(onboarding, cid, profile)
         try:
             await bot.send_message(chat_id=cid, text=sanitize_bot_reply(message))
         except Exception as e:
