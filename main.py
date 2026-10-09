@@ -39,6 +39,7 @@ import db as db_store
 import onboarding_flow as ob
 from bot_ui import ui_lang, ui_text
 from bot_typing import typing_while
+from goal_change import can_lock_as_goal
 from claude_budget import (
     evening_needs_model,
     is_telegram_block_error,
@@ -661,14 +662,10 @@ COACH_STYLE_INSTRUCTION = """АНАЛИЗ СОСТОЯНИЯ ПОЛЬЗОВАТ�
 SYSTEM_INSTRUCTION = SPICESPACE_GLOBAL_SYSTEM + "\n\n" + COACH_STYLE_INSTRUCTION
 
 CHAT_ONE_QUESTION_RULE = """КРИТИЧЕСКИ ВАЖНО — вопросы:
-В каждом сообщении задавай МАКСИМУМ ОДИН вопрос.
-Никогда не задавай два вопроса подряд.
-Если хочется спросить несколько вещей — выбери самый важный вопрос."""
+В одном ответе можно задать не более одного вопроса. Ноль вопросов — нормальный вариант. Задавай вопрос только тогда, когда ответ пользователя действительно поможет понять его ситуацию или выполнить его запрос. Не заканчивай каждый ответ вопросом автоматически."""
 
 CHAT_ONE_QUESTION_RULE_EN = """CRITICALLY IMPORTANT — questions:
-In every message ask AT MOST ONE question.
-Never ask two questions in a row.
-If you want to ask several things — pick the single most important question."""
+One reply may contain at most one question. Zero questions is a normal reply. Ask only when her answer would actually help you understand the situation or do what she asked. Do not end every reply with a question."""
 
 
 def _current_goal_only_rule(profile: dict) -> str:
@@ -4357,7 +4354,7 @@ def _apply_chat_state_updates(
             save_daily_task(chat_id, profile, new_task, source="conversation")
     new_goal = str(updates.get("new_goal") or "").strip()
     current = str(profile.get("main_goal") or "").strip()
-    if new_goal and not _same_saved_goal(new_goal, current):
+    if new_goal and can_lock_as_goal(new_goal) and not _same_saved_goal(new_goal, current):
         saved = db_store.update_profile_field(chat_id, "main_goal", new_goal)
         fresh = saved if isinstance(saved, dict) else None
         if isinstance(fresh, dict):
@@ -4469,7 +4466,13 @@ async def _coach_reply(
             "Every single word must be in English.\n\n"
         ) + extra
 
-    system = build_chat_system(prof, yesterday, today_summary, extra=extra)
+    system = build_chat_system(
+        prof,
+        yesterday,
+        today_summary,
+        extra=extra,
+        coach_style=COACH_STYLE_INSTRUCTION,
+    )
     log.info(
         "coach_reply time cid=%s tz=%s now=%s",
         chat_id,
@@ -4566,7 +4569,13 @@ async def _coach_reply_photo(
             "NEVER write in Russian. NEVER mix languages. "
             "Every single word must be in English.\n\n"
         ) + photo_extra
-    system = build_chat_system(prof, yesterday, today_summary, extra=photo_extra)
+    system = build_chat_system(
+        prof,
+        yesterday,
+        today_summary,
+        extra=photo_extra,
+        coach_style=COACH_STYLE_INSTRUCTION,
+    )
 
     caption_body = _user_text_with_reply_context(
         (
@@ -4845,7 +4854,9 @@ async def _try_handle_change_12w_choice(
 
     flow_mismatch_streak.pop(cid, None)
     base = prof if prof else st
-    opening = ob.start_change_12w(onboarding, cid, base)
+    opening = ob.start_change_12w(
+        onboarding, cid, base, list(histories.get(cid) or [])
+    )
     _append_history_turn(cid, raw, opening)
     await _bot_reply(update.message, opening)
     return True
@@ -5150,7 +5161,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
     if start_arg in ("change_12w", "change-12w", "12w_goal", "main_goal"):
         if isinstance(prof, dict) and prof.get("name"):
-            opening = ob.start_change_12w(onboarding, cid, prof)
+            opening = ob.start_change_12w(
+                onboarding, cid, prof, list(histories.get(cid) or [])
+            )
             await _bot_reply(update.message, opening)
             return
     if start_arg in ("reonboard", "setup", "goals", "заново"):
@@ -5927,7 +5940,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
         if _wants_to_change_12w_goal(raw):
-            opening = ob.start_change_12w(onboarding, cid, prof_d)
+            opening = ob.start_change_12w(
+                onboarding, cid, prof_d, list(histories.get(cid) or [])
+            )
             await _bot_reply(update.message, opening)
             _append_history_turn(cid, raw, opening)
             return
@@ -8342,7 +8357,9 @@ async def _begin_goal_change_from_webapp(tid: str, mode: str) -> dict:
             onboarding.pop(cid, None)
             raise HTTPException(status_code=502, detail="telegram send failed")
     elif mode == "12w":
-        message = ob.start_change_12w(onboarding, cid, profile)
+        message = ob.start_change_12w(
+            onboarding, cid, profile, list(histories.get(cid) or [])
+        )
         try:
             await bot.send_message(chat_id=cid, text=sanitize_bot_reply(message))
         except Exception as e:

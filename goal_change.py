@@ -46,7 +46,122 @@ def opening_restarts_onboarding(text: str) -> bool:
     return any(marker in low for marker in _CHOICE_MARKERS + _GREETING_MARKERS)
 
 
-def build_change_12w_state(profile: dict) -> tuple[dict, str]:
+def format_recent_dialog(turns: list[dict] | None, *, limit: int = 6) -> str:
+    """Short note from the existing chat. Not the active goal and not a longer history."""
+    lines: list[str] = []
+    for turn in (turns or [])[-limit:]:
+        role = turn.get("role")
+        parts = turn.get("parts") or []
+        text = str(turn.get("content") or (parts[0] if parts else "") or "").strip()
+        if not text:
+            continue
+        who = "user" if role == "user" else "assistant"
+        lines.append(f"{who}: {text[:300]}")
+    return "\n".join(lines)
+
+
+def looks_like_confusion(text: str) -> bool:
+    low = (text or "").lower()
+    return any(
+        phrase in low
+        for phrase in (
+            "не понимаю твоего вопроса",
+            "не понимаю вопроса",
+            "не понял вопрос",
+            "не поняла вопрос",
+            "не понимаю о чём ты",
+            "не понимаю о чем ты",
+            "don't understand the question",
+            "do not understand the question",
+            "what do you mean by that",
+            "i don't understand",
+        )
+    )
+
+
+def looks_like_emotion_or_obstacle(text: str) -> bool:
+    low = (text or "").lower()
+    return any(
+        phrase in low
+        for phrase in (
+            "уныние",
+            "вгоняет",
+            "грустно",
+            "расстраива",
+            "бесит",
+            "устал",
+            "устала",
+            "выгора",
+            "тревог",
+            "много баг",
+            "много косяк",
+            "bugs in",
+            "bummed",
+            "frustrated",
+        )
+    )
+
+
+def _has_forward_intent(text: str) -> bool:
+    low = (text or "").lower()
+    low = low.replace("не хочу", " ")
+    low = low.replace("don't want", " ").replace("do not want", " ")
+    return any(
+        phrase in low
+        for phrase in (
+            "хочу ",
+            "моя цель",
+            "цель —",
+            "цель:",
+            "запустить",
+            "построить",
+            "i want to",
+            "my goal",
+        )
+    )
+
+
+def is_refusal_constraint(text: str) -> bool:
+    low = (text or "").lower()
+    return any(
+        phrase in low
+        for phrase in (
+            "не хочу",
+            "не буду",
+            "don't want",
+            "do not want",
+            "i won't",
+        )
+    )
+
+
+def can_lock_as_goal(text: str) -> bool:
+    """A feeling, a bug report, a refusal, or a confused reply is not a 12-week goal."""
+    raw = (text or "").strip()
+    if looks_like_confusion(raw):
+        return False
+    if _has_forward_intent(raw):
+        return True
+    if looks_like_emotion_or_obstacle(raw) or is_refusal_constraint(raw):
+        return False
+    return len(raw) >= 8
+
+
+def next_dialog_move(text: str) -> str:
+    if looks_like_confusion(text):
+        return "repair_question"
+    if looks_like_emotion_or_obstacle(text) or is_refusal_constraint(text):
+        if not _has_forward_intent(text):
+            return "listen"
+    if can_lock_as_goal(text) and _has_forward_intent(text):
+        return "may_confirm_goal"
+    return "continue"
+
+
+def build_change_12w_state(
+    profile: dict,
+    recent_turns: list[dict] | None = None,
+) -> tuple[dict, str]:
     """In-memory flow only. Does not touch chat history or the saved profile."""
     lang = str((profile or {}).get("language_code") or "en")
     opening = ask_prompt(lang)
@@ -69,6 +184,7 @@ def build_change_12w_state(profile: dict) -> tuple[dict, str]:
         "evening_time": (profile or {}).get("evening_time") or "21:00",
         "timezone": str((profile or {}).get("timezone") or "").strip(),
         "vision": "",
+        "prior_dialog": format_recent_dialog(recent_turns),
     }
     if (profile or {}).get("has_kids") is not None:
         state["has_kids"] = profile.get("has_kids")

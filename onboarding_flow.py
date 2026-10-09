@@ -18,6 +18,8 @@ import db
 from bot_typing import typing_while
 from goal_change import (
     build_change_12w_state,
+    can_lock_as_goal,
+    looks_like_confusion,
     next_step_after_weekly,
     profile_patch_for_new_cycle,
 )
@@ -46,23 +48,15 @@ FIRST_PAIN_QUESTION_SYSTEM = """Ты Спейс. Пользователь тол
 Один вопрос, 1-2 предложения максимум.
 Ответь только текстом вопроса, без JSON и кавычек."""
 
-WHY_DIG_SYSTEM = """Ты Спейс. Твоя задача — докопаться до истинной причины цели пользователя.
-Задавай уточняющие вопросы 'зачем тебе это?' / 'что изменится когда это случится?'
-/ 'что это даст тебе на самом деле?'
-Один вопрос за раз. Не переходи к формулировке цели пока не поняла
-эмоциональную суть — уверенность, свобода, признание, покой и т.д.
-Как только поняла суть — переходи к формулировке цели:
-предложи черновик конкретной цели на 12 недель или спроси как она это сформулировала бы.
-
-Если пользователь назвал сферу или тему (деньги, здоровье, отношения) —
-задай конкретный уточняющий вопрос про суть именно этой темы.
-Например если сказал 'деньги' — спроси 'зачем тебе деньги?
-что изменится в жизни когда их станет больше?'
-Никаких абстрактных вопросов про 'самое важное в твоём дне'.
-
-КРИТИЧЕСКИ ВАЖНО: задавай строго ОДИН вопрос за раз.
-Никогда не задавай два вопроса в одном сообщении.
-Если хочется спросить несколько вещей — выбери самый важный.
+WHY_DIG_SYSTEM = """Ты Спейс. Помогаешь понять, зачем человеку то, что он сам назвал целью.
+Сначала пойми реплику: цель, желание, факт, эмоция, препятствие или просьба о помощи.
+На эмоцию, препятствие и проблему ответь по содержанию. Не записывай их как цель.
+Вопрос не обязателен. Задавай его только если он следует из конкретных слов человека, и не больше одного.
+Не используй заготовки вроде «что это даёт тебе на самом деле» и «как ты будешь чувствовать себя через полгода».
+Если человек не понял вопрос — признай, что формулировка не удалась, объясни проще или смени подход. Новую анкету не начинай.
+Не уговаривай заниматься тем, от чего он уже отказался.
+Не переходи к формулировке цели, пока не ясна суть того, что он сам хочет.
+Когда суть ясна — предложи черновик цели на 12 недель своими словами, без формулы «Получается, твоя цель: … Так?».
 
 ЗАПРЕЩЕНО: слова 'мечта', 'представь через 3 месяца', коуч-язык, markdown.
 ЗАПРЕЩЕНО повторять шаблоны старого онбординга:
@@ -72,7 +66,7 @@ WHY_DIG_SYSTEM = """Ты Спейс. Твоя задача — докопать�
 Максимум 3 предложения.
 
 Верни JSON: {"message": "...", "ready_for_goal": true/false}
-ready_for_goal=true только когда эмоциональная суть ясна и можно переходить к цели на 12 недель."""
+ready_for_goal=true только когда человек выразил намерение, которое можно считать целью, и можно переходить к формулировке на 12 недель."""
 
 DONT_KNOW_EXIT_SYSTEM = """Ты Спейс. Пользователь несколько раз ответил 'не знаю'.
 Скажи тепло но честно что не можешь помочь если человек сам не готов
@@ -1006,12 +1000,17 @@ def change_12w_adjust_opening(main_goal: str, lang: str = "en") -> str:
     return ob_text("change_12w_adjust", lang, goal=g)
 
 
-def start_change_12w(onboarding: dict[int, dict], cid: int, profile: dict) -> str:
-    """Ask for a new 12-week goal and continue the existing goal dialog."""
+def start_change_12w(
+    onboarding: dict[int, dict],
+    cid: int,
+    profile: dict,
+    recent_turns: list[dict] | None = None,
+) -> str:
+    """Ask for a new 12-week goal and keep recent chat limits beside it."""
     lang = _ob_lang(profile=profile)
     seeded = dict(profile or {})
     seeded["language_code"] = lang
-    st, opening = build_change_12w_state(seeded)
+    st, opening = build_change_12w_state(seeded, recent_turns=recent_turns)
     onboarding[cid] = st
     return opening
 
@@ -2314,6 +2313,7 @@ async def _claude_goal_dialog(
     vision: str = "",
     extra_user_hint: str = "",
     lang: str = "en",
+    prior_dialog: str = "",
 ) -> dict:
     messages = [
         {"role": t["role"], "content": t["content"]}
@@ -2325,10 +2325,12 @@ async def _claude_goal_dialog(
 
     dialog_history = _format_dialog_history(goal_turns, exclude_last=True, lang=lang)
     vision_label = (vision or s("not_specified", lang)).strip()[:2000]
+    prior = (prior_dialog or "").strip() or ("нет" if _is_ru(lang) else "none")
     system = _system_with_lang(
         GOAL_DIALOG_SYSTEM.format(
             vision=vision_label,
             dialog_history=dialog_history,
+            prior_dialog=prior[:2000],
         ),
         lang,
     )
@@ -3333,6 +3335,7 @@ async def handle_onboarding_turn(
             onboarding,
             cid,
             user_profiles.get(str(cid)) or st,
+            histories.get(cid),
         )
         await msg.reply_text(opening)
         return
@@ -3489,38 +3492,54 @@ async def handle_onboarding_turn(
         prev_reply = _last_assistant_reply(turns)
         same_streak = _assistant_same_question_streak(turns)
         goal_hint = _switch_approach_hint(lang)
-        if str(st.get("change_mode") or "") == "new_12w":
+        if looks_like_confusion(raw):
+            why_extra = (
+                "She did not understand the previous question. Admit the wording failed "
+                "and explain it more simply or change approach. Do not start a new questionnaire. "
+                "ready=false and goal empty."
+                if not _is_ru(lang)
+                else (
+                    "Она не поняла предыдущий вопрос. Признай, что формулировка не удалась, "
+                    "и объясни проще или смени подход. Новую анкету не начинай. "
+                    "ready=false, goal пустой."
+                )
+            )
+        elif str(st.get("change_mode") or "") == "new_12w":
             why_extra = (
                 "This is a goal change inside an existing chat, not a first meeting. "
-                "Do not greet and do not ask what is wrong in her life. "
-                "Help her word a new 12-week goal. "
-                "ready=true only after she confirms a concrete wording."
+                "Do not greet. Keep limits from the recent chat. "
+                "Do not turn a feeling or a refusal into the goal. "
+                "ready=true only after she confirms a goal she actually stated."
                 if not _is_ru(lang)
                 else (
                     "Это смена цели в уже идущем разговоре, не первое знакомство. "
-                    "Не здоровайся и не спрашивай, что раздражает в жизни. "
-                    "Помоги сформулировать новую цель на 12 недель. "
-                    "ready=true только после подтверждения конкретной формулировки."
+                    "Не здоровайся. Сохраняй ограничения из недавнего разговора. "
+                    "Не превращай эмоцию или отказ в цель. "
+                    "ready=true только после подтверждения цели, которую она сама назвала."
                 )
             )
         else:
             why_extra = (
-                "Keep digging for emotional why before locking the goal wording. "
-                "ready=true only after user confirms a concrete goal."
+                "Respond to what she just said. Do not use a stock coaching question. "
+                "ready=true only after she confirms a goal she actually stated."
                 if not _is_ru(lang)
                 else (
-                    "Продолжай копать эмоциональное зачем до фиксации формулировки. "
-                    "ready=true только после подтверждения конкретной цели."
+                    "Ответь на то, что она только что сказала. Не используй заготовленный коучинговый вопрос. "
+                    "ready=true только после подтверждения цели, которую она сама назвала."
                 )
             )
         async with typing_while(context.bot, cid):
-            extra = goal_hint if same_streak >= 2 else why_extra
+            extra = why_extra if looks_like_confusion(raw) else (
+                goal_hint if same_streak >= 2 else why_extra
+            )
+            send_hint = looks_like_confusion(raw) or same_streak >= 2 or len(turns) <= 4
             result = await _claude_goal_dialog(
                 turns,
                 model_names,
                 vision=str(st.get("vision") or ""),
-                extra_user_hint=extra if (same_streak >= 2 or len(turns) <= 4) else "",
+                extra_user_hint=extra if send_hint else "",
                 lang=lang,
+                prior_dialog=str(st.get("prior_dialog") or ""),
             )
             reply = (result.get("message") or ob_text("goal_fallback", lang)).strip()
 
@@ -3531,6 +3550,7 @@ async def handle_onboarding_turn(
                     vision=str(st.get("vision") or ""),
                     extra_user_hint=goal_hint,
                     lang=lang,
+                    prior_dialog=str(st.get("prior_dialog") or ""),
                 )
                 reply = (result.get("message") or "").strip() or reply
             if prev_reply and _questions_roughly_same(reply, prev_reply):
@@ -3551,7 +3571,7 @@ async def handle_onboarding_turn(
                     and not _is_dont_know_streak_phrase(str(t.get("content") or ""))
                 ]
                 last_user = max(concrete, key=len) if concrete else ""
-                if len(last_user) >= 8:
+                if can_lock_as_goal(last_user):
                     result = {
                         "message": reply,
                         "ready": True,
@@ -3560,7 +3580,12 @@ async def handle_onboarding_turn(
 
         turns.append({"role": "assistant", "content": reply[:2000]})
 
-        if result.get("ready") and result.get("goal"):
+        if (
+            result.get("ready")
+            and result.get("goal")
+            and can_lock_as_goal(str(result.get("goal") or ""))
+            and not looks_like_confusion(raw)
+        ):
             await _propose_goal_confirm(
                 msg,
                 st,
