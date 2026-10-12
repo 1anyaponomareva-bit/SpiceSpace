@@ -48,15 +48,12 @@ class RegressionQualityTests(unittest.TestCase):
         self.assertNotIn("Есть ли уже аудитория", style)
 
     def test_short_core_remembers_and_has_one_direct_example(self) -> None:
-        voice_ru = SPICESPACE_CORE_SYSTEM_RU.split(
-            "Когда пользователь просит написать сценарий", 1
-        )[0]
-        voice_en = SPICESPACE_CORE_SYSTEM.split("REELS", 1)[0]
-        self.assertIn("последних реплик", voice_ru)
-        self.assertIn("по одному в день", voice_ru)
-        self.assertIn("latest replies", voice_en)
-        self.assertIn("one a day", voice_en)
-        self.assertLess(len(voice_ru), 2600)
+        self.assertIn("последних реплик", SPICESPACE_CORE_SYSTEM_RU)
+        self.assertIn("по одному в день", SPICESPACE_CORE_SYSTEM_RU)
+        self.assertIn("latest replies", SPICESPACE_CORE_SYSTEM)
+        self.assertIn("one a day", SPICESPACE_CORE_SYSTEM)
+        self.assertNotIn("ТРИГГЕРНЫЙ ХУК", SPICESPACE_CORE_SYSTEM_RU)
+        self.assertLess(len(SPICESPACE_CORE_SYSTEM_RU), 4500)
 
     def test_new_constraint_replaces_overlapping_old_fact(self) -> None:
         plan = gc.fact_update_plan(

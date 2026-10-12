@@ -67,6 +67,7 @@ from prompts import (
     today_task_options_prompt,
     today_task_prompt,
     build_chat_system,
+    specialty_instructions,
     evening_message_prompt,
     evening_no_task_prompt,
     evening_opening,
@@ -588,9 +589,11 @@ COACH_STYLE_INSTRUCTION = """АНАЛИЗ СОСТОЯНИЯ ПОЛЬЗОВАТ�
 - Молчала несколько дней и вернулась
 - Тревога, усталость, потерянность
 
-В этом режиме: НЕ давай задачи, НЕ толкай вперёд.
-Просто будь рядом. Спроси как она.
-Максимум одно мягкое предложение в конце если сама готова двигаться.
+В этом режиме сначала учти состояние. Не своди ответ к дежурному «я рядом» и не спрашивай «как она», если она уже сказала, что с ней.
+Устала и не хочет ничего делать — не предлагай продуктивность.
+Запуталась — помоги разобраться в том, что она описала.
+Готова действовать — можно предложить небольшой шаг.
+Вопрос в конце не обязателен.
 
 ВАЖНО:
 - Переключайся между режимами каждый раз заново по текущим сообщениям
@@ -612,7 +615,7 @@ COACH_STYLE_INSTRUCTION = """АНАЛИЗ СОСТОЯНИЯ ПОЛЬЗОВАТ�
 Тон: мягкий вход, дальше конкретика. Запрещено спрашивать «как настроение», «как спалось», «представь что уже есть»,
 длинные восторженные абзацы, инфоцыганство, сухой коучинг.
 
-ГЛАВНОЕ ПРАВИЛО: НЕ давать общие списки советов без диагностики.
+ГЛАВНОЕ ПРАВИЛО: НЕ давать общие списки советов без опоры на то, что она уже сказала.
 
 ВАЖНО — что Спейс ДЕЛАЕТ:
 - Составляет план питания если просят
@@ -639,10 +642,8 @@ COACH_STYLE_INSTRUCTION = """АНАЛИЗ СОСТОЯНИЯ ПОЛЬЗОВАТ�
 — если просят сценарий — отказывать вместо того чтобы написать и спросить что поменять,
 — сокращать имя без разрешения: если человек представился «Полина», называть «Полина», не «Поль».
 
-Формат ответа:
-— 1–4 предложения, без «мотивации»,
-— максимум один маркированный список, и только если ≤ 2 пункта и нужен он по сути,
-— один шаг, не десять.
+Длина ответа — по ситуации из ядра. Не сжимай сложный разбор до одной фразы и не растягивай простой ответ.
+Без «мотивации». Список — только если он и есть запрошенный результат. Задачу не прикладывай к каждому сообщению.
 
 Не выдавай себя за врача; медицины не давай.
 Учитывай профиль пользователя (имя, цель, боль, ситуация, тип цели — measurable / qualitative, active_focus),
@@ -4408,10 +4409,17 @@ async def _coach_reply(
         _current_goal_only_rule(prof),
         _chat_one_question_rule(prof),
     ]
+    topic = specialty_instructions(user_text)
+    if topic:
+        extra_parts.append(topic)
     if facts_text:
         extra_parts.append(f"Важные факты:\n{facts_text}")
     if personality_text:
-        extra_parts.append(f"Профиль личности:\n{personality_text}")
+        extra_parts.append(
+            "Профиль личности — старый фон, на каждое сообщение не пересчитывается. "
+            "Последние реплики важнее.\n"
+            f"{personality_text}"
+        )
     if weekly_context:
         extra_parts.append(f"Прошлая неделя:\n{weekly_context}")
 
@@ -4542,9 +4550,14 @@ async def _coach_reply_photo(
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
     lang = str(prof.get("language_code") or "en")
     is_russian = lang.lower().startswith("ru")
-    photo_extra = (
-        _current_goal_only_rule(prof) + "\n\n" + _chat_one_question_rule(prof)
-    )
+    photo_parts = [
+        _current_goal_only_rule(prof),
+        _chat_one_question_rule(prof),
+    ]
+    photo_topic = specialty_instructions(caption or "")
+    if photo_topic:
+        photo_parts.append(photo_topic)
+    photo_extra = "\n\n".join(photo_parts)
     if not is_russian:
         photo_extra = (
             "CRITICAL: This user speaks ONLY English. "

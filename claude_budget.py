@@ -285,7 +285,7 @@ def parse_evening_bundle(raw: str) -> dict[str, str]:
 
 CHAT_OUTPUT_RULE_RU = """Формат ответа — один JSON-объект, без markdown:
 {"reply":"текст пользователю","state_updates":{"task_completed":null,"new_task":null,"new_goal":null,"weekly_goal_update":null,"important_fact":null}}
-reply — обычный текст Спейс, 2-3 предложения.
+reply — обычный текст Спейс. Короткий ответ допустим, но не обязателен: простой вопрос — коротко, сложная ситуация и практический запрос — настолько полно, насколько нужно.
 task_completed — true/false только если пользователь явно сказал, что задача дня сделана или нет. Иначе null.
 new_task — короткая задача, только если в этой реплике о ней договорились. Иначе null.
 new_goal — новая цель на 12 недель, только если пользователь явно заменяет текущую. Иначе null. Эмоция, препятствие, жалоба и «не понимаю вопроса» не являются целью: new_goal остаётся null.
@@ -295,7 +295,7 @@ important_fact — строка, только если это устойчивы
 
 CHAT_OUTPUT_RULE_EN = """Reply format — one JSON object, no markdown:
 {"reply":"text for the user","state_updates":{"task_completed":null,"new_task":null,"new_goal":null,"weekly_goal_update":null,"important_fact":null}}
-reply is the Space message, 2-3 sentences.
+reply is the Space message. A short reply is allowed, not required: a simple question stays short, a complicated situation or a practical request is as complete as it needs to be.
 task_completed is true/false only if she clearly said today's task was done or not. Otherwise null.
 new_task is a short task only if this turn agreed on one. Otherwise null.
 new_goal is a new 12-week goal only if she explicitly replaces the current one. Otherwise null. A feeling, an obstacle, a complaint, or "I don't understand the question" is not a goal: new_goal stays null.
