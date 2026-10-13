@@ -116,19 +116,19 @@ SUBSCRIPTION_PLANS = {
     "4weeks": {
         "label_ru": "4 недели",
         "label_en": "4 weeks",
-        "stars": 100,
+        "stars": 500,
         "days": 28,
     },
     "12weeks": {
         "label_ru": "12 недель",
         "label_en": "12 weeks",
-        "stars": 100,
+        "stars": 1200,
         "days": 84,
     },
     "24weeks": {
         "label_ru": "24 недели",
         "label_en": "24 weeks",
-        "stars": 100,
+        "stars": 2000,
         "days": 168,
     },
 }
