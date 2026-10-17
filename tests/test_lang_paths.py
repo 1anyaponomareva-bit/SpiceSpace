@@ -192,5 +192,55 @@ class WeekRecapFactsLanguageTests(unittest.TestCase):
         self.assertIn("задача дня: не выполнена", text)
 
 
+MILESTONE_RU_PROMPT = """Напиши короткое персональное поздравление для пользователя.
+
+Имя: Аня
+Цель на 12 недель: запустить продукт
+Мечта: жить у моря
+Выполнено дней подряд: 7
+
+Правила:
+- 2-3 предложения максимум
+- Говори про ЕЁ конкретную цель — не общие слова
+- Тон: тёплая подруга которая искренне радуется
+- Упомяни цифру 7 дней
+- Свяжи с её целью или мечтой
+- Каждый раз разный текст
+- Без markdown, без восклицательных знаков через слово
+- Один эмодзи максимум"""
+
+
+class MilestoneLanguageTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.ns = _main_functions(
+            {"_milestone_prompt", "_milestone_system", "_milestone_fallback"},
+            {"is_ru": lang_context.is_ru},
+        )
+
+    def test_english_has_no_cyrillic(self) -> None:
+        prompt = self.ns["_milestone_prompt"](
+            "Anna", "Launch the app", "Live by the sea", 7, "en"
+        )
+        self.assertFalse(has_cyrillic(prompt), prompt)
+        self.assertIn("7 days", prompt)
+        self.assertFalse(has_cyrillic(self.ns["_milestone_system"]("en")))
+        self.assertFalse(has_cyrillic(self.ns["_milestone_fallback"]("Anna", 7, "en")))
+        self.assertFalse(has_cyrillic(self.ns["_milestone_fallback"]("", 7, "en")))
+
+    def test_russian_unchanged(self) -> None:
+        self.assertEqual(
+            self.ns["_milestone_prompt"]("Аня", "запустить продукт", "жить у моря", 7, "ru"),
+            MILESTONE_RU_PROMPT,
+        )
+        self.assertEqual(
+            self.ns["_milestone_system"]("ru"),
+            "Пиши тепло и лично. Только текст поздравления.",
+        )
+        self.assertEqual(
+            self.ns["_milestone_fallback"]("", 7, "ru"),
+            "подруга, 7 дней — ты реально двигаешься к своей цели 💚",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2277,6 +2277,7 @@ async def _morning_message_text(
                         max_tokens=200,
                         feature="morning",
                         user_id=chat_id,
+                        lang=lang,
                     ).strip()
                 )
                 if text:
@@ -2496,6 +2497,7 @@ async def _evening_message_text(
                     max_tokens=500 if need_summary else 200,
                     feature="evening",
                     user_id=chat_id,
+                    lang=lang,
                 ).strip()
                 if need_summary:
                     bundle = parse_evening_bundle(raw)
@@ -2778,6 +2780,7 @@ async def _reengagement_message_text(
                     max_tokens=220,
                     feature="reengagement",
                     user_id=str(profile.get("user_id") or ""),
+                    lang=lang,
                 ).strip()
                 if text:
                     return text
@@ -4195,6 +4198,7 @@ Rules:
                     [{"role": "user", "content": prompt}],
                     system=system,
                     max_tokens=450,
+                    lang=lang,
                 ).strip()
                 if text:
                     return sanitize_bot_reply(text)
@@ -4588,6 +4592,7 @@ async def _coach_reply_photo(
                 system=refresh_user_time_in_system(prof, system),
                 feature="photo",
                 user_id=chat_id,
+                lang=lang,
             )
             log.info("Claude vision ответ через модель %s", _VISION_MODEL)
             return reply_text
@@ -6288,6 +6293,7 @@ async def _today_task_options_message_text(
                         [{"role": "user", "content": prompt}],
                         system=refresh_user_time_in_system(profile, system),
                         max_tokens=280,
+                        lang=lang,
                     )
                 ).strip()
                 low = text.lower()
@@ -6333,6 +6339,7 @@ async def _generate_today_task(profile: dict, model_names: list[str]) -> str:
                     [{"role": "user", "content": prompt}],
                     system=refresh_user_time_in_system(profile, system),
                     max_tokens=120,
+                    lang=lang,
                 ).strip()
                 if text:
                     return text.strip().strip('"')[:140]
@@ -6491,6 +6498,7 @@ async def _task_day_followup_text(
                         [{"role": "user", "content": prompt}],
                         system=refresh_user_time_in_system(profile, system),
                         max_tokens=200,
+                        lang=lang,
                     )
                 ).strip()
                 if text:
@@ -8462,6 +8470,59 @@ def _profile_cycle_start(profile: dict, user_id: str | int) -> date:
     return _profile_local_date(profile)
 
 
+def _milestone_prompt(
+    name: str, main_goal: str, vision: str, completed_days: int, lang: str
+) -> str:
+    if is_ru(lang):
+        return f"""Напиши короткое персональное поздравление для пользователя.
+
+Имя: {name}
+Цель на 12 недель: {main_goal}
+Мечта: {vision}
+Выполнено дней подряд: {completed_days}
+
+Правила:
+- 2-3 предложения максимум
+- Говори про ЕЁ конкретную цель — не общие слова
+- Тон: тёплая подруга которая искренне радуется
+- Упомяни цифру {completed_days} дней
+- Свяжи с её целью или мечтой
+- Каждый раз разный текст
+- Без markdown, без восклицательных знаков через слово
+- Один эмодзи максимум"""
+    return f"""Write a short personal congratulation for the user.
+
+Name: {name}
+12-week goal: {main_goal}
+Dream: {vision}
+Days completed in a row: {completed_days}
+
+Rules:
+- 2-3 sentences at most
+- Talk about HER specific goal, not general words
+- Tone: a warm friend who is genuinely happy for her
+- Mention the number {completed_days} days
+- Connect it to her goal or dream
+- Different text every time
+- No markdown, no exclamation mark in every sentence
+- One emoji at most
+- Write in English"""
+
+
+def _milestone_system(lang: str) -> str:
+    if is_ru(lang):
+        return "Пиши тепло и лично. Только текст поздравления."
+    return "Write warmly and personally. Only the congratulation text."
+
+
+def _milestone_fallback(name: str, completed_days: int, lang: str) -> str:
+    if is_ru(lang):
+        display_name = name or "подруга"
+        return f"{display_name}, {completed_days} дней — ты реально двигаешься к своей цели 💚"
+    display_name = name or "friend"
+    return f"{display_name}, {completed_days} days — you're really moving toward your goal 💚"
+
+
 @app.get("/api/milestone")
 async def get_milestone(
     request: Request,
@@ -8489,23 +8550,9 @@ async def get_milestone(
     name = str(fresh_profile.get("name") or "").strip()
     main_goal = str(fresh_profile.get("main_goal") or "").strip()
     vision = str(fresh_profile.get("vision") or "").strip()
+    lang = str(fresh_profile.get("language_code") or "en")
 
-    prompt = f"""Напиши короткое персональное поздравление для пользователя.
-
-Имя: {name}
-Цель на 12 недель: {main_goal}
-Мечта: {vision}
-Выполнено дней подряд: {completed_days}
-
-Правила:
-- 2-3 предложения максимум
-- Говори про ЕЁ конкретную цель — не общие слова
-- Тон: тёплая подруга которая искренне радуется
-- Упомяни цифру {completed_days} дней
-- Свяжи с её целью или мечтой
-- Каждый раз разный текст
-- Без markdown, без восклицательных знаков через слово
-- Один эмодзи максимум"""
+    prompt = _milestone_prompt(name, main_goal, vision, completed_days, lang)
 
     def generate_message() -> str:
         model_names = build_model_chain(select_model_id())
@@ -8514,15 +8561,15 @@ async def get_milestone(
                 text = claude_generate(
                     mid,
                     [{"role": "user", "content": prompt}],
-                    system="Пиши тепло и лично. Только текст поздравления.",
+                    system=_milestone_system(lang),
                     max_tokens=150,
+                    lang=lang,
                 ).strip()
                 if text:
                     return sanitize_bot_reply(text)
             except Exception as e:
                 log.warning("milestone generate %s: %s", mid, e)
-        display_name = name or "подруга"
-        return f"{display_name}, {completed_days} дней — ты реально двигаешься к своей цели 💚"
+        return _milestone_fallback(name, completed_days, lang)
 
     message = await asyncio.to_thread(generate_message)
 
