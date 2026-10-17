@@ -190,6 +190,7 @@ def main() -> int:
         help="send every message as a fresh chat instead of one running dialog",
     )
     parser.add_argument("--model", default="", help="override the model id")
+    parser.add_argument("--full", action="store_true", help="print whole replies")
     parser.add_argument(
         "--only",
         default="",
@@ -218,7 +219,10 @@ def main() -> int:
         mark = "CYRILLIC" if leaked else "ok"
         prompt_note = " (system prompt has Cyrillic)" if has_cyrillic(build_system(main_ns, text)) else ""
         print(f"[{i:2}] {mark:8} > {text}{prompt_note}")
-        print(f"     {reply[:300].replace(chr(10), ' / ')}")
+        if args.full:
+            print(f"{reply}\n")
+        else:
+            print(f"     {reply[:300].replace(chr(10), ' / ')}")
         if any(v not in (None, "", False) for v in updates.values()):
             print(f"     state_updates (not applied): {updates}")
         if leaked:
