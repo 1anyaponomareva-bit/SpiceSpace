@@ -1676,7 +1676,62 @@ def _looks_like_reminder_command(text: str) -> bool:
         return True
     if re.search(r"\b(?:можешь|сможешь)\s+(?:мне\s+)?напомнить\b", low):
         return True
+    if re.search(r"\b(?:remind me|reminder|can you remind|could you remind)\b", low):
+        return True
     return False
+
+
+_RU_DAYPART_HOURS = {"утра": "am", "ночи": "night", "дня": "pm", "вечера": "pm"}
+
+
+def _to_24h(hh: int, mm: int, part: str) -> str | None:
+    if not (0 <= mm <= 59):
+        return None
+    if part in ("am", "pm", "night"):
+        if not (1 <= hh <= 12):
+            return None
+        if part == "am":
+            hh = 0 if hh == 12 else hh
+        elif part == "pm":
+            hh = hh if hh == 12 else hh + 12
+        else:
+            hh = 0 if hh == 12 else hh
+    elif not (0 <= hh <= 23):
+        return None
+    return f"{hh:02d}:{mm:02d}"
+
+
+def _reminder_time_match(raw: str) -> tuple[str, int, int] | None:
+    """Time of a reminder and its span in the text, including a leading «at» / «в»."""
+    text = raw or ""
+    m = re.search(
+        r"(?i)(?:\bat\s+)?\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)(?![a-z])",
+        text,
+    )
+    if m:
+        part = "am" if m.group(3).lower().startswith("a") else "pm"
+        hhmm = _to_24h(int(m.group(1)), int(m.group(2) or 0), part)
+        if hhmm:
+            return hhmm, m.start(), m.end()
+    m = re.search(
+        r"(?i)(?:(?<![а-яё])в\s+)?(?<!\d)(\d{1,2})(?:[:\.](\d{2}))?\s*"
+        r"(?:час(?:а|ов)?\s+)?(утра|ночи|дня|вечера)(?![а-яё])",
+        text,
+    )
+    if m:
+        part = _RU_DAYPART_HOURS[m.group(3).lower()]
+        hh = int(m.group(1))
+        if part == "pm" and hh >= 12:
+            part = ""
+        hhmm = _to_24h(hh, int(m.group(2) or 0), part or "")
+        if hhmm:
+            return hhmm, m.start(), m.end()
+    m = re.search(r"(?i)(?:\bat\s+|(?<![а-яё])в\s+)?\b(\d{1,2})[:\.](\d{2})\b", text)
+    if m:
+        hhmm = _to_24h(int(m.group(1)), int(m.group(2)), "")
+        if hhmm:
+            return hhmm, m.start(), m.end()
+    return None
 
 
 def _extract_hhmm_from_text(raw: str) -> str | None:
@@ -1758,23 +1813,24 @@ def _parse_natural_reminder(text: str, profile: dict | None) -> dict | None:
         days = []
 
     # По умолчанию — сегодня, разово; иначе завтра / послезавтра
-    if "послезавтра" in low:
+    if "послезавтра" in low or "day after tomorrow" in low:
         target = _shift_calendar_day(today, 2)
-    elif "завтра" in low:
+    elif "завтра" in low or re.search(r"\btomorrow\b", low):
         target = _shift_calendar_day(today, 1)
     else:
         target = today
 
-    # время HH:MM или HH.MM
-    time_str = _extract_hhmm_from_text(raw)
-    if not time_str:
+    # время: 18:00, 18.00, 6pm, 6:30 pm, «в 6 вечера», «в 7 часов вечера»
+    time_hit = _reminder_time_match(raw)
+    if not time_hit:
         return None
+    time_str, t_start, t_end = time_hit
 
-    # заголовок: после времени или весь текст с очисткой
+    # заголовок: после времени или весь текст без времени, с очисткой
     title = ""
-    m_title = re.search(
-        r"(?:\d{1,2}[:\.]\d{2})\s*(?:чтобы|что|про|—|:|-)?\s*(.+)$",
-        raw,
+    m_title = re.match(
+        r"\s*(?:(?:чтобы|что|про|to|about|that)(?![\wа-яё])|—|:|-)?\s*(.+)$",
+        raw[t_end:],
         re.I | re.DOTALL,
     )
     if m_title:
@@ -1784,28 +1840,32 @@ def _parse_natural_reminder(text: str, profile: dict | None) -> dict | None:
         if m_pro:
             title = m_pro.group(1).strip()
     if not title:
-        title = raw
+        title = f"{raw[:t_start]} {raw[t_end:]}"
 
     title = re.sub(
         r"(?i)^(напомни(?:\s+мне)?|напоминай|напоминание|"
         r"можешь напомнить|напомни пожалуйста|"
-        r"(?:можешь|сможешь)(?:\s+мне)?\s+напомнить)[\s,:-]*",
+        r"(?:можешь|сможешь)(?:\s+мне)?\s+напомнить|"
+        r"(?:please\s+)?(?:(?:can|could|will)\s+you\s+(?:please\s+)?)?remind\s+me"
+        r"(?:\s+please)?|(?:set\s+(?:a\s+)?)?reminder)[\s,:-]*",
         "",
         title,
     ).strip()
     title = re.sub(r"\b(в\s+)?\d{1,2}[:.]\d{2}\b", "", title, flags=re.I).strip()
     title = re.sub(
         r"(?i)\b(завтра|послезавтра|сегодня|каждый\s+день|ежедневно|"
-        r"за\s+\d+\s*минут(?:ы)?)\b",
+        r"за\s+\d+\s*минут(?:ы)?|day\s+after\s+tomorrow|tomorrow|today)\b",
         "",
         title,
     ).strip()
     title = re.sub(r"(?i)\bмне\b", "", title).strip()
+    title = re.sub(r"(?i)^(?:to|about|that)\s+", "", title).strip()
+    title = re.sub(r"(?i)\s+(?:at|on)$", "", title).strip()
     title = re.sub(r"(?i)\bза\s+(10|30)\s*(минут|мин)?\b", "", title).strip()
     for word in sorted(_WEEKDAY_RU.keys(), key=len, reverse=True):
         if _weekday_mentioned(title.lower(), word):
             title = re.sub(re.escape(word), "", title, flags=re.I)
-    title = re.sub(r"\s+", " ", title).strip(" .,-—")
+    title = re.sub(r"\s+", " ", title).strip(" .,-—?!")
 
     if repeat == "weekly" and not days:
         return None
@@ -4660,16 +4720,21 @@ async def _try_handle_natural_reminder(
     raw: str,
     message: Message,
 ) -> bool:
-    """Создать напоминание по запросу. False — не обработано (пусть Claude ответит)."""
+    """Создать напоминание по запросу. False — не обработано, дальше идёт обычный разбор."""
     if not _looks_like_reminder_command(raw):
         return False
     try:
         parsed = _parse_natural_reminder(raw, prof_d)
     except Exception as e:
         log.exception("natural_reminder parse failed cid=%s: %s", cid, e)
-        return False
+        parsed = None
     if not parsed:
-        return False
+        if _looks_like_reminder_capability_question(raw):
+            return False
+        msg = ui_text("reminder_how", profile=prof_d)
+        await _bot_reply(message, msg)
+        _append_history_turn(cid, raw, msg)
+        return True
     need_title = bool(parsed.pop("_need_title", False)) or not (
         parsed.get("title") or ""
     ).strip()
@@ -4784,6 +4849,10 @@ def _looks_like_reminder_capability_question(text: str) -> bool:
         "будешь напоминать",
         "будешь мне напоминать",
         "ты будешь напоминать",
+        "remind me",
+        "reminder",
+        "can you remind",
+        "could you remind",
     )
     if not any(p in low for p in phrases):
         return False
@@ -4795,13 +4864,16 @@ def _looks_like_reminder_capability_question(text: str) -> bool:
 
 def _reminder_capability_reply(profile: dict | None) -> str:
     """Фиксированные ответы по правилам продукта — без вызова модели."""
+    ru = ui_lang(profile) == "ru"
     if _profile_has_daily_time(profile):
         mt = str(profile.get("morning_time") or profile.get("daily_time", "")).strip()
         et = str(profile.get("evening_time") or "").strip()
         if et:
-            return f"Да ✨ Утром в {mt}, вечером в {et}."
-        return f"Да ✨ Утром напишу в {mt}."
-    return "Могу ✨ Во сколько тебе писать утром?"
+            if ru:
+                return f"Да ✨ Утром в {mt}, вечером в {et}."
+            return f"Yes ✨ In the morning at {mt}, in the evening at {et}."
+        return f"Да ✨ Утром напишу в {mt}." if ru else f"Yes ✨ I'll write in the morning at {mt}."
+    return "Могу ✨ Во сколько тебе писать утром?" if ru else "I can ✨ What time should I write in the morning?"
 
 
 def _flow_escape_message(profile: dict | None) -> str:

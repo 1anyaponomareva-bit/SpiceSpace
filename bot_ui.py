@@ -41,9 +41,19 @@ _UI: dict[str, dict[str, str]] = {
     },
     "reminder_created": {
         "ru": "Окей ✨ Напомню про «{title}» {tail}.",
-        "en": "Okay ✨ I'll remind you about «{title}» {tail}.",
+        "en": "Okay ✨ Reminder set: “{title}” {tail}.",
     },
     "reminder_what": {"ru": "Что напомнить?", "en": "What should I remind you about?"},
+    "reminder_how": {
+        "ru": (
+            "Напиши, что напомнить и во сколько. "
+            "Например: «напомни завтра в 18:00 позвонить маме»."
+        ),
+        "en": (
+            "Tell me what to remind you about and when. "
+            "For example: \"remind me tomorrow at 6pm to call mom\"."
+        ),
+    },
     "tomorrow_saved": {
         "ru": "Записала ✨ На завтра: {task}",
         "en": "Saved ✨ For tomorrow: {task}",
