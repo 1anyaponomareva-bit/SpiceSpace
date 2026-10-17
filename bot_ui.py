@@ -96,6 +96,8 @@ _UI: dict[str, dict[str, str]] = {
         "en": "Claude API rate limit right now. Wait 1–2 minutes and try again.",
     },
     "reminder_tail_at": {"ru": "в {time}", "en": "at {time}"},
+    "reminder_tail_tomorrow": {"ru": "завтра в {time}", "en": "tomorrow at {time}"},
+    "reminder_tail_on_date": {"ru": "{date} в {time}", "en": "on {date} at {time}"},
     "reminder_tail_daily": {"ru": ", каждый день", "en": ", every day"},
     "reminder_tail_weekly": {"ru": ", по {days}", "en": ", on {days}"},
     "onboard_text_only_photo": {

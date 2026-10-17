@@ -48,6 +48,7 @@ from goal_change import (
 from lang_context import (
     coach_style_for,
     facts_header,
+    format_day_month,
     is_ru,
     last_week_text,
     personality_intro,
@@ -1676,7 +1677,10 @@ def _looks_like_reminder_command(text: str) -> bool:
         return True
     if re.search(r"\b(?:можешь|сможешь)\s+(?:мне\s+)?напомнить\b", low):
         return True
-    if re.search(r"\b(?:remind me|reminder|can you remind|could you remind)\b", low):
+    if re.search(
+        r"\b(?:remind me|set a reminder|set me a reminder|can you remind|could you remind)\b",
+        low,
+    ):
         return True
     return False
 
@@ -1847,7 +1851,7 @@ def _parse_natural_reminder(text: str, profile: dict | None) -> dict | None:
         r"можешь напомнить|напомни пожалуйста|"
         r"(?:можешь|сможешь)(?:\s+мне)?\s+напомнить|"
         r"(?:please\s+)?(?:(?:can|could|will)\s+you\s+(?:please\s+)?)?remind\s+me"
-        r"(?:\s+please)?|(?:set\s+(?:a\s+)?)?reminder)[\s,:-]*",
+        r"(?:\s+please)?|set\s+(?:me\s+)?a\s+reminder(?:\s+(?:for|to))?)[\s,:-]*",
         "",
         title,
     ).strip()
@@ -4706,6 +4710,23 @@ def _parse_daily_time(raw: str) -> str | None:
 def _reminder_created_message(task: dict, profile: dict | None = None) -> str:
     lang = ui_lang(profile)
     tail = ui_text("reminder_tail_at", lang, time=task["time"])
+    if str(task.get("repeat") or "none") == "none":
+        try:
+            day = date.fromisoformat(str(task.get("date") or ""))
+        except ValueError:
+            day = None
+        if day is not None:
+            tz_name = str(task.get("timezone") or _profile_timezone_name(profile))
+            today = datetime.now(tz=_zone_or_default(tz_name)).date()
+            if day == today + timedelta(days=1):
+                tail = ui_text("reminder_tail_tomorrow", lang, time=task["time"])
+            elif day != today:
+                tail = ui_text(
+                    "reminder_tail_on_date",
+                    lang,
+                    date=format_day_month(day, lang),
+                    time=task["time"],
+                )
     if task.get("repeat") == "daily":
         tail += ui_text("reminder_tail_daily", lang)
     elif task.get("repeat") == "weekly" and task.get("days_of_week"):
@@ -4850,7 +4871,8 @@ def _looks_like_reminder_capability_question(text: str) -> bool:
         "будешь мне напоминать",
         "ты будешь напоминать",
         "remind me",
-        "reminder",
+        "set a reminder",
+        "set me a reminder",
         "can you remind",
         "could you remind",
     )

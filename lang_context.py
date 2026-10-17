@@ -10,7 +10,7 @@ Pure functions. No Telegram, no DB, no Anthropic imports, so they are easy to te
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 
 
 def is_ru(lang: object) -> bool:
@@ -59,6 +59,12 @@ def format_user_time(now: datetime, lang: object) -> str:
     if key == "ru":
         return f"{now.strftime('%H:%M')}, {weekday} {now.day} {month}"
     return f"{now.strftime('%H:%M')}, {weekday} {month} {now.day}"
+
+
+def format_day_month(day: date, lang: object) -> str:
+    if is_ru(lang):
+        return f"{day.day} {_MONTHS['ru'][day.month - 1]}"
+    return f"{_MONTHS['en'][day.month - 1]} {day.day}"
 
 
 CURRENT_TIME_INSTRUCTION_RU = """КРИТИЧЕСКИ ВАЖНО — время и дата:

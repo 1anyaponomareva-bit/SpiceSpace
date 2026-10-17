@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import bot_ui  # noqa: E402
+import lang_context  # noqa: E402
 
 TZ = "Europe/London"
 TODAY = date(2026, 10, 17)
@@ -66,6 +67,7 @@ def _load(**overrides) -> dict:
         "_profile_timezone_name": lambda _p: TZ,
         "_zone_or_default": ZoneInfo,
         "_profile_has_daily_time": lambda _p: False,
+        "format_day_month": lang_context.format_day_month,
         "log": MagicMock(),
     }
     ns.update(overrides)
@@ -138,9 +140,31 @@ class ParseReminderTests(unittest.TestCase):
                 )
 
     def test_ordinary_text_is_not_a_reminder(self) -> None:
-        for text in ("I did the task!", "What time is it?", "я сделала задачу"):
+        for text in (
+            "I did the task!",
+            "What time is it?",
+            "я сделала задачу",
+            "thanks for the reminder",
+            "Is this a reminder?",
+        ):
             with self.subTest(text=text):
                 self.assertFalse(self.ns["_looks_like_reminder_command"](text))
+                self.assertFalse(self.ns["_looks_like_reminder_capability_question"](text))
+
+    def test_english_command_phrases(self) -> None:
+        for text in (
+            "set a reminder for 6pm",
+            "set me a reminder for tomorrow",
+            "remind me to stretch",
+            "can you remind me to stretch",
+            "Could you remind me about the call?",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(self.ns["_looks_like_reminder_command"](text))
+
+    def test_set_a_reminder_with_time(self) -> None:
+        out = self._parse("set a reminder for 6pm to call mom", "en")
+        self.assertEqual((out["date"], out["time"], out["title"]), (TODAY.isoformat(), "18:00", "call mom"))
 
 
 class HandleReminderTests(unittest.TestCase):
@@ -194,7 +218,26 @@ class HandleReminderTests(unittest.TestCase):
 
         handled, sent, _ = self._run("напомни завтра в 18:00 позвонить маме", "ru")
         self.assertTrue(handled)
-        self.assertEqual(sent[0], "Окей ✨ Напомню про «позвонить маме» в 18:00.")
+        self.assertEqual(sent[0], "Окей ✨ Напомню про «позвонить маме» завтра в 18:00.")
+
+    def test_confirmation_names_the_day(self) -> None:
+        cases = [
+            ("ru", "напомни в 18:00 позвонить маме", "Окей ✨ Напомню про «позвонить маме» в 18:00."),
+            ("ru", "напомни завтра в 6 вечера позвонить маме",
+             "Окей ✨ Напомню про «позвонить маме» завтра в 18:00."),
+            ("ru", "напомни послезавтра в 18:00 позвонить маме",
+             "Окей ✨ Напомню про «позвонить маме» 19 октября в 18:00."),
+            ("en", "remind me at 6pm to call mom", "Okay ✨ Reminder set: “call mom” at 18:00."),
+            ("en", "remind me tomorrow at 6pm to call mom",
+             "Okay ✨ Reminder set: “call mom” tomorrow at 18:00."),
+            ("en", "remind me the day after tomorrow at 6pm to call mom",
+             "Okay ✨ Reminder set: “call mom” on October 19 at 18:00."),
+        ]
+        for lang, text, expected in cases:
+            with self.subTest(text=text):
+                handled, sent, _ = self._run(text, lang)
+                self.assertTrue(handled)
+                self.assertEqual(sent, [expected])
 
     def test_capability_question_is_left_to_the_capability_reply(self) -> None:
         handled, sent, _ = self._run("can you remind me?", "en")
