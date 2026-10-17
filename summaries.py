@@ -13,7 +13,7 @@ import anthropic
 
 from claude_client import generate
 from db import get_daily_summary, normalize_task_completed, patch_daily_summary, upsert_daily_summary
-from prompts import DAILY_SUMMARY_PROMPT, ONBOARDING_SUMMARY_PROMPT, daily_summary_prompt
+from prompts import DAILY_SUMMARY_PROMPT, daily_summary_prompt, onboarding_summary_prompt
 
 log = logging.getLogger("coach_bot")
 
@@ -416,6 +416,27 @@ def extract_and_save_facts(
             log.warning("extract_facts model %s: %s", mid, e)
 
 
+def onboarding_summary_system(lang: str) -> str:
+    if str(lang or "en").lower().startswith("ru"):
+        return "Отвечай только валидным JSON."
+    return "Reply with valid JSON only."
+
+
+def onboarding_summary_fallback(profile: dict) -> dict[str, str]:
+    lang = str(profile.get("language_code") or "en")
+    name = profile.get("name")
+    goal = profile.get("main_goal")
+    if lang.lower().startswith("ru"):
+        return {
+            "summary": f"Знакомство: {name}. Цель 12 нед: {goal}.",
+            "mood": "начало",
+        }
+    return {
+        "summary": f"Onboarding: {name}. 12-week goal: {goal}.",
+        "mood": "start",
+    }
+
+
 def save_onboarding_summary(
     user_id: int,
     profile: dict,
@@ -428,7 +449,8 @@ def save_onboarding_summary(
         tz = ZoneInfo("Asia/Ho_Chi_Minh")
     today = datetime.now(tz).date()
 
-    prompt = ONBOARDING_SUMMARY_PROMPT.format(
+    lang = str(profile.get("language_code") or "en")
+    prompt = onboarding_summary_prompt(lang).format(
         name=profile.get("name", ""),
         vision=profile.get("vision", ""),
         main_goal=profile.get("main_goal", ""),
@@ -441,7 +463,7 @@ def save_onboarding_summary(
             raw = generate(
                 mid,
                 [{"role": "user", "content": prompt}],
-                system="Отвечай только валидным JSON.",
+                system=onboarding_summary_system(lang),
                 max_tokens=400,
                 cache_core=False,
             )
@@ -461,11 +483,12 @@ def save_onboarding_summary(
         except Exception as e:
             log.warning("onboarding_summary %s: %s", mid, e)
 
+    fallback = onboarding_summary_fallback(profile)
     upsert_daily_summary(
         user_id,
         today,
-        summary=f"Знакомство: {profile.get('name')}. Цель 12 нед: {profile.get('main_goal')}.",
-        mood="начало",
+        summary=fallback["summary"],
+        mood=fallback["mood"],
         key_detail=str(profile.get("vision") or profile.get("main_goal", ""))[:500],
         task="",
     )

@@ -48,6 +48,7 @@ from goal_change import (
 from lang_context import (
     coach_style_for,
     facts_header,
+    is_ru,
     last_week_text,
     personality_intro,
     personality_text as personality_text_lang,
@@ -2066,43 +2067,20 @@ def _format_today_conversation_context(chat_id: int, max_turns: int = 10) -> str
     return "\n".join(lines)
 
 
-def _facts_block_for_prompt(chat_id: int) -> str:
+def _facts_block_for_prompt(chat_id: int, lang: str = "ru") -> str:
     facts = db_store.load_user_facts(chat_id, limit=10)
     facts_text = "\n".join(f"— {f}" for f in facts) if facts else ""
     if facts_text:
-        return f"Важные факты о пользователе:\n{facts_text}"
+        header = "Важные факты о пользователе:" if is_ru(lang) else facts_header(lang)
+        return f"{header}\n{facts_text}"
     return ""
 
 
-def _personality_text_from_row(personality: dict | None) -> str:
-    if not personality:
-        return ""
-    parts: list[str] = []
-    if personality.get("communication_style"):
-        parts.append(f"Стиль общения: {personality['communication_style']}")
-    if personality.get("motivation_triggers"):
-        parts.append(f"Что мотивирует: {personality['motivation_triggers']}")
-    if personality.get("procrastination_patterns"):
-        parts.append(f"Паттерны прокрастинации: {personality['procrastination_patterns']}")
-    if personality.get("best_time_of_day"):
-        parts.append(f"Лучшее время: {personality['best_time_of_day']}")
-    if personality.get("response_to_pressure"):
-        parts.append(f"Реакция на давление: {personality['response_to_pressure']}")
-    if personality.get("personal_values"):
-        parts.append(f"Ценности: {personality['personal_values']}")
-    if personality.get("strengths"):
-        parts.append(f"Сильные стороны: {personality['strengths']}")
-    if personality.get("blockers"):
-        parts.append(f"Блокеры: {personality['blockers']}")
-    if personality.get("raw_insights"):
-        parts.append(f"Наблюдения: {personality['raw_insights']}")
-    return "\n".join(parts)
-
-
-def _personality_block_for_prompt(chat_id: int) -> str:
-    text = _personality_text_from_row(db_store.load_personality(chat_id))
+def _personality_block_for_prompt(chat_id: int, lang: str = "ru") -> str:
+    text = personality_text_lang(db_store.load_personality(chat_id), lang)
     if text:
-        return f"Профиль личности:\n{text}"
+        header = "Профиль личности:" if is_ru(lang) else personality_intro(lang)
+        return f"{header}\n{text}"
     return ""
 
 
@@ -2403,8 +2381,8 @@ async def _evening_message_text(
     display_name = name or ("подруга" if ru else "friend")
     name_instruction = _exact_name_prompt_instruction(profile, chat_id)
     goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
-    facts_block = _facts_block_for_prompt(chat_id)
-    personality_block = _personality_block_for_prompt(chat_id)
+    facts_block = _facts_block_for_prompt(chat_id, lang)
+    personality_block = _personality_block_for_prompt(chat_id, lang)
     na = "не указана" if ru else "not specified"
     no_task = "не задана" if ru else "not set"
 
@@ -4106,6 +4084,14 @@ def _collect_week_recap_facts(
     if not span:
         return "", 0, 0
     week_start, week_end = span
+    if is_ru(profile.get("language_code") or "ru"):
+        task_l, detail_l, mood_l, done_l, not_done_l = (
+            "задача дня", "деталь", "настроение", "выполнена", "не выполнена",
+        )
+    else:
+        task_l, detail_l, mood_l, done_l, not_done_l = (
+            "task of the day", "detail", "mood", "done", "not done",
+        )
     lines: list[str] = []
     completed = 0
     with_notes = 0
@@ -4117,17 +4103,17 @@ def _collect_week_recap_facts(
             if summ.get("summary"):
                 parts.append(str(summ["summary"])[:280])
             if summ.get("task"):
-                parts.append(f"задача дня: {str(summ['task'])[:120]}")
+                parts.append(f"{task_l}: {str(summ['task'])[:120]}")
             if summ.get("key_detail"):
-                parts.append(f"деталь: {str(summ['key_detail'])[:100]}")
+                parts.append(f"{detail_l}: {str(summ['key_detail'])[:100]}")
             if summ.get("mood"):
-                parts.append(f"настроение: {str(summ['mood'])[:60]}")
+                parts.append(f"{mood_l}: {str(summ['mood'])[:60]}")
             tc = summ.get("task_completed")
             if tc == "true":
                 completed += 1
-                parts.append("задача дня: выполнена")
+                parts.append(f"{task_l}: {done_l}")
             elif tc == "false":
-                parts.append("задача дня: не выполнена")
+                parts.append(f"{task_l}: {not_done_l}")
             if parts:
                 with_notes += 1
                 lines.append(f"{d.isoformat()}: " + " | ".join(parts))

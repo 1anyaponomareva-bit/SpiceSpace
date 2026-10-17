@@ -824,6 +824,24 @@ ONBOARDING_SUMMARY_PROMPT = """Онбординг завершён. JSON без 
 Утро: {morning_time}
 Вечер: {evening_time}"""
 
+ONBOARDING_SUMMARY_PROMPT_EN = """Onboarding is finished. JSON without markdown:
+{{"summary": "facts", "mood": "calm", "key_detail": "detail", "task": ""}}
+
+Leave the task field as an empty string. Today's task appears after the morning dialog; do not put greetings there.
+All text fields must be in English.
+
+Name: {name}
+Dream: {vision}
+12-week goal: {main_goal}
+Morning: {morning_time}
+Evening: {evening_time}"""
+
+
+def onboarding_summary_prompt(lang: str = "en") -> str:
+    if str(lang or "en").lower().startswith("ru"):
+        return ONBOARDING_SUMMARY_PROMPT
+    return ONBOARDING_SUMMARY_PROMPT_EN
+
 
 _WEEKDAYS_RU = (
     "понедельник",
