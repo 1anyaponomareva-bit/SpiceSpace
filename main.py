@@ -2278,6 +2278,7 @@ async def _morning_message_text(
                         feature="morning",
                         user_id=chat_id,
                         lang=lang,
+                        strict=True,
                     ).strip()
                 )
                 if text:
@@ -2498,6 +2499,7 @@ async def _evening_message_text(
                     feature="evening",
                     user_id=chat_id,
                     lang=lang,
+                    strict=True,
                 ).strip()
                 if need_summary:
                     bundle = parse_evening_bundle(raw)
@@ -2781,6 +2783,7 @@ async def _reengagement_message_text(
                     feature="reengagement",
                     user_id=str(profile.get("user_id") or ""),
                     lang=lang,
+                    strict=True,
                 ).strip()
                 if text:
                     return text
@@ -4403,7 +4406,7 @@ async def _coach_reply(
         _current_goal_only_rule(prof),
         _chat_one_question_rule(prof),
     ]
-    topic = specialty_instructions(user_text)
+    topic = specialty_instructions(user_text, lang=lang)
     if topic:
         extra_parts.append(topic)
     if facts_text:
@@ -4533,7 +4536,7 @@ async def _coach_reply_photo(
         _current_goal_only_rule(prof),
         _chat_one_question_rule(prof),
     ]
-    photo_topic = specialty_instructions(caption or "")
+    photo_topic = specialty_instructions(caption or "", lang=lang)
     if photo_topic:
         photo_parts.append(photo_topic)
     photo_extra = "\n\n".join(photo_parts)

@@ -8,6 +8,7 @@ state_updates are only printed, never applied.
 Run from spicespace-bot:
     .\\.venv\\Scripts\\python.exe check_english_leaks.py
     .\\.venv\\Scripts\\python.exe check_english_leaks.py --no-history
+    .\\.venv\\Scripts\\python.exe check_english_leaks.py --no-history --only 6,8,18
 """
 
 from __future__ import annotations
@@ -144,7 +145,7 @@ def build_system(main_ns: dict, user_text: str) -> str:
         main_ns["_current_goal_only_rule"](PROFILE),
         main_ns["_chat_one_question_rule"](PROFILE),
     ]
-    topic = specialty_instructions(user_text)
+    topic = specialty_instructions(user_text, lang=lang)
     if topic:
         extra_parts.append(topic)
     facts_text = "\n".join(f"— {f}" for f in FACTS[:3])
@@ -189,7 +190,19 @@ def main() -> int:
         help="send every message as a fresh chat instead of one running dialog",
     )
     parser.add_argument("--model", default="", help="override the model id")
+    parser.add_argument(
+        "--only",
+        default="",
+        help="comma-separated message numbers from the list, e.g. 6,8,18",
+    )
     args = parser.parse_args()
+    selected = list(enumerate(MESSAGES, 1))
+    if args.only:
+        wanted = {int(x) for x in args.only.split(",") if x.strip()}
+        bad = wanted - set(range(1, len(MESSAGES) + 1))
+        if bad:
+            parser.error(f"--only: no such message numbers {sorted(bad)}")
+        selected = [(i, t) for i, t in selected if i in wanted]
 
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(level=logging.WARNING)
@@ -199,7 +212,7 @@ def main() -> int:
 
     hist: list[dict] = []
     leaks: list[tuple[int, str, str]] = []
-    for i, text in enumerate(MESSAGES, 1):
+    for i, text in selected:
         raw, reply, updates = ask(main_ns, model, [] if args.no_history else hist, text)
         leaked = has_cyrillic(raw)
         mark = "CYRILLIC" if leaked else "ok"
@@ -214,7 +227,7 @@ def main() -> int:
         hist.append({"role": "model", "parts": [reply]})
 
     print("\n" + "=" * 70)
-    print(f"Replies with Cyrillic: {len(leaks)} of {len(MESSAGES)}")
+    print(f"Replies with Cyrillic: {len(leaks)} of {len(selected)}")
     for i, text, raw in leaks:
         print(f"\n[{i}] > {text}\n{raw}")
     print("\n" + usage_report())

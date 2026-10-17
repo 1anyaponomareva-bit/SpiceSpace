@@ -15,6 +15,7 @@ from lang_context import (
     format_user_time,
     time_label,
 )
+from specialty_blocks_en import specialty_instructions_lang
 
 SPICESPACE_CORE_SYSTEM = """You are Space, a close friend in Telegram. Not a bot, not a coach.
 
@@ -221,28 +222,18 @@ HOOK_FORMULA_INSTRUCTION = """
 АВТО-ТРИГГЕРЫ: если пользователь пишет "хук", "hook", "первые секунды", "как начать видео", "цепляющее начало" — автоматически используй формулу выше.
 """
 
-def specialty_instructions(text: str) -> str:
+def specialty_instructions(text: str, lang: str = "ru") -> str:
     """Reels, hooks, and nutrition only when this message is about them.
 
     Kept out of the stable cached prefix so ordinary chat does not carry them.
     """
-    low = text or ""
-    blocks: list[str] = []
-    if re.search(
-        r"(сценари|рилс|reels|шортс|shorts|тик[\s-]?ток|tiktok|\bscript\b)",
-        low,
-        re.I,
-    ):
-        blocks.append(REELS_SCRIPT_STRUCTURE.strip())
-    if re.search(
-        r"(хук|\bhook\b|первые секунды|как начать видео|цепляющее начало)",
-        low,
-        re.I,
-    ):
-        blocks.append(HOOK_FORMULA_INSTRUCTION.strip())
-    if re.search(r"(похуд|питани|трениров|спорт|калор|\bменю\b|бжу|рацион)", low, re.I):
-        blocks.append(FITNESS_NUTRITION_INSTRUCTION.strip())
-    return "\n\n".join(blocks)
+    return specialty_instructions_lang(
+        text,
+        lang,
+        REELS_SCRIPT_STRUCTURE,
+        HOOK_FORMULA_INSTRUCTION,
+        FITNESS_NUTRITION_INSTRUCTION,
+    )
 
 
 def spicespace_core_system(lang: str = "en") -> str:
