@@ -45,6 +45,14 @@ from goal_change import (
     is_refusal_constraint,
     should_store_fact,
 )
+from lang_context import (
+    coach_style_for,
+    facts_header,
+    last_week_text,
+    personality_intro,
+    personality_text as personality_text_lang,
+    level_context as level_context_text,
+)
 from claude_budget import (
     evening_needs_model,
     is_telegram_block_error,
@@ -4390,21 +4398,17 @@ async def _coach_reply(
     if isinstance(prof, dict):
         prof = await _refresh_profile_timezone(chat_id, prof)
         user_profiles[tid] = prof
+    lang = str(prof.get("language_code") or "en")
+    is_russian = lang.lower().startswith("ru")
     tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name)
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
     facts = await asyncio.to_thread(db_store.load_user_facts, chat_id, 3)
     facts_text = "\n".join(f"— {f}" for f in facts) if facts else ""
     personality = await asyncio.to_thread(db_store.load_personality, chat_id)
-    personality_text = _personality_text_from_row(personality)
+    personality_text = personality_text_lang(personality, lang)
     last_week = await asyncio.to_thread(db_store.load_last_weekly_summary, chat_id)
-    weekly_context = ""
-    if last_week:
-        weekly_context = (
-            f"Итог прошлой недели: {last_week.get('summary', '')}\n"
-            f"Достижения: {last_week.get('achievements', '')}\n"
-            f"Сложности: {last_week.get('challenges', '')}"
-        )
+    weekly_context = last_week_text(last_week, lang) if last_week else ""
     extra_parts: list[str] = [
         _current_goal_only_rule(prof),
         _chat_one_question_rule(prof),
@@ -4413,41 +4417,25 @@ async def _coach_reply(
     if topic:
         extra_parts.append(topic)
     if facts_text:
-        extra_parts.append(f"Важные факты:\n{facts_text}")
+        extra_parts.append(f"{facts_header(lang)}\n{facts_text}")
     if personality_text:
-        extra_parts.append(
-            "Профиль личности — старый фон, на каждое сообщение не пересчитывается. "
-            "Последние реплики важнее.\n"
-            f"{personality_text}"
-        )
+        extra_parts.append(f"{personality_intro(lang)}\n{personality_text}")
     if weekly_context:
-        extra_parts.append(f"Прошлая неделя:\n{weekly_context}")
+        extra_parts.append(
+            f"Прошлая неделя:\n{weekly_context}" if is_russian else weekly_context
+        )
 
     summaries = await asyncio.to_thread(db_store.list_daily_summaries, chat_id)
     completed_count = sum(
         1 for s in summaries if s.get("task_completed") == "true"
     )
     level = _calculate_user_level(completed_count)
-    level_context = (
-        f"Уровень пользователя: {level['name']} ({completed_count} выполненных задач)."
+    extra_parts.append(
+        level_context_text(level["key"], level["name"], completed_count, lang)
     )
-    if level["key"] == "spark":
-        level_context += " Она только начинает — поддерживай особенно тепло."
-    elif level["key"] == "flow":
-        level_context += " Она вошла в ритм — можно чуть больше требовать."
-    elif level["key"] == "power":
-        level_context += " Она стабильна — говори как с равной."
-    elif level["key"] == "legend":
-        level_context += (
-            " Она прошла долгий путь — говори как старая подруга "
-            "которая знает её насквозь."
-        )
-    extra_parts.append(level_context)
 
     extra = "\n\n".join(extra_parts)
 
-    lang = str(prof.get("language_code") or "en")
-    is_russian = lang.lower().startswith("ru")
     if not is_russian:
         extra = (
             "CRITICAL: This user speaks ONLY English. "
@@ -4461,7 +4449,7 @@ async def _coach_reply(
         yesterday,
         today_summary,
         extra=extra,
-        coach_style=COACH_STYLE_INSTRUCTION,
+        coach_style=coach_style_for(lang, COACH_STYLE_INSTRUCTION),
     )
     log.info(
         "coach_reply time cid=%s tz=%s now=%s",
@@ -4496,6 +4484,7 @@ async def _coach_reply(
                     system=fresh_system,
                     feature="chat",
                     user_id=chat_id,
+                    lang=lang,
                 )
                 log.info("Claude ответ через модель %s", mid)
                 return reply_text
@@ -4569,7 +4558,7 @@ async def _coach_reply_photo(
         yesterday,
         today_summary,
         extra=photo_extra,
-        coach_style=COACH_STYLE_INSTRUCTION,
+        coach_style=coach_style_for(lang, COACH_STYLE_INSTRUCTION),
     )
 
     caption_body = _user_text_with_reply_context(

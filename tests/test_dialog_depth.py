@@ -119,7 +119,9 @@ class DialogDepthTests(unittest.TestCase):
         self.assertNotIn("ТРИГГЕРНЫЙ ХУК", dynamic)
         source = (ROOT / "main.py").read_text(encoding="utf-8")
         self.assertIn("load_user_facts, chat_id, 3", source)
-        self.assertIn("старый фон", source)
+        lang_source = (ROOT / "lang_context.py").read_text(encoding="utf-8")
+        intro = lang_source.split("def personality_intro", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("старый фон", intro)
         self.assertNotIn("update_personality_profile(", source)
 
     def test_stable_prefix_is_shared_and_still_cacheable(self) -> None:

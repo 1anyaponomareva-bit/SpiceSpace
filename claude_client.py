@@ -9,6 +9,7 @@ import os
 import anthropic
 
 from claude_budget import DYNAMIC_MARKER, is_billing_error, record_usage, usage_report
+from lang_context import empty_fallback, refusal_fallback
 
 log = logging.getLogger("coach_bot")
 
@@ -76,7 +77,7 @@ def build_model_chain(primary: str) -> list[str]:
     return names
 
 
-def response_text(response: object) -> str:
+def response_text(response: object, lang: str = "ru") -> str:
     parts: list[str] = []
     for block in getattr(response, "content", []) or []:
         if getattr(block, "type", None) == "text":
@@ -86,11 +87,8 @@ def response_text(response: object) -> str:
         return text
     stop = getattr(response, "stop_reason", None)
     if stop == "refusal":
-        return (
-            "Не смогла ответить на эту формулировку. "
-            "Переформулируй короче — продолжим."
-        )
-    return "Напиши ещё раз — я слушаю."
+        return refusal_fallback(lang)
+    return empty_fallback(lang)
 
 
 def estimate_tokens(text: str) -> int:
@@ -155,6 +153,7 @@ def generate(
     cache_core: bool = True,
     feature: str = "unspecified",
     user_id: str | int = "",
+    lang: str = "ru",
 ) -> str:
     global _billing_stopped
     if _billing_stopped:
@@ -224,4 +223,4 @@ def generate(
             model_id,
             cache_status,
         )
-    return response_text(response)
+    return response_text(response, lang)

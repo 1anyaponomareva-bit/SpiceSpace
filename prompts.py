@@ -9,6 +9,12 @@ from datetime import datetime
 import pytz
 
 from claude_budget import CHAT_OUTPUT_RULE_EN, CHAT_OUTPUT_RULE_RU, DYNAMIC_MARKER
+from lang_context import (
+    TIME_LINE_RE,
+    current_time_instruction,
+    format_user_time,
+    time_label,
+)
 
 SPICESPACE_CORE_SYSTEM = """You are Space, a close friend in Telegram. Not a bot, not a coach.
 
@@ -854,22 +860,25 @@ def resolve_user_timezone(profile: dict | None) -> str:
     return default
 
 
+def _lang_of(profile: dict | None) -> str:
+    if isinstance(profile, dict):
+        return str(profile.get("language_code") or "en")
+    return "en"
+
+
 def get_current_time_for_user(profile: dict | None) -> str:
     try:
         tz = pytz.timezone(resolve_user_timezone(profile))
     except Exception:
         tz = pytz.UTC
-    now = datetime.now(tz)
-    weekday = _WEEKDAYS_RU[now.weekday()]
-    month = _MONTHS_RU[now.month - 1]
-    return f"{now.strftime('%H:%M')}, {weekday} {now.day} {month}"
+    return format_user_time(datetime.now(tz), _lang_of(profile))
 
 
 def user_message_with_fresh_time(profile: dict | None, user_text: str) -> str:
     """Prefix current user time onto the message Claude sees right now."""
     stamp = get_current_time_for_user(profile)
     text = (user_text or "").strip()
-    prefix = f"[Текущее время пользователя: {stamp}]"
+    prefix = f"[{time_label(_lang_of(profile))}: {stamp}]"
     return f"{prefix}\n\n{text}" if text else prefix
 
 
@@ -882,9 +891,10 @@ CURRENT_TIME_INSTRUCTION = """КРИТИЧЕСКИ ВАЖНО — время и 
 
 def prepend_user_time(profile: dict | None, system: str) -> str:
     """Append current time after the cacheable prefix."""
-    line = f"Текущее время пользователя: {get_current_time_for_user(profile)}"
+    lang = _lang_of(profile)
+    line = f"{time_label(lang)}: {get_current_time_for_user(profile)}"
     body = (system or "").strip()
-    dynamic_bit = f"{line}\n\n{CURRENT_TIME_INSTRUCTION}"
+    dynamic_bit = f"{line}\n\n{current_time_instruction(lang)}"
     marker = "\n---DYNAMIC---\n"
     if marker in body:
         return body + "\n\n" + dynamic_bit
@@ -893,15 +903,10 @@ def prepend_user_time(profile: dict | None, system: str) -> str:
 
 def refresh_user_time_in_system(profile: dict | None, system: str) -> str:
     """Replace time line with fresh current time right before a Claude call."""
-    fresh_line = f"Текущее время пользователя: {get_current_time_for_user(profile)}"
+    fresh_line = f"{time_label(_lang_of(profile))}: {get_current_time_for_user(profile)}"
     text = (system or "").strip()
-    if re.search(r"Текущее время пользователя:", text):
-        return re.sub(
-            r"Текущее время пользователя: [^\n]+",
-            fresh_line,
-            text,
-            count=1,
-        )
+    if TIME_LINE_RE.search(text):
+        return TIME_LINE_RE.sub(lambda _m: fresh_line, text, count=1)
     return prepend_user_time(profile, text)
 
 

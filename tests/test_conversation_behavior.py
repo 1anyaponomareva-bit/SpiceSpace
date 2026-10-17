@@ -97,7 +97,7 @@ class ConversationBehaviorTests(unittest.TestCase):
         self.assertIn("Вопрос необязателен", system)
         self.assertIn("Ноль вопросов — нормальный вариант", system)
         source = (ROOT / "main.py").read_text(encoding="utf-8")
-        self.assertIn("coach_style=COACH_STYLE_INSTRUCTION", source)
+        self.assertIn("coach_style=coach_style_for(lang, COACH_STYLE_INSTRUCTION)", source)
 
     def test_structured_scenarios_keep_their_contracts(self):
         self.assertIn('"weekly_goal"', WEEKLY_TACTICS_DIALOG_SYSTEM)
