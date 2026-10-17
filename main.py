@@ -253,6 +253,9 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
     level=logging.INFO,
 )
+# httpx logs full request URLs at INFO, and Telegram URLs contain the bot token.
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 log = logging.getLogger("coach_bot")
 SUBSCRIBERS_PATH = DATA_DIR / "subscribers.json"
 USER_PROFILES_PATH = DATA_DIR / "user_profiles.json"
