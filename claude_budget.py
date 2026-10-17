@@ -236,36 +236,6 @@ def parse_evening_bundle(raw: str) -> dict[str, str]:
     reply = str(data.get("reply") or "").strip()
     if not reply:
         return empty
-    return {
-        "reply": reply,
-        "summary": _blank_if_null(data.get("summary")),
-        "mood": _blank_if_null(data.get("mood")),
-        "key_detail": _blank_if_null(data.get("key_detail")),
-    }
-
-
-def parse_evening_bundle(raw: str) -> dict[str, str]:
-    """One evening call can return the Telegram text and the day's summary."""
-    text = (raw or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
-        text = re.sub(r"\s*```$", "", text)
-    data: object = None
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            try:
-                data = json.loads(match.group(0))
-            except json.JSONDecodeError:
-                data = None
-    empty = {"reply": (raw or "").strip(), "summary": "", "mood": "", "key_detail": ""}
-    if not isinstance(data, dict):
-        return empty
-    reply = str(data.get("reply") or "").strip()
-    if not reply:
-        return empty
 
     def clean(value: object) -> str:
         if value is None:

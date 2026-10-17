@@ -18,6 +18,10 @@ class ClaudeBillingError(RuntimeError):
     """Anthropic rejected the call because the credit balance is too low."""
 
 
+class ClaudeEmptyReply(RuntimeError):
+    """The model returned no text or refused; strict callers send their own template."""
+
+
 _billing_stopped = False
 
 _client: anthropic.Anthropic | None = None
@@ -77,7 +81,7 @@ def build_model_chain(primary: str) -> list[str]:
     return names
 
 
-def response_text(response: object, lang: str = "ru") -> str:
+def response_text(response: object, lang: str = "ru", *, strict: bool = False) -> str:
     parts: list[str] = []
     for block in getattr(response, "content", []) or []:
         if getattr(block, "type", None) == "text":
@@ -86,6 +90,8 @@ def response_text(response: object, lang: str = "ru") -> str:
     if text:
         return text
     stop = getattr(response, "stop_reason", None)
+    if strict:
+        raise ClaudeEmptyReply(f"empty model reply stop_reason={stop}")
     if stop == "refusal":
         return refusal_fallback(lang)
     return empty_fallback(lang)
@@ -154,6 +160,7 @@ def generate(
     feature: str = "unspecified",
     user_id: str | int = "",
     lang: str = "ru",
+    strict: bool = False,
 ) -> str:
     global _billing_stopped
     if _billing_stopped:
@@ -223,4 +230,4 @@ def generate(
             model_id,
             cache_status,
         )
-    return response_text(response, lang)
+    return response_text(response, lang, strict=strict)
