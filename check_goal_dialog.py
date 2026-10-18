@@ -1,13 +1,16 @@
 """Run scripted goal-setting dialogs through the real onboarding prompts and check the replies.
 
 Each scenario walks the onboarding stages the way the bot does: WHY_DIG_SYSTEM while
-she says what she wants (_claude_vision_dialog), GOAL_DIALOG_SYSTEM with the goal card
-(_claude_goal_dialog), then WEEKLY_TACTICS_DIALOG_SYSTEM (_claude_weekly_tactics_dialog).
+she says what she wants and until it sends the goal card (_claude_vision_dialog),
+GOAL_DIALOG_SYSTEM taking her answer to the card (_claude_goal_dialog), then
+WEEKLY_TACTICS_DIALOG_SYSTEM (_claude_weekly_tactics_dialog).
 Nothing is read from or written to the database and nothing is sent to Telegram.
 
 Next user turn after each bot reply: the next scripted line if any is left; otherwise
-"да"/"yes" if the reply has the card question or is the WHY_DIG draft; otherwise the
-scenario ends. At most 4 bot replies per scenario. The button card the bot shows after
+"да"/"yes" if the reply has the card question or ends the WHY_DIG stage; otherwise, if the
+bot asked a question, her next backup answer from BACKUPS; otherwise the scenario ends.
+"да"/"yes" right after a card question is the confirmation turn.
+At most 4 bot replies per scenario. The button card the bot shows after
 a confirmed 12-week goal is skipped: the weekly stage opens right away.
 
 Not mirrored: the "don't know" side path (only flagged), the retry when the model repeats
@@ -16,6 +19,7 @@ its last question, and the 8-turn cap.
 Run from spicespace-bot:
     .\\.venv\\Scripts\\python.exe check_goal_dialog.py
     .\\.venv\\Scripts\\python.exe check_goal_dialog.py --only 6,8,1en
+    .\\.venv\\Scripts\\python.exe check_goal_dialog.py --out goal_dialogs.txt
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,7 +52,21 @@ STOP_PHRASES = (
     "на самом деле хочешь",
     "что за этим стоит",
     "по-настоящему важно",
+    "запрос помощи",
+    "request for help",
+    "я спросила другое",
+    "i asked something else",
 )
+YES_WORDS = {"да", "yes"}
+MASCULINE_RU = re.compile(
+    r"(?:^|[.!?…]\s+)(Понял|Услышал|Записал|Перегнул|Согласен|Рад)\b"
+)
+CLASSIFYING_START = re.compile(
+    r"^\s*(?:это|твоё последнее сообщение|твое последнее сообщение|this is|your last message)\b"
+    r"[^.?!]{0,40}(?:запрос|просьб|request|wish|feeling|желание|эмоци)",
+    re.IGNORECASE,
+)
+INVENTED_STEMS = ("курс", "нутрицио", "course", "nutrition")
 
 S6_RU = (
     "Хочу запустить телеграм-бота и получить первых 10 платных пользователей "
@@ -83,6 +102,85 @@ SCENARIOS: list[tuple[str, str, str, list[str]]] = [
     ("10en", "en", "irritated", ["These questions are annoying, just answer normally"]),
 ]
 
+# Her answers, in order, when the bot asks a question and the scripted lines are used up.
+BACKUPS: dict[str, list[str]] = {
+    "1": [
+        "Наверное, хочу работу, которая нравится и приносит деньги",
+        "Мне нравится рисовать и общаться с людьми",
+        "Может, что-то своё, пусть маленькое",
+    ],
+    "2": [
+        "Наверное, бизнес сейчас важнее всего",
+        "Хочу запустить онлайн-магазин украшений, могу тратить 2 часа в день",
+        "Переезд потом, сначала деньги",
+    ],
+    "3": [
+        "Честно, квартиру я не очень хочу, хочу накопить на учёбу дизайну",
+        "Хочу за 12 недель отложить 150 тысяч на курс",
+        "Могу откладывать по 12 тысяч в неделю",
+    ],
+    "4": [
+        "Сейчас я дизайнер на фрилансе, получаю около 1500 долларов в месяц",
+        "Ну хотя бы выйти на 5000 в месяц",
+        "Могу работать по 4 часа в день",
+    ],
+    "5": [
+        "Я пью мало, к вечеру болит голова",
+        "Хочу пить 2 литра в день",
+        "Да, каждый день все 12 недель",
+    ],
+    "6": [
+        "Бот будет напоминать мастерам маникюра о записях клиентов",
+        "Мастерам маникюра, я сама этим занималась",
+        "Да, всё так",
+    ],
+    "7": [
+        "Работа выматывает, сплю по 5 часов",
+        "Хочу просто высыпаться, ложиться до 23:00",
+        "Хотя бы 5 дней в неделю",
+    ],
+    "8": [
+        "Хочу снимать рилсы для блога о путешествиях",
+        "Хочу за 12 недель выложить 24 ролика, могу тратить 5 часов в неделю",
+        "Да",
+    ],
+    "9": [
+        "У меня блог про уход за кожей, 800 подписчиков",
+        "Хочу за 12 недель дойти до 3000 подписчиков, могу снимать 3 раза в неделю",
+        "Да",
+    ],
+    "10": [
+        "Хочу больше зарабатывать",
+        "Хочу за 12 недель найти работу тестировщиком, учусь по 2 часа в день",
+        "Да",
+    ],
+    "11": [
+        "Бот для записи к психологу",
+        "Да, давай так",
+        "Окей",
+    ],
+    "1en": [
+        "Maybe a job I actually enjoy that pays well",
+        "I like drawing and talking to people",
+        "Something of my own, even a small one",
+    ],
+    "4en": [
+        "I'm a freelance designer making about $1,500 a month",
+        "Okay, maybe $5,000 a month",
+        "I can work 4 extra hours a day",
+    ],
+    "6en": [
+        "The bot reminds nail artists about client bookings",
+        "Nail artists, I used to be one",
+        "Yes, that's right",
+    ],
+    "10en": [
+        "I want to earn more",
+        "I want to land a QA job in 12 weeks, I study 2 hours a day",
+        "Yes",
+    ],
+}
+
 # Mirrors the hints in the OB_GOAL_DIALOG branch of onboarding_flow; keep in sync.
 _GOAL_HINT_CONFUSION = {
     "en": (
@@ -110,25 +208,28 @@ _GOAL_HINT_DEFAULT = {
 _DIG_HINT = {
     "en": (
         "She already named a concrete goal. If her words already show why it matters, "
-        "do not ask why: move to a draft. Ask one question only if a fact needed for "
-        "the draft is missing. Set ready_for_goal=true once the intention is clear."
+        "do not ask why: send the goal card. Ask one question only if a fact needed for "
+        "the card is missing. Set ready_for_goal=true once the intention is clear."
     ),
     "ru": (
         "Она уже назвала конкретную цель. Если из её слов уже понятно, зачем ей это, "
-        "не спрашивай зачем: переходи к черновику. Один вопрос — только если для "
-        "черновика не хватает факта. ready_for_goal=true, как только намерение ясно."
+        "не спрашивай зачем: присылай карточку цели. Один вопрос — только если для "
+        "карточки не хватает факта. ready_for_goal=true, как только намерение ясно."
     ),
 }
 
-_raw_calls: list[str] = []
+_raw_calls: list[tuple[str, str]] = []
 _feature = ["goal_check"]
 _real_generate = ob.claude_generate
 
 
-def _capturing_generate(*args, **kwargs):
+def _capturing_generate(model_id, messages, **kwargs):
     kwargs.setdefault("feature", _feature[0])
-    text = _real_generate(*args, **kwargs)
-    _raw_calls.append(text)
+    text = _real_generate(model_id, messages, **kwargs)
+    prefilled = bool(messages) and messages[-1] == ob._JSON_PREFILL
+    body = text.strip()
+    json_text = "{" + body if prefilled and not body.startswith("{") else body
+    _raw_calls.append((json_text, body))
     return text
 
 
@@ -147,11 +248,9 @@ class BotReply:
 
 
 def _card_question(stage: str, lang: str) -> str:
-    if stage == "goal":
-        return ob.s("goal_final_question", lang)
     if stage == "weekly":
         return ob.s("weekly_confirm_question", lang)
-    return ""
+    return ob.s("goal_final_question", lang)
 
 
 def _total_tokens() -> tuple[int, int]:
@@ -186,6 +285,7 @@ async def _call_stage(
             lang=lang,
         )
         parser = ob._parse_vision_dialog_json
+        json_keys: tuple[str, ...] = ("ready_for_goal",)
         default = ob.ob_text("vision_fallback", lang)
     elif stage == "goal":
         turns = st["goal_turns"]
@@ -205,6 +305,7 @@ async def _call_stage(
             prior_dialog="",
         )
         parser = ob._parse_goal_dialog_json
+        json_keys = ('"ready"', '"goal"')
         default = ob.ob_text("goal_fallback", lang)
     else:
         turns = st["weekly_turns"]
@@ -216,11 +317,16 @@ async def _call_stage(
             lang=lang,
         )
         parser = ob._parse_weekly_change_json
+        json_keys = ('"ready"', '"weekly_goal"')
         default = ob.ob_text("weekly_dialog_fallback", lang)
-    fallback = not _raw_calls or parser(_raw_calls[-1]) is None
+    json_text, model_text = _raw_calls[-1] if _raw_calls else ("", "")
+    bad_json = not _raw_calls or parser(json_text) is None
+    fallback = bad_json and not ob.plain_text_reply(model_text, *json_keys)
+    if bad_json and not fallback:
+        notes.append("model skipped the JSON; its plain text was used as the reply")
     if fallback:
         notes.append("FALLBACK: no valid JSON from the model, the bot's canned reply was used")
-        for raw in _raw_calls:
+        for _json_text, raw in _raw_calls:
             notes.append(f"raw model output: {raw}")
     if not str(result.get("message") or "").strip():
         result["message"] = default
@@ -245,13 +351,18 @@ def _check(reply: BotReply, lang: str, confirm_turn: bool) -> None:
         reply.failures.append("ready=true before a confirmation turn")
     if lang == "en" and has_cyrillic(msg):
         reply.failures.append("Cyrillic in an English run")
+    if lang == "ru":
+        masc = MASCULINE_RU.search(msg)
+        if masc:
+            reply.failures.append(f"masculine form: «{masc.group(1)}»")
 
 
 async def run_scenario(
     sid: str, lang: str, lines: list[str], models: list[str]
-) -> tuple[list[BotReply], list[str]]:
+) -> tuple[list[BotReply], list[str], list[str]]:
     st = {"why_turns": [], "goal_turns": [], "weekly_turns": [], "vision": "", "main_goal": ""}
     pending = list(lines)
+    backups = list(BACKUPS.get(sid, []))
     stage = "why"
     user_text: str | None = pending.pop(0)
     confirm_turn = False
@@ -280,7 +391,7 @@ async def run_scenario(
         drafted = stage == "why" and bool(result.get("ready_for_goal"))
 
         if drafted:
-            st["vision"] = ob._collect_vision_from_turns(st["why_turns"])
+            ob.start_goal_dialog_after_dig(st, st["why_turns"])
             stage = "goal"
         elif stage == "goal":
             goal = str(result.get("goal") or "")
@@ -301,33 +412,46 @@ async def run_scenario(
 
         if pending:
             user_text = pending.pop(0)
-            confirm_turn = False
         elif has_card or drafted:
             user_text = YES[lang]
-            confirm_turn = has_card
+        elif "?" in message and backups:
+            user_text = backups.pop(0)
         else:
             end_note = "script ended; the bot is waiting for her answer"
             break
+        confirm_turn = has_card and user_text.strip(" .!").lower() in YES_WORDS
     else:
         end_note = end_note or f"stopped at {MAX_BOT_REPLIES} bot replies"
 
-    summary: list[str] = []
+    info = [end_note] if end_note else []
+    return replies, info, _scenario_failures(sid, lang, lines, replies)
+
+
+def _scenario_failures(
+    sid: str, lang: str, lines: list[str], replies: list[BotReply]
+) -> list[str]:
+    failures: list[str] = []
+    final = ob.s("goal_final_question", lang)
     if sid.startswith("6"):
         card_at = next(
-            (
-                i
-                for i, r in enumerate(replies, 1)
-                if _card_question(r.stage, lang)
-                and _card_question(r.stage, lang) in r.message
-                and r.stage == "goal"
-            ),
+            (i for i, r in enumerate(replies, 1) if r.stage != "weekly" and final in r.message),
             None,
         )
         if card_at is None or card_at > 2:
-            summary.append(f"goal card not reached by bot reply 2 (got: {card_at or 'never'})")
-    if end_note:
-        summary.insert(0, end_note)
-    return replies, summary
+            failures.append(f"goal card not reached by bot reply 2 (got: {card_at or 'never'})")
+    if sid.startswith("10") and replies:
+        first = replies[0]
+        if first.flags.get("ready_for_goal"):
+            failures.append("reply #1: ready_for_goal=True on an irritated message")
+        said = lines[0].lower()
+        invented = [w for w in INVENTED_STEMS if w in first.message.lower() and w not in said]
+        if invented:
+            failures.append(f"reply #1: words she never used: {', '.join(invented)}")
+    if sid == "9":
+        for i, r in enumerate(replies, 1):
+            if CLASSIFYING_START.search(r.message):
+                failures.append(f"reply #{i}: starts by classifying her message")
+    return failures
 
 
 def _print_dialog(sid: str, lang: str, situation: str, replies: list[BotReply]) -> None:
@@ -361,12 +485,11 @@ async def main_async(args: argparse.Namespace) -> int:
     results: list[tuple[str, str, list[str], int, int]] = []
     for sid, lang, situation, lines in selected:
         in0, out0 = _total_tokens()
-        replies, summary = await run_scenario(sid, lang, lines, models)
+        replies, info, scenario_failures = await run_scenario(sid, lang, lines, models)
         in1, out1 = _total_tokens()
         _print_dialog(sid, lang, situation, replies)
         failures = [f"reply #{i}: {f}" for i, r in enumerate(replies, 1) for f in r.failures]
-        failures += [s for s in summary if s.startswith("goal card")]
-        info = [s for s in summary if not s.startswith("goal card")]
+        failures += scenario_failures
         print("\n--- checks:", "OK" if not failures else f"{len(failures)} failed")
         for line in failures:
             print(f"    FAIL {line}")
@@ -394,12 +517,37 @@ def main() -> int:
         default="",
         help="comma-separated scenario ids, e.g. 6,8,1en",
     )
+    parser.add_argument("--out", default="", help="also write the whole output to this UTF-8 file")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    logging.basicConfig(level=logging.WARNING)
+    out_file = None
+    if args.out:
+        out_file = open(args.out, "w", encoding="utf-8")
+        sys.stdout = _Tee(sys.stdout, out_file)
+    logging.basicConfig(level=logging.WARNING, stream=sys.stdout)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    return asyncio.run(main_async(args))
+    try:
+        return asyncio.run(main_async(args))
+    finally:
+        if out_file:
+            sys.stdout = sys.__stdout__
+            out_file.close()
+            print(f"output written to {Path(args.out).resolve()}")
+
+
+class _Tee:
+    def __init__(self, *streams) -> None:
+        self.streams = streams
+
+    def write(self, text: str) -> int:
+        for stream in self.streams:
+            stream.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        for stream in self.streams:
+            stream.flush()
 
 
 if __name__ == "__main__":

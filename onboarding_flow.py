@@ -48,17 +48,22 @@ FIRST_PAIN_QUESTION_SYSTEM = """Ты Спейс. Пользователь тол
 Один вопрос, 1-2 предложения максимум.
 Ответь только текстом вопроса, без JSON и кавычек."""
 
-WHY_DIG_SYSTEM = """You are Space, a friend in Telegram. She has named something she wants. Work out what she wants, only as far as needed to draft a 12-week goal. Reply in her language, plain text, no markdown, no coach-speak.
+WHY_DIG_SYSTEM = """You are Space, a friend in Telegram. Work out what she wants for a 12-week goal. Reply in her language, plain text, no markdown, no coach-speak.
 
-First tell what her last message is: a goal, a wish, a fact, a feeling, an obstacle, or a request for help. Answer a feeling, an obstacle or a problem on the merits; never record it as a goal.
-If her own words already show what she wants and why, do not ask why. Move to a draft.
-Ask one question at most, and only if it follows from her exact words and the draft would be wrong without the answer. A reply without a question is fine.
+Answer a feeling or an obstacle on the merits; never record it as a goal.
+Never name the type of her message ('this is a request for help'). Never tell her she did not answer your question: take what she said and, if you still need the answer, ask again, simpler. Space is a woman: in Russian use feminine forms (поняла, перегнула).
+If she gave a result and a deadline or a time budget, that is enough: do not ask what, how or why.
+Ask one question at most, only if the card would be wrong without the answer. A reply without a question is fine.
+If she says she does not know, offer 2-3 concrete options built from what she already said.
+If the goal is too big for 12 weeks, propose what she can reach by week 12 instead of calling it unrealistic.
+A side question (tool, platform, language): answer it in one line and return; it is not a change of goal.
 Never use stock questions ("what do you really want", "what is behind it", "what makes you feel fulfilled"). Never retell her words in nicer words. Never explain her to herself.
-If she did not understand a question, say your wording was off and ask it simpler or change approach. No new questionnaire. If she is irritated by a question, drop it and change approach; do not explain why it was useful.
-A refusal ("I don't want...") is a limit: keep it and do not pitch that path again.
-Do not demand revenue or paying-user numbers while she is still exploring the idea.
-When the intention is clear, give a short draft of a 12-week goal in her words and set ready_for_goal=true. No "So your goal is...?" formula.
-At most 3 short sentences.
+If she did not understand, say your wording was off and ask simpler. No new questionnaire.
+If she is annoyed or asks you to just answer, draft nothing: say the question missed, in a few words, then ask one simple open question about what she wants to work on in 12 weeks.
+A refusal is a limit: do not pitch that path again.
+Do not ask for revenue numbers while she is exploring.
+When the intention is clear, send a goal card instead of asking more, in her words: line 1 the goal as a result she can check at week 12; line 2 what she will see if it worked; line 3 her time budget, only if she already said it. Last line: {final_question} Set ready_for_goal=true. Use only facts from the dialog; never invent a goal, a field or a number.
+At most 3 short sentences, except for the card.
 
 Return JSON: {"message": "...", "ready_for_goal": true/false}"""
 
@@ -1694,6 +1699,98 @@ def _parse_json_dialog(text: str, message_key: str = "message") -> dict | None:
     return data
 
 
+def keep_one_question(text: str, final_question: str = "") -> str:
+    """Cut an onboarding reply after its first '?' when it asks more than one.
+
+    A reply ending with final_question (the goal card, the weekly proposal) is left
+    as is, so the closing question is never cut off.
+    """
+    body = (text or "").strip()
+    if body.count("?") <= 1:
+        return body
+    if final_question and body.endswith(final_question.strip()):
+        return body
+    cut = _first_top_level_question(body)
+    if cut is not None:
+        return body[: cut + 1]
+    first = body.index("?")
+    if body[:first].count("(") > body[:first].count(")"):
+        return body[: first + 1] + ")"
+    return body
+
+
+def _first_top_level_question(text: str) -> int | None:
+    """Index of the first '?' outside brackets and quotes, or None."""
+    depth = 0
+    in_guillemets = 0
+    in_quotes = False
+    for i, ch in enumerate(text):
+        if ch == "(":
+            depth += 1
+        elif ch == ")" and depth:
+            depth -= 1
+        elif ch == "«":
+            in_guillemets += 1
+        elif ch == "»" and in_guillemets:
+            in_guillemets -= 1
+        elif ch in "\"“”":
+            in_quotes = not in_quotes
+        elif ch == "?" and not depth and not in_guillemets and not in_quotes:
+            return i
+    return None
+
+
+_JSON_PREFILL = {"role": "assistant", "content": "{"}
+
+
+def generate_json_reply(
+    model_id: str,
+    messages: list[dict],
+    *,
+    system: str,
+    max_tokens: int = 400,
+) -> tuple[str, str]:
+    """Call Claude with the reply prefilled with "{" so it answers in JSON.
+
+    Returns (json_text, model_text): json_text has the "{" restored, model_text is what
+    the model itself wrote. A 400 on the prefilled call is retried once without it.
+    """
+    prefill = bool(messages) and messages[-1].get("role") == "user"
+    if prefill:
+        try:
+            text = claude_generate(
+                model_id,
+                messages + [_JSON_PREFILL],
+                system=system,
+                max_tokens=max_tokens,
+                cache_core=False,
+            ).strip()
+        except Exception as exc:
+            if getattr(exc, "status_code", None) != 400:
+                raise
+            log.warning("json prefill rejected model=%s: %s", model_id, exc)
+        else:
+            return (text if text.startswith("{") else "{" + text), text
+    text = claude_generate(
+        model_id,
+        messages,
+        system=system,
+        max_tokens=max_tokens,
+        cache_core=False,
+    ).strip()
+    return text, text
+
+
+def plain_text_reply(text: str, *json_keys: str) -> str:
+    """Model text that skipped the JSON wrapper but is still a usable reply, else ""."""
+    body = (text or "").strip()
+    if not body or body.startswith(("{", "```")):
+        return ""
+    if any(key in body for key in json_keys):
+        return ""
+    return body
+
+
 def _parse_vision_dialog_json(text: str) -> dict | None:
     data = _parse_json_dialog(text)
     if not data:
@@ -1746,27 +1843,22 @@ def _collect_vision_from_turns(turns: list[dict]) -> str:
     return "\n\n".join(parts)[:4000]
 
 
+def start_goal_dialog_after_dig(st: dict, vision_turns: list[dict]) -> None:
+    """Move from the dig stage to the goal dialog, keeping the draft she answers to."""
+    st["vision"] = _collect_vision_from_turns(vision_turns)
+    st["step"] = OB_GOAL_DIALOG
+    draft = _last_assistant_reply(vision_turns)
+    st["goal_turns"] = [{"role": "assistant", "content": draft[:2000]}] if draft else []
+    st["dont_know_streak"] = 0
+
+
 def _fallback_vision_reply(turns: list[dict], lang: str = "en") -> dict:
     # Dig-phase fallback only — never vision_detail_fallback / vision_ready
     # (old "day vision" onboarding templates).
-    user_texts = [t["content"] for t in turns if t.get("role") == "user"]
-    last = (user_texts[-1] if user_texts else "").strip()
     if _is_ru(lang):
-        if len(user_texts) >= 2 and len(last) >= 8:
-            msg = (
-                f"Зачем тебе именно это — {last[:80]}? "
-                "Что изменится в жизни, когда получится?"
-            )
-        else:
-            msg = "Зачем тебе это — что изменится в жизни, когда получится?"
+        msg = "Расскажи подробнее, что ты имеешь в виду?"
     else:
-        if len(user_texts) >= 2 and len(last) >= 8:
-            msg = (
-                f"Why does {last[:80]} matter to you? "
-                "What changes in your life when it works out?"
-            )
-        else:
-            msg = "Why does this matter to you — what changes when it works out?"
+        msg = "Tell me a bit more about what you mean."
     return {"message": msg, "ready_for_goal": False}
 
 
@@ -1858,22 +1950,28 @@ async def _claude_vision_dialog(
     if extra_user_hint:
         messages.append({"role": "user", "content": extra_user_hint})
 
-    system = system_prompt or WHY_DIG_SYSTEM
+    final_question = s("goal_final_question", lang)
+    system = (system_prompt or WHY_DIG_SYSTEM).replace("{final_question}", final_question)
 
     def call() -> dict:
         for mid in model_names:
             try:
-                text = claude_generate(
+                text, model_text = generate_json_reply(
                     mid,
                     _messages_with_lang(messages, lang),
                     system=_system_with_lang(system, lang),
-                    max_tokens=400,
-                    cache_core=False,
-                ).strip()
+                )
                 parsed = _parse_vision_dialog_json(text)
                 if parsed:
+                    parsed["message"] = keep_one_question(parsed["message"], final_question)
                     return parsed
                 log.warning("vision_dialog bad JSON model=%s raw=%s", mid, text[:400])
+                plain = plain_text_reply(model_text, "ready_for_goal")
+                if plain:
+                    return {
+                        "message": keep_one_question(plain, final_question),
+                        "ready_for_goal": False,
+                    }
             except Exception as e:
                 log.warning("vision_dialog %s: %s", mid, e, exc_info=True)
         return _fallback_vision_reply(vision_turns, lang)
@@ -2337,17 +2435,25 @@ async def _claude_goal_dialog(
     def call() -> dict:
         for mid in model_names:
             try:
-                text = claude_generate(
+                text, model_text = generate_json_reply(
                     mid,
                     _messages_with_lang(messages, lang),
                     system=system,
-                    max_tokens=400,
-                    cache_core=False,
-                ).strip()
+                )
                 parsed = _parse_goal_dialog_json(text)
                 if parsed:
+                    parsed["message"] = keep_one_question(
+                        parsed["message"], s("goal_final_question", lang)
+                    )
                     return parsed
                 log.warning("goal_dialog bad JSON model=%s raw=%s", mid, text[:400])
+                plain = plain_text_reply(model_text, '"ready"', '"goal"')
+                if plain:
+                    return {
+                        "message": keep_one_question(plain, s("goal_final_question", lang)),
+                        "ready": False,
+                        "goal": "",
+                    }
             except Exception as e:
                 log.warning("goal_dialog %s: %s", mid, e, exc_info=True)
         return _fallback_goal_reply(goal_turns, lang)
@@ -2441,17 +2547,25 @@ async def _claude_weekly_tactics_dialog(
     def call() -> dict:
         for mid in model_names:
             try:
-                text = claude_generate(
+                text, model_text = generate_json_reply(
                     mid,
                     _messages_with_lang(messages, lang),
                     system=system,
-                    max_tokens=400,
-                    cache_core=False,
-                ).strip()
+                )
                 parsed = _parse_weekly_change_json(text)
                 if parsed:
+                    parsed["message"] = keep_one_question(
+                        parsed["message"], s("weekly_confirm_question", lang)
+                    )
                     return parsed
                 log.warning("weekly_tactics_dialog bad JSON model=%s raw=%s", mid, text[:400])
+                plain = plain_text_reply(model_text, '"ready"', '"weekly_goal"')
+                if plain:
+                    return {
+                        "message": keep_one_question(plain, s("weekly_confirm_question", lang)),
+                        "ready": False,
+                        "weekly_goal": "",
+                    }
             except Exception as e:
                 log.warning("weekly_tactics_dialog %s: %s", mid, e, exc_info=True)
         log.error(
@@ -3403,13 +3517,13 @@ async def handle_onboarding_turn(
         if _looks_like_concrete_goal(raw):
             dig_hint = (
                 "She already named a concrete goal. If her words already show why it matters, "
-                "do not ask why: move to a draft. Ask one question only if a fact needed for "
-                "the draft is missing. Set ready_for_goal=true once the intention is clear."
+                "do not ask why: send the goal card. Ask one question only if a fact needed for "
+                "the card is missing. Set ready_for_goal=true once the intention is clear."
                 if not _is_ru(lang)
                 else (
                     "Она уже назвала конкретную цель. Если из её слов уже понятно, зачем ей это, "
-                    "не спрашивай зачем: переходи к черновику. Один вопрос — только если для "
-                    "черновика не хватает факта. ready_for_goal=true, как только намерение ясно."
+                    "не спрашивай зачем: присылай карточку цели. Один вопрос — только если для "
+                    "карточки не хватает факта. ready_for_goal=true, как только намерение ясно."
                 )
             )
         vis_hint = dig_hint or _switch_approach_hint(lang)
@@ -3446,10 +3560,7 @@ async def handle_onboarding_turn(
         turns.append({"role": "assistant", "content": reply[:2000]})
 
         if result.get("ready_for_goal"):
-            st["vision"] = _collect_vision_from_turns(turns)
-            st["step"] = OB_GOAL_DIALOG
-            st["goal_turns"] = []
-            st["dont_know_streak"] = 0
+            start_goal_dialog_after_dig(st, turns)
             await msg.reply_text(reply)
         else:
             await msg.reply_text(reply)
