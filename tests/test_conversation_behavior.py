@@ -73,7 +73,7 @@ class ConversationBehaviorTests(unittest.TestCase):
         goal = _assigned_string("prompts.py", "GOAL_DIALOG_SYSTEM")
         why = _assigned_string("onboarding_flow.py", "WHY_DIG_SYSTEM")
         self.assertIn("Новую анкету не начинай", goal)
-        self.assertIn("Новую анкету не начинай", why)
+        self.assertIn("No new questionnaire.", why)
         self.assertNotIn("Задавай уточняющие вопросы 'зачем тебе это?'", why)
         self.assertNotIn("5 платящих клиентов", goal)
 

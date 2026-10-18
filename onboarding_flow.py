@@ -48,25 +48,19 @@ FIRST_PAIN_QUESTION_SYSTEM = """Ты Спейс. Пользователь тол
 Один вопрос, 1-2 предложения максимум.
 Ответь только текстом вопроса, без JSON и кавычек."""
 
-WHY_DIG_SYSTEM = """Ты Спейс. Помогаешь понять, зачем человеку то, что он сам назвал целью.
-Сначала пойми реплику: цель, желание, факт, эмоция, препятствие или просьба о помощи.
-На эмоцию, препятствие и проблему ответь по содержанию. Не записывай их как цель.
-Вопрос не обязателен. Задавай его только если он следует из конкретных слов человека, и не больше одного.
-Не используй заготовки вроде «что это даёт тебе на самом деле» и «как ты будешь чувствовать себя через полгода».
-Если человек не понял вопрос — признай, что формулировка не удалась, объясни проще или смени подход. Новую анкету не начинай.
-Не уговаривай заниматься тем, от чего он уже отказался.
-Не переходи к формулировке цели, пока не ясна суть того, что он сам хочет.
-Когда суть ясна — предложи черновик цели на 12 недель своими словами, без формулы «Получается, твоя цель: … Так?».
+WHY_DIG_SYSTEM = """You are Space, a friend in Telegram. She has named something she wants. Work out what she wants, only as far as needed to draft a 12-week goal. Reply in her language, plain text, no markdown, no coach-speak.
 
-ЗАПРЕЩЕНО: слова 'мечта', 'представь через 3 месяца', коуч-язык, markdown.
-ЗАПРЕЩЕНО повторять шаблоны старого онбординга:
-'что в этом дне для тебя самое важное',
-'Слышу тебя — картина уже вырисовывается',
-'Окей, из всего этого — что самое важное реализовать за эти 12 недель'.
-Максимум 3 предложения.
+First tell what her last message is: a goal, a wish, a fact, a feeling, an obstacle, or a request for help. Answer a feeling, an obstacle or a problem on the merits; never record it as a goal.
+If her own words already show what she wants and why, do not ask why. Move to a draft.
+Ask one question at most, and only if it follows from her exact words and the draft would be wrong without the answer. A reply without a question is fine.
+Never use stock questions ("what do you really want", "what is behind it", "what makes you feel fulfilled"). Never retell her words in nicer words. Never explain her to herself.
+If she did not understand a question, say your wording was off and ask it simpler or change approach. No new questionnaire. If she is irritated by a question, drop it and change approach; do not explain why it was useful.
+A refusal ("I don't want...") is a limit: keep it and do not pitch that path again.
+Do not demand revenue or paying-user numbers while she is still exploring the idea.
+When the intention is clear, give a short draft of a 12-week goal in her words and set ready_for_goal=true. No "So your goal is...?" formula.
+At most 3 short sentences.
 
-Верни JSON: {"message": "...", "ready_for_goal": true/false}
-ready_for_goal=true только когда человек выразил намерение, которое можно считать целью, и можно переходить к формулировке на 12 недель."""
+Return JSON: {"message": "...", "ready_for_goal": true/false}"""
 
 DONT_KNOW_EXIT_SYSTEM = """Ты Спейс. Пользователь несколько раз ответил 'не знаю'.
 Скажи тепло но честно что не можешь помочь если человек сам не готов
@@ -3389,9 +3383,9 @@ async def handle_onboarding_turn(
             prev_reply = _last_assistant_reply(turns)
             if prev_reply and _questions_roughly_same(reply, prev_reply):
                 reply = (
-                    "А если без цели — что в жизни сейчас сильнее всего напрягает или тянет?"
+                    "Давай проще: над чем ты хочешь поработать ближайшие 12 недель? Скажи одной фразой."
                     if _is_ru(lang)
-                    else "Forget the goal label — what in life feels most heavy or pulling right now?"
+                    else "Let's keep it simple: what do you want to work on for the next 12 weeks? One sentence is enough."
                 )
             turns.append({"role": "assistant", "content": reply[:2000]})
             await msg.reply_text(reply)
@@ -3402,12 +3396,14 @@ async def handle_onboarding_turn(
         dig_hint = ""
         if _looks_like_concrete_goal(raw):
             dig_hint = (
-                "User already named a concrete goal. Dig into WHY — "
-                "ask what changes emotionally when it happens. ready_for_goal=false until essence is clear."
+                "She already named a concrete goal. If her words already show why it matters, "
+                "do not ask why: move to a draft. Ask one question only if a fact needed for "
+                "the draft is missing. Set ready_for_goal=true once the intention is clear."
                 if not _is_ru(lang)
                 else (
-                    "Пользователь уже назвал конкретную цель. Копай ЗАЧЕМ — "
-                    "что изменится эмоционально когда это случится. ready_for_goal=false пока суть не ясна."
+                    "Она уже назвала конкретную цель. Если из её слов уже понятно, зачем ей это, "
+                    "не спрашивай зачем: переходи к черновику. Один вопрос — только если для "
+                    "черновика не хватает факта. ready_for_goal=true, как только намерение ясно."
                 )
             )
         vis_hint = dig_hint or _switch_approach_hint(lang)
@@ -3433,9 +3429,9 @@ async def handle_onboarding_turn(
                 reply = (result.get("message") or "").strip() or reply
             if prev_reply and _questions_roughly_same(reply, prev_reply):
                 reply = (
-                    "А если без цели — что в жизни сейчас сильнее всего напрягает?"
+                    "Давай проще: над чем ты хочешь поработать ближайшие 12 недель? Скажи одной фразой."
                     if _is_ru(lang)
-                    else "Forget the goal label — what in life feels heaviest right now?"
+                    else "Let's keep it simple: what do you want to work on for the next 12 weeks? One sentence is enough."
                 )
                 result = {"message": reply, "ready_for_goal": False}
             if _user_turn_count(turns) >= _DIG_USER_TURN_CAP:
@@ -3481,9 +3477,9 @@ async def handle_onboarding_turn(
             prev_reply = _last_assistant_reply(turns)
             if prev_reply and _questions_roughly_same(reply, prev_reply):
                 reply = (
-                    "А если без цели — что в жизни сейчас сильнее всего напрягает или тянет?"
+                    "Давай проще: над чем ты хочешь поработать ближайшие 12 недель? Скажи одной фразой."
                     if _is_ru(lang)
-                    else "Forget the goal label — what in life feels most heavy or pulling right now?"
+                    else "Let's keep it simple: what do you want to work on for the next 12 weeks? One sentence is enough."
                 )
             turns.append({"role": "assistant", "content": reply[:2000]})
             await msg.reply_text(reply)
