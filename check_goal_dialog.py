@@ -56,7 +56,13 @@ STOP_PHRASES = (
     "request for help",
     "я спросила другое",
     "i asked something else",
+    "нереально",
+    "невозможно",
+    "not going to happen",
+    "unrealistic",
+    "impossible",
 )
+CARD_LABELS = ("goal card", "цель:")
 YES_WORDS = {"да", "yes"}
 MASCULINE_RU = re.compile(
     r"(?:^|[.!?…]\s+)(Понял|Услышал|Записал|Перегнул|Согласен|Рад)\b"
@@ -347,6 +353,9 @@ def _check(reply: BotReply, lang: str, confirm_turn: bool) -> None:
     for phrase in STOP_PHRASES:
         if phrase in low:
             reply.failures.append(f"stop phrase: «{phrase}»")
+    for label in CARD_LABELS:
+        if label in low:
+            reply.failures.append(f"card heading or label: «{label}»")
     if reply.stage in ("goal", "weekly") and reply.flags.get("ready") and not confirm_turn:
         reply.failures.append("ready=true before a confirmation turn")
     if lang == "en" and has_cyrillic(msg):

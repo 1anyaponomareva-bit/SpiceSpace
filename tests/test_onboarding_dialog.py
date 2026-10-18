@@ -220,5 +220,37 @@ class JsonPrefillTests(unittest.TestCase):
         self.assertEqual(sent[1][-1], {"role": "assistant", "content": "{"})
 
 
+class EnglishPromptTests(unittest.TestCase):
+    def test_english_onboarding_prompts_have_no_cyrillic(self) -> None:
+        from lang_context import has_cyrillic
+        from prompts import GOAL_DIALOG_SYSTEM, WEEKLY_TACTICS_DIALOG_SYSTEM
+
+        lang = "en"
+        prompts = {
+            "WHY_DIG_SYSTEM": ob.WHY_DIG_SYSTEM.replace(
+                "{final_question}", ob.s("goal_final_question", lang)
+            ),
+            "GOAL_DIALOG_SYSTEM": GOAL_DIALOG_SYSTEM.format(
+                vision="Launch a Telegram bot",
+                dialog_history="Space: card",
+                prior_dialog="none",
+                final_question=ob.s("goal_final_question", lang),
+            ),
+            "WEEKLY_TACTICS_DIALOG_SYSTEM": WEEKLY_TACTICS_DIALOG_SYSTEM.format(
+                main_goal="Launch a Telegram bot",
+                user_message="",
+                dialog_history="",
+                confirm_question=ob.s("weekly_confirm_question", lang),
+            ),
+        }
+        for name, text in prompts.items():
+            system = ob._system_with_lang(text, lang)
+            with self.subTest(name):
+                self.assertFalse(
+                    has_cyrillic(system),
+                    [line for line in system.splitlines() if has_cyrillic(line)],
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
