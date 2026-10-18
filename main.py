@@ -6815,7 +6815,14 @@ def _weekly_change_awaiting_confirm(st: dict) -> bool:
         if turn.get("role") != "assistant":
             continue
         last = str(turn.get("content") or "").lower()
-        return "верно?" in last or "записываю:" in last
+        markers = (
+            "верно?",
+            "записываю:",
+            "right?",
+            ob.s("weekly_confirm_question", "ru").lower(),
+            ob.s("weekly_confirm_question", "en").lower(),
+        )
+        return any(m in last for m in markers)
     return False
 
 

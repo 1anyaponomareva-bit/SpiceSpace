@@ -275,6 +275,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "wrote_down": "Записала ✨",
     "right": "Верно?",
     "goal_final_question": "Хочется, чтобы это случилось?",
+    "weekly_confirm_question": "Подходит?",
     "great": "Отлично 🎯",
     "got_it": "Понятно 💙",
     "okay": "Хорошо 💙",
@@ -505,6 +506,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "wrote_down": "Got it ✨",
     "right": "Right?",
     "goal_final_question": "Do you want that to happen?",
+    "weekly_confirm_question": "Does that work?",
     "great": "Great 🎯",
     "got_it": "Got it 💙",
     "okay": "Okay 💙",
@@ -2412,11 +2414,11 @@ async def _claude_weekly_tactics_dialog(
     if not messages:
         if _is_ru(lang):
             seed = (
-                f"Предложи 2-3 варианта задач на первую неделю для цели: {main_goal}"
+                f"Предложи одну цель на эту неделю для цели: {main_goal}"
             )
         else:
             seed = (
-                f"Suggest 2-3 first-week tasks for this goal: {main_goal}"
+                f"Propose one goal for this week for this goal: {main_goal}"
             )
         messages = [{"role": "user", "content": seed}]
     if extra_user_hint:
@@ -2431,6 +2433,7 @@ async def _claude_weekly_tactics_dialog(
             main_goal=mg,
             user_message=(user_message or "").strip()[:2000] or "",
             dialog_history=dialog_history,
+            confirm_question=s("weekly_confirm_question", lang),
         ),
         lang,
     )
@@ -3278,13 +3281,13 @@ async def handle_onboarding_turn(
         prev_reply = _last_assistant_reply(turns)
         wt_hint = (
             "Do not repeat your last reply. Use what the user wrote. "
-            "ready=true ONLY if user clearly said yes/да after your «Right?». "
-            "Otherwise propose 2-3 options or one «Записываю: X. Верно?» with ready=false."
+            "ready=true ONLY if she clearly agreed to your concrete proposal. "
+            f"Otherwise propose one weekly goal and ask «{s('weekly_confirm_question', lang)}» with ready=false."
             if not _is_ru(lang)
             else (
                 "Не повторяй прошлый ответ. Учти что написала пользователь. "
-                "ready=true ТОЛЬКО если после твоего «Верно?» она явно написала да/верно. "
-                "Иначе предложи 2-3 варианта или одно «Записываю: X. Верно?» с ready=false."
+                "ready=true ТОЛЬКО если она явно согласилась с твоим конкретным предложением. "
+                f"Иначе предложи одну цель недели и спроси «{s('weekly_confirm_question', lang)}» с ready=false."
             )
         )
         async with typing_while(context.bot, cid):
