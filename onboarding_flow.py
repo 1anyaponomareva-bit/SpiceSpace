@@ -274,6 +274,7 @@ STRINGS: dict[str, dict[str, str]] = {
     ),
     "wrote_down": "Записала ✨",
     "right": "Верно?",
+    "goal_final_question": "Хочется, чтобы это случилось?",
     "great": "Отлично 🎯",
     "got_it": "Понятно 💙",
     "okay": "Хорошо 💙",
@@ -503,6 +504,7 @@ STRINGS: dict[str, dict[str, str]] = {
     ),
     "wrote_down": "Got it ✨",
     "right": "Right?",
+    "goal_final_question": "Do you want that to happen?",
     "great": "Great 🎯",
     "got_it": "Got it 💙",
     "okay": "Okay 💙",
@@ -2325,6 +2327,7 @@ async def _claude_goal_dialog(
             vision=vision_label,
             dialog_history=dialog_history,
             prior_dialog=prior[:2000],
+            final_question=s("goal_final_question", lang),
         ),
         lang,
     )
