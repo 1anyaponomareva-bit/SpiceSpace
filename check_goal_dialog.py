@@ -61,7 +61,15 @@ STOP_PHRASES = (
     "not going to happen",
     "unrealistic",
     "impossible",
+    "won't happen",
+    "won’t happen",
+    "can't happen",
+    "can’t happen",
+    "не выйдет",
+    "не получится",
+    "не случится",
 )
+MIN_CARD_LINES = 3
 CARD_LABELS = ("goal card", "цель:")
 YES_WORDS = {"да", "yes"}
 MASCULINE_RU = re.compile(
@@ -356,6 +364,13 @@ def _check(reply: BotReply, lang: str, confirm_turn: bool) -> None:
     for label in CARD_LABELS:
         if label in low:
             reply.failures.append(f"card heading or label: «{label}»")
+    final = ob.s("goal_final_question", lang)
+    if reply.stage != "weekly" and msg.endswith(final):
+        lines = [line for line in msg.splitlines() if line.strip()]
+        if len(lines) < MIN_CARD_LINES:
+            reply.failures.append(
+                f"card has {len(lines)} line(s), expected at least {MIN_CARD_LINES}"
+            )
     if reply.stage in ("goal", "weekly") and reply.flags.get("ready") and not confirm_turn:
         reply.failures.append("ready=true before a confirmation turn")
     if lang == "en" and has_cyrillic(msg):
