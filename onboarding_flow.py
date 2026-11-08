@@ -64,7 +64,7 @@ If she did not understand, say your wording was off and ask simpler. No new ques
 If she is annoyed or asks you to just answer, draft nothing: say the question missed, in a few words, then ask one simple open question about what she wants to work on in 12 weeks.
 A refusal is a limit: do not pitch that path again.
 Do not ask for revenue numbers while she is exploring.
-When the intention is clear, send a goal card instead of asking more, in her words: line 1 the goal as a result she can check at week 12; line 2 what she will see if it worked; line 3 her time budget, only if she already said it. Last line: {final_question} The card is plain text: no heading, no labels like 'Goal:', second person ('you'), the three lines on separate lines, then the question. Do not recap what she said before the card. Set ready_for_goal=true. Use only facts from the dialog; never invent a goal, a field or a number.
+When the intention is clear, send a goal card instead of asking more: one complete, grammatical sentence in second person that starts with "By week 12" in her language and names a concrete result she can check (what will exist, how many, or what she will be doing). No fragments, no lists of conditions, and do not describe her situation, country, family or feelings in the card. If she already named her time budget, add it as a second short line ("Time: 2-3 hours a day" in her language). Last line: {final_question} The card is plain text: no heading, no labels like 'Goal:'. Do not recap what she said before the card. Set ready_for_goal=true. Use only facts from the dialog; never invent a goal, a field or a number.
 At most 3 short sentences, except for the card.
 
 Return JSON: {"message": "...", "ready_for_goal": true/false}"""
@@ -281,7 +281,7 @@ STRINGS: dict[str, dict[str, str]] = {
     ),
     "wrote_down": "Записала ✨",
     "right": "Верно?",
-    "goal_final_question": "Хочется, чтобы это случилось?",
+    "goal_final_question": "Подходит такая цель?",
     "weekly_confirm_question": "Подходит?",
     "great": "Отлично 🎯",
     "got_it": "Понятно 💙",
@@ -513,7 +513,7 @@ STRINGS: dict[str, dict[str, str]] = {
     ),
     "wrote_down": "Got it ✨",
     "right": "Right?",
-    "goal_final_question": "Do you want that to happen?",
+    "goal_final_question": "Does this goal work for you?",
     "weekly_confirm_question": "Does that work?",
     "great": "Great 🎯",
     "got_it": "Got it 💙",
@@ -1780,10 +1780,15 @@ def generate_json_reply(
             log.warning("json prefill rejected model=%s: %s", model_id, exc)
         else:
             return (text if text.startswith("{") else "{" + text), text
+    # Without prefill the model often drops the JSON wrapper — say it explicitly.
+    json_system = (
+        system
+        + "\n\nAnswer with the JSON object only: start with { and end with }. No text before or after it."
+    )
     text = claude_generate(
         model_id,
         messages,
-        system=system,
+        system=json_system,
         max_tokens=max_tokens,
         cache_core=False,
         feature=f"{feature}_retry" if prefill else feature,
@@ -1980,9 +1985,10 @@ async def _claude_vision_dialog(
                 log.warning("vision_dialog bad JSON model=%s raw=%s", mid, text[:400])
                 plain = plain_text_reply(model_text, "ready_for_goal")
                 if plain:
+                    # Plain text that ends with the card question is the goal card.
                     return {
                         "message": keep_one_question(plain, final_question),
-                        "ready_for_goal": False,
+                        "ready_for_goal": final_question.rstrip("?") in plain,
                     }
             except Exception as e:
                 log.warning("vision_dialog %s: %s", mid, e, exc_info=True)
@@ -3738,6 +3744,28 @@ async def handle_onboarding_turn(
 
         turns.append({"role": "assistant", "content": reply[:2000]})
 
+        card_shown = bool(prev_reply) and s("goal_final_question", lang).rstrip("?") in prev_reply
+        if (
+            result.get("ready")
+            and result.get("goal")
+            and card_shown
+            and _is_goal_confirm_yes(raw)
+        ):
+            # She already said yes to the card — save it, don't ask "Верно?" a second time.
+            st["main_goal"] = str(result["goal"]).strip()[:2000]
+            await _dispatch_goal_confirm_after(
+                update,
+                context,
+                cid,
+                st,
+                onboarding,
+                histories,
+                user_profiles,
+                subscribers,
+                model_names,
+                "main_to_weekly",
+            )
+            return
         if (
             result.get("ready")
             and result.get("goal")
