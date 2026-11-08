@@ -1527,6 +1527,9 @@ def user_wants_onboarding_pause(raw: str) -> bool:
     }
     if low in exact:
         return True
+    # Длинный ответ по делу — не просьба остановиться, даже если в нём есть «стоп» или «не сейчас».
+    if len(low.split()) > 5:
+        return False
     phrases = (
         "не сейчас",
         "not now",
@@ -1539,7 +1542,8 @@ def user_wants_onboarding_pause(raw: str) -> bool:
         "стоп",
         "stop",
     )
-    return any(p in low for p in phrases)
+    padded = f" {low} "
+    return any(f" {p} " in padded for p in phrases)
 
 
 def onboarding_pause_message(lang: str = "en") -> str:

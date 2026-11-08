@@ -5004,9 +5004,13 @@ def _user_wants_flow_escape(raw: str) -> bool:
         return False
     if low in _FLOW_ESCAPE_EXACT:
         return True
+    # Только короткая команда и целое слово: «вижу выход в вайбкодинге» — не выход.
+    words = low.split()
+    if len(words) > 4:
+        return False
     return any(
-        phrase in low
-        for phrase in ("хватит", "отмена", "cancel", "стоп", "выход", "stop", "exit")
+        w in ("хватит", "отмена", "cancel", "стоп", "выход", "выйти", "stop", "exit")
+        for w in words
     )
 
 
