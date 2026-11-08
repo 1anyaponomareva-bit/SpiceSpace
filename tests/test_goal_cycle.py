@@ -39,7 +39,11 @@ class FakeDB:
 
 def _load(db: FakeDB) -> dict:
     tree = ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))
-    nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in _NAMES]
+    nodes = [
+        n for n in tree.body
+        if (isinstance(n, ast.FunctionDef) and n.name in _NAMES)
+        or (isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "_CYCLE_DAY_FLAG" for t in n.targets))
+    ]
     ns: dict = {
         "re": re,
         "db_store": db,
@@ -74,6 +78,21 @@ class GoalCycleTests(unittest.TestCase):
         self.assertEqual(profile["current_week"], 1)
         self.assertIn("✅ Цель на 12 недель зафиксирована", card)
         self.assertIn("неделя 1 из 12", card)
+
+    def test_new_cycle_keeps_date_flags_and_drops_day_flags(self):
+        ns = _load(FakeDB())
+        profile = {"cycle_flags": {
+            "weekly_sent_day_13": True,
+            "new_week_dialog_day_160": True,
+            "sub_expired_2026-07-20": True,
+            "trial_sub_msg3_2026-06-12": True,
+            "weekly_sent_2026-11-04": True,
+        }}
+        fields = ns["_new_goal_cycle_fields"](profile)
+        self.assertEqual(
+            set(fields["cycle_flags"]),
+            {"sub_expired_2026-07-20", "trial_sub_msg3_2026-06-12", "weekly_sent_2026-11-04"},
+        )
 
     def test_same_goal_keeps_cycle_and_no_card(self):
         db = FakeDB()

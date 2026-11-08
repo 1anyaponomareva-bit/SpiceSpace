@@ -4385,14 +4385,24 @@ def _goal_card(profile: dict, *, main_goal: str = "", weekly_goal: str = "") -> 
     return "\n\n".join(parts)
 
 
+_CYCLE_DAY_FLAG = re.compile(r"_day_\d+$")
+
+
 def _new_goal_cycle_fields(profile: dict) -> dict:
-    """A new 12-week goal starts a new cycle: week 1 from today (her local date)."""
+    """A new 12-week goal starts a new cycle: week 1 from today (her local date).
+
+    Only flags keyed by program day (weekly_sent_day_13, new_week_dialog_day_20, …) are
+    cleared, because day numbers restart. Date-keyed flags (subscription, trial messages,
+    weekly_sent_2026-…) stay, or those messages would be sent again.
+    """
     today = db_store._profile_local_today(profile)
+    flags = profile.get("cycle_flags") if isinstance(profile.get("cycle_flags"), dict) else {}
+    kept = {k: v for k, v in flags.items() if not _CYCLE_DAY_FLAG.search(str(k))}
     return {
         "cycle_start_date": today,
         "goal_start_date": today,
         "current_week": 1,
-        "cycle_flags": {},
+        "cycle_flags": kept,
         "milestones_shown": {},
     }
 
