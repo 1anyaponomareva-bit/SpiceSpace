@@ -25,6 +25,7 @@ SUBSCRIBERS_PATH = DATA_DIR / "subscribers.json"
 DAILY_SUMMARIES_PATH = DATA_DIR / "daily_summaries.json"
 FLOW_STATE_PATH = DATA_DIR / "flow_state.json"
 FLOW_STATE_ROLE = "flow_state"
+CLAUDE_USAGE_PATH = DATA_DIR / "claude_usage.jsonl"
 
 _base_url = ""
 _service_key = ""
@@ -1320,3 +1321,31 @@ def delete_all_tasks(telegram_id: int | str) -> None:
     key = str(telegram_id)
     if _use_supabase:
         _request("DELETE", f"tasks?telegram_id=eq.{key}")
+
+
+def save_claude_usage(row: dict) -> None:
+    """Persist one Claude call (feature, model, tokens, cost) so totals survive deploys.
+
+    Supabase table `claude_usage`; without Supabase, appends to claude_usage.jsonl.
+    Never raises: losing one usage row must not break a reply.
+    """
+    record = {k: row.get(k) for k in (
+        "user_id", "feature", "model", "input_tokens", "output_tokens",
+        "cache_read_tokens", "cache_write_tokens", "cost_usd",
+    )}
+    try:
+        uid = str(record.get("user_id") or "").strip()
+        record["user_id"] = int(uid) if uid.lstrip("-").isdigit() else None
+        if _use_supabase:
+            _request(
+                "POST",
+                "claude_usage",
+                json=record,
+                headers={**_headers(), "Prefer": "return=minimal"},
+            )
+            return
+        record["created_at"] = datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds")
+        with CLAUDE_USAGE_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        log.warning("save_claude_usage failed: %s", e)

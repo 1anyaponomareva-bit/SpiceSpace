@@ -16,6 +16,38 @@ REMINDER_CLAUDE_CALLS = 0
 
 _USAGE: dict[str, dict[str, int]] = {}
 
+# USD per 1M tokens: input, output, cache read, cache write (5-minute TTL = 1.25x input).
+MODEL_PRICES: dict[str, dict[str, float]] = {
+    "claude-sonnet-4-5": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 3.75},
+    "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_read": 0.10, "cache_write": 1.25},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125},
+}
+
+
+def usage_cost_usd(
+    model: str,
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_read_input_tokens: int = 0,
+    cache_creation_input_tokens: int = 0,
+) -> float:
+    """Dollar cost of one call; 0.0 for a model missing from MODEL_PRICES.
+
+    The API may report a dated id (claude-haiku-4-5-20251001); the date suffix is ignored.
+    """
+    model = re.sub(r"-\d{8}$", "", str(model or ""))
+    prices = MODEL_PRICES.get(model)
+    if not prices:
+        return 0.0
+    return (
+        int(input_tokens or 0) * prices["input"]
+        + int(output_tokens or 0) * prices["output"]
+        + int(cache_read_input_tokens or 0) * prices["cache_read"]
+        + int(cache_creation_input_tokens or 0) * prices["cache_write"]
+    ) / 1_000_000
+
 
 def record_usage(
     feature: str,

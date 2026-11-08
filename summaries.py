@@ -280,6 +280,7 @@ def generate_weekly_summary(
                 system="Отвечай только валидным JSON.",
                 max_tokens=600,
                 cache_core=False,
+                feature="weekly_summary",
             )
             m = re.search(r"\{[\s\S]*\}", raw)
             if not m:
@@ -343,6 +344,7 @@ def update_personality_profile(
                 system="Отвечай только валидным JSON.",
                 max_tokens=500,
                 cache_core=False,
+                feature="personality",
             )
             m = re.search(r"\{[\s\S]*\}", raw)
             if not m:
@@ -399,6 +401,7 @@ def extract_and_save_facts(
                 system="Отвечай только валидным JSON массивом.",
                 max_tokens=200,
                 cache_core=False,
+                feature="facts",
             )
             raw = raw.strip()
             m = re.search(r"\[[\s\S]*\]", raw)
@@ -466,6 +469,7 @@ def save_onboarding_summary(
                 system=onboarding_summary_system(lang),
                 max_tokens=400,
                 cache_core=False,
+                feature="onb_summary",
             )
             parsed = _parse_summary_json(raw)
             if parsed:

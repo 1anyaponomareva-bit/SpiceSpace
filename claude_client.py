@@ -5,13 +5,31 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+import threading
 
 import anthropic
 
-from claude_budget import DYNAMIC_MARKER, is_billing_error, record_usage, usage_report
+from claude_budget import (
+    DYNAMIC_MARKER,
+    is_billing_error,
+    record_usage,
+    usage_cost_usd,
+    usage_report,
+)
 from lang_context import empty_fallback, refusal_fallback
 
 log = logging.getLogger("coach_bot")
+
+
+def _save_usage_row(row: dict) -> None:
+    import db as db_store
+
+    db_store.save_claude_usage(row)
+
+
+def persist_usage(row: dict) -> None:
+    """Write the usage row off the reply path; tests replace this function."""
+    threading.Thread(target=_save_usage_row, args=(row,), daemon=True).start()
 
 
 class ClaudeBillingError(RuntimeError):
@@ -41,14 +59,43 @@ def configure() -> None:
     get_client()
 
 
+CHAT_MODEL = "claude-sonnet-5-5"
+SCHEDULE_MODEL = "claude-haiku-5-5"
+# Older generation kept as a last-resort fallback only.
+LEGACY_FALLBACKS = ("claude-sonnet-4-5", "claude-haiku-4-5")
+
+
 def select_model_id() -> str:
     preferred = os.getenv("CLAUDE_MODEL", "").strip()
     if preferred:
         return preferred
-    return "claude-sonnet-4-5"
+    return CHAT_MODEL
 
 
-SCHEDULE_MODEL = "claude-haiku-4-5"
+def is_new_generation(model_id: str) -> bool:
+    """Claude 5 family: no assistant prefill, no temperature, thinking/effort controls."""
+    mid = str(model_id or "")
+    return mid.startswith(("claude-sonnet-5", "claude-haiku-5", "claude-opus-5", "claude-fable"))
+
+
+def supports_prefill(model_id: str) -> bool:
+    return not is_new_generation(model_id)
+
+
+def model_request_options(model_id: str) -> dict:
+    """Per-model request fields.
+
+    Replies here are short chat messages, often with small max_tokens (12-400), so
+    extended thinking stays off: it would spend those tokens before any text appears.
+    Effort (CLAUDE_EFFORT, default low) keeps answers short and cheap.
+    """
+    mid = str(model_id or "")
+    effort = os.getenv("CLAUDE_EFFORT", "").strip() or "low"
+    if mid.startswith("claude-sonnet-5-5"):
+        return {"thinking": {"type": "between_tools"}, "output_config": {"effort": effort}}
+    if mid.startswith("claude-haiku-5-5"):
+        return {"thinking": {"type": "disabled"}, "output_config": {"effort": effort}}
+    return {}
 
 
 def schedule_model_chain(model_names: list[str] | None = None) -> list[str]:
@@ -71,10 +118,7 @@ def build_model_chain(primary: str) -> list[str]:
         if part not in seen:
             names.append(part)
             seen.add(part)
-    for mid in (
-        "claude-sonnet-4-5",
-        "claude-haiku-4-5",
-    ):
+    for mid in (CHAT_MODEL, *LEGACY_FALLBACKS):
         if mid not in seen:
             names.append(mid)
             seen.add(mid)
@@ -170,6 +214,7 @@ def generate(
         "model": model_id,
         "max_tokens": max_tokens,
         "messages": messages,
+        **model_request_options(model_id),
     }
     if system:
         kwargs["system"] = _system_blocks(system, cache_core=cache_core)
@@ -204,10 +249,30 @@ def generate(
         cache_read_input_tokens=read,
         cache_creation_input_tokens=created,
     )
+    served_model = str(getattr(response, "model", "") or model_id)
+    cost = usage_cost_usd(
+        served_model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_input_tokens=read,
+        cache_creation_input_tokens=created,
+    )
+    persist_usage(
+        {
+            "user_id": user_id,
+            "feature": feature,
+            "model": served_model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_tokens": read,
+            "cache_write_tokens": created,
+            "cost_usd": round(cost, 6),
+        }
+    )
     log.info(
         "claude_usage user=%s feature=%s caller=%s model=%s system_tokens=%s "
         "cache_core=%s cache_read_input_tokens=%s cache_creation_input_tokens=%s "
-        "input_tokens=%s output_tokens=%s cache=%s system_head=%s",
+        "input_tokens=%s output_tokens=%s cache=%s cost_usd=%.5f system_head=%s",
         user_id,
         feature,
         caller,
@@ -219,6 +284,7 @@ def generate(
         input_tokens,
         output_tokens,
         cache_status,
+        cost,
         system_head,
     )
     log.info(usage_report())

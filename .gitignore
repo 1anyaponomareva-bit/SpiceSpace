@@ -21,3 +21,9 @@ subscribers.json
 user_profiles.json
 tasks.json
 daily_summaries.json
+
+# Local Claude usage log (Supabase table claude_usage in prod).
+claude_usage.jsonl
+
+# Test-bot dialog text log (LOG_DIALOG_TEXT=1). Contains what users write.
+dialog.log

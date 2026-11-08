@@ -7,8 +7,8 @@ Secrets: TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY in .env
 Optional .env:
   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
   TIMEZONE=Asia/Ho_Chi_Minh  (дефолт для новых пользователей)
-  CLAUDE_MODEL=claude-sonnet-4-5
-  CLAUDE_FALLBACK_MODELS=claude-haiku-4-5
+  CLAUDE_MODEL=claude-sonnet-5-5
+  CLAUDE_FALLBACK_MODELS=claude-haiku-5-5
   PORT=8080
   MINIAPP_ORIGINS=...
   MINI_APP_URL=...
@@ -919,6 +919,7 @@ async def _classify_goal_type(raw_goal: str, model_names: list[str]) -> str:
                     [{"role": "user", "content": prompt}],
                     system="Отвечай одним словом: measurable или qualitative.",
                     max_tokens=16,
+                    feature="classify_goal_type",
                 ).lower()
                 if "qual" in text:
                     return "qualitative"
@@ -3115,6 +3116,7 @@ async def _generate_trial_subscription_text(
                         [{"role": "user", "content": user}],
                         system=system,
                         max_tokens=220,
+                        feature="trial_subscription",
                     )
                 ).strip()
                 if text:
@@ -4269,6 +4271,7 @@ Rules:
                     system=system,
                     max_tokens=450,
                     lang=lang,
+                    feature="weekly_recap",
                 ).strip()
                 if text:
                     return sanitize_bot_reply(text)
@@ -4378,15 +4381,49 @@ async def _refresh_profile_timezone(chat_id: int, prof: dict) -> dict:
     return prof
 
 
+def _goal_card(profile: dict, *, main_goal: str = "", weekly_goal: str = "") -> str:
+    """Explicit confirmation appended to the reply, so she sees what was saved."""
+    en = str(profile.get("language_code") or "").lower().startswith("en")
+    parts: list[str] = []
+    if main_goal:
+        parts.append(
+            f"✅ Your 12-week goal is set:\n{main_goal}\n\nWe start today — week 1 of 12."
+            if en
+            else f"✅ Цель на 12 недель зафиксирована:\n{main_goal}\n\nСтартуем сегодня — неделя 1 из 12."
+        )
+    if weekly_goal:
+        parts.append(
+            f"📌 Goal for this week:\n{weekly_goal}" if en else f"📌 Цель на эту неделю:\n{weekly_goal}"
+        )
+    return "\n\n".join(parts)
+
+
+def _new_goal_cycle_fields(profile: dict) -> dict:
+    """A new 12-week goal starts a new cycle: week 1 from today (her local date)."""
+    today = db_store._profile_local_today(profile)
+    return {
+        "cycle_start_date": today,
+        "goal_start_date": today,
+        "current_week": 1,
+        "cycle_flags": {},
+        "milestones_shown": {},
+    }
+
+
 def _apply_chat_state_updates(
     chat_id: int,
     profile: dict,
     user_text: str,
     updates: dict,
-) -> None:
-    """Persist fields the main Claude reply already decided. No extra API call."""
+) -> str:
+    """Persist fields the main Claude reply already decided. No extra API call.
+
+    Returns a confirmation card for a newly saved goal ("" when nothing new was saved).
+    """
     if not isinstance(profile, dict) or not isinstance(updates, dict):
-        return
+        return ""
+    card_goal = ""
+    card_weekly = ""
     completed = updates.get("task_completed")
     if completed is True:
         _apply_task_outcome_to_profile(
@@ -4405,17 +4442,22 @@ def _apply_chat_state_updates(
     new_goal = str(updates.get("new_goal") or "").strip()
     current = str(profile.get("main_goal") or "").strip()
     if new_goal and can_lock_as_goal(new_goal) and not _same_saved_goal(new_goal, current):
-        saved = db_store.update_profile_field(chat_id, "main_goal", new_goal)
+        fields = {"main_goal": new_goal, **_new_goal_cycle_fields(profile)}
+        saved = db_store.update_profile(chat_id, fields)
         fresh = saved if isinstance(saved, dict) else None
         if isinstance(fresh, dict):
             profile.clear()
             profile.update(fresh)
             user_profiles[str(chat_id)] = fresh
         else:
-            profile["main_goal"] = new_goal
+            profile.update(fields)
             user_profiles[str(chat_id)] = profile
+        card_goal = new_goal
+        log.info("chat goal saved, new 12-week cycle cid=%s start=%s", chat_id, fields["cycle_start_date"])
     weekly = str(updates.get("weekly_goal_update") or "").strip()
     if weekly:
+        if not _same_saved_goal(weekly, str(profile.get("weekly_goal") or "")):
+            card_weekly = weekly
         db_store.update_profile_field(chat_id, "weekly_goal", weekly)
         profile["weekly_goal"] = weekly
     fact = str(updates.get("important_fact") or "").strip()
@@ -4426,6 +4468,7 @@ def _apply_chat_state_updates(
         if not category:
             category = "constraint" if is_refusal_constraint(fact) else "personal"
         db_store.save_user_fact(chat_id, fact, category)
+    return _goal_card(profile, main_goal=card_goal, weekly_goal=card_weekly)
 
 
 def _mark_telegram_blocked(cid: int, profile: dict | None) -> None:
@@ -4570,7 +4613,9 @@ async def _coach_reply(
 
     parsed = parse_structured_reply(reply)
     reply = sanitize_bot_reply(parsed["reply"] or reply)
-    _apply_chat_state_updates(chat_id, prof, effective_text, parsed["state_updates"])
+    card = _apply_chat_state_updates(chat_id, prof, effective_text, parsed["state_updates"])
+    if card:
+        reply = f"{reply}\n\n{card}"
 
     if append_history:
         _append_history_turn(chat_id, effective_text, reply)
@@ -4578,7 +4623,7 @@ async def _coach_reply(
     return reply
 
 
-_VISION_MODEL = "claude-sonnet-4-5"
+_VISION_MODEL = "claude-sonnet-5-5"
 
 
 async def _coach_reply_photo(
@@ -4690,9 +4735,11 @@ async def _coach_reply_photo(
 
     parsed_photo = parse_structured_reply(reply)
     reply = sanitize_bot_reply(parsed_photo["reply"] or reply)
-    _apply_chat_state_updates(
+    card = _apply_chat_state_updates(
         chat_id, prof, caption_body, parsed_photo["state_updates"]
     )
+    if card:
+        reply = f"{reply}\n\n{card}"
     _append_history_turn(chat_id, user_label, reply)
     return reply
 
@@ -6394,6 +6441,7 @@ async def _today_task_options_message_text(
                         system=refresh_user_time_in_system(profile, system),
                         max_tokens=280,
                         lang=lang,
+                        feature="today_task_options",
                     )
                 ).strip()
                 low = text.lower()
@@ -6440,6 +6488,7 @@ async def _generate_today_task(profile: dict, model_names: list[str]) -> str:
                     system=refresh_user_time_in_system(profile, system),
                     max_tokens=120,
                     lang=lang,
+                    feature="today_task",
                 ).strip()
                 if text:
                     return text.strip().strip('"')[:140]
@@ -6599,6 +6648,7 @@ async def _task_day_followup_text(
                         system=refresh_user_time_in_system(profile, system),
                         max_tokens=200,
                         lang=lang,
+                        feature="task_followup",
                     )
                 ).strip()
                 if text:
@@ -6711,6 +6761,7 @@ async def _classify_morning_user_reply(
                     [{"role": "user", "content": prompt}],
                     system=system,
                     max_tokens=120,
+                    feature="classify_morning_reply",
                 ).strip()
                 parsed = _parse_morning_reply_json(text)
                 if parsed:
@@ -7679,7 +7730,11 @@ async def _bootstrap_bot() -> None:
         job_defaults={"coalesce": True, "max_instances": 2},
     )
 
-    telegram_app = Application.builder().token(token).build()
+    import dialog_log
+
+    telegram_app = dialog_log.build_application(token)
+    if dialog_log.enabled():
+        log.warning("LOG_DIALOG_TEXT=1: dialog text is written to a file — test bot only")
     telegram_app.bot_data["claude_model_names"] = model_chain
     telegram_app.bot_data["mini_app_url"] = _mini_app_url()
     telegram_app.bot_data["post_weekly_goal_morning"] = _post_weekly_goal_morning
@@ -8671,6 +8726,7 @@ async def get_milestone(
                     system=_milestone_system(lang),
                     max_tokens=150,
                     lang=lang,
+                    feature="milestone",
                 ).strip()
                 if text:
                     return sanitize_bot_reply(text)
@@ -8980,6 +9036,7 @@ No markdown, no quotes, no emoji."""
                 [{"role": "user", "content": prompt}],
                 system=system,
                 max_tokens=120,
+                feature="fortune",
             ).strip()
             if "|" in raw:
                 a, b = raw.split("|", 1)

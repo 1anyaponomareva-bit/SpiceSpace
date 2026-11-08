@@ -1188,6 +1188,7 @@ async def _claude_plain_text(
     lang: str = "en",
     fallback: str = "",
     max_tokens: int = 220,
+    feature: str = "onboarding",
 ) -> str:
     messages = [{"role": "user", "content": (user_content or "Напиши сообщение.").strip()}]
 
@@ -1200,6 +1201,7 @@ async def _claude_plain_text(
                     system=_system_with_lang(system, lang),
                     max_tokens=max_tokens,
                     cache_core=False,
+                    feature=feature,
                 ).strip()
                 text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.I).strip()
                 if text:
@@ -1218,6 +1220,7 @@ async def say_as_friend(
     *,
     intent: str = "",
     profile: dict | None = None,
+    feature: str = "onb_say_as_friend",
 ) -> str:
     fb = (fallback or "").strip()
     if not fb:
@@ -1246,6 +1249,7 @@ async def say_as_friend(
         lang=lang,
         fallback=fb,
         max_tokens=260,
+        feature=feature,
     )
     return out or fb
 
@@ -1288,6 +1292,7 @@ async def generate_first_pain_question(
             lang=lang,
             fallback=fallback,
             max_tokens=120,
+            feature="onb_first_pain_question",
         )
 
     return await _claude_plain_text(
@@ -1297,6 +1302,7 @@ async def generate_first_pain_question(
         lang=lang,
         fallback=fallback,
         max_tokens=120,
+        feature="onb_first_pain_question",
     )
 
 
@@ -1321,6 +1327,7 @@ async def generate_dont_know_exit(
         lang=lang,
         fallback=fallback,
         max_tokens=180,
+        feature="onb_dont_know_exit",
     )
 
 
@@ -1348,6 +1355,7 @@ async def classify_goal_sphere(
         lang="en",
         fallback="other",
         max_tokens=12,
+        feature="onb_goal_sphere",
     )
     return _parse_goal_sphere(raw)
 
@@ -1610,6 +1618,7 @@ async def generate_dont_know_clarifying_question(
         lang=lang,
         fallback=fallback,
         max_tokens=120,
+        feature="onb_dont_know_clarify",
     )
     if prev and _questions_roughly_same(text, prev):
         text = await _claude_plain_text(
@@ -1620,6 +1629,7 @@ async def generate_dont_know_clarifying_question(
             lang=lang,
             fallback=fallback,
             max_tokens=120,
+            feature="onb_dont_know_clarify",
         )
     if prev and _questions_roughly_same(text, prev):
         return fallback
@@ -1749,13 +1759,19 @@ def generate_json_reply(
     *,
     system: str,
     max_tokens: int = 400,
+    feature: str = "onboarding",
 ) -> tuple[str, str]:
     """Call Claude with the reply prefilled with "{" so it answers in JSON.
 
     Returns (json_text, model_text): json_text has the "{" restored, model_text is what
     the model itself wrote. A 400 on the prefilled call is retried once without it.
+    Claude 5 models reject prefill, so for them the first call already goes without it.
     """
-    prefill = bool(messages) and messages[-1].get("role") == "user"
+    from claude_client import supports_prefill
+
+    prefill = (
+        bool(messages) and messages[-1].get("role") == "user" and supports_prefill(model_id)
+    )
     if prefill:
         try:
             text = claude_generate(
@@ -1764,6 +1780,7 @@ def generate_json_reply(
                 system=system,
                 max_tokens=max_tokens,
                 cache_core=False,
+                feature=feature,
             ).strip()
         except Exception as exc:
             if getattr(exc, "status_code", None) != 400:
@@ -1777,6 +1794,7 @@ def generate_json_reply(
         system=system,
         max_tokens=max_tokens,
         cache_core=False,
+        feature=f"{feature}_retry" if prefill else feature,
     ).strip()
     return text, text
 
@@ -1919,6 +1937,7 @@ async def _extract_name(
                     system=_system_with_lang(name_system, lang),
                     max_tokens=60,
                     cache_core=False,
+                    feature="onb_extract_name",
                 ).strip()
                 if text:
                     name = text.strip().strip('"').strip("'")[:120]
@@ -1960,6 +1979,7 @@ async def _claude_vision_dialog(
                     mid,
                     _messages_with_lang(messages, lang),
                     system=_system_with_lang(system, lang),
+                    feature="onb_why_dig",
                 )
                 parsed = _parse_vision_dialog_json(text)
                 if parsed:
@@ -2028,6 +2048,7 @@ async def _claude_weekly_recap_dialog(
                     system=system,
                     max_tokens=400,
                     cache_core=False,
+                    feature="weekly_recap_dialog",
                 ).strip()
                 parsed = _parse_weekly_recap_json(text)
                 if parsed:
@@ -2075,6 +2096,7 @@ async def _claude_change_weekly_dialog(
                     system=system,
                     max_tokens=400,
                     cache_core=False,
+                    feature="change_weekly_dialog",
                 ).strip()
                 parsed = _parse_weekly_change_json(text)
                 if parsed:
@@ -2167,6 +2189,7 @@ async def _polish_goal(
                     system=_system_with_lang(polish_system, lang),
                     max_tokens=220,
                     cache_core=False,
+                    feature="onb_polish_goal",
                 ).strip()
                 if text:
                     return text.strip().strip('"').strip()[:2000]
@@ -2439,6 +2462,7 @@ async def _claude_goal_dialog(
                     mid,
                     _messages_with_lang(messages, lang),
                     system=system,
+                    feature="onb_goal_dialog",
                 )
                 parsed = _parse_goal_dialog_json(text)
                 if parsed:
@@ -2551,6 +2575,7 @@ async def _claude_weekly_tactics_dialog(
                     mid,
                     _messages_with_lang(messages, lang),
                     system=system,
+                    feature="onb_weekly_tactics",
                 )
                 parsed = _parse_weekly_change_json(text)
                 if parsed:
@@ -3172,6 +3197,7 @@ async def _complete_onboarding(
                     system=first_system,
                     max_tokens=150,
                     cache_core=False,
+                    feature="onb_first_message",
                 ).strip()
             except Exception:
                 pass

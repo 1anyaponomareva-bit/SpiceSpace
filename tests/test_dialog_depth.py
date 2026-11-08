@@ -91,7 +91,7 @@ class DialogDepthTests(unittest.TestCase):
         self.assertEqual(CHAT_HISTORY_LIMIT, 12)
         client = (ROOT / "claude_client.py").read_text(encoding="utf-8")
         self.assertIn("max_tokens: int = 1024", client)
-        self.assertIn('return "claude-sonnet-4-5"', client)
+        self.assertIn('CHAT_MODEL = "claude-sonnet-5-5"', client)
 
     def test_length_caps_are_gone_and_depth_rules_stay_in_the_stable_prefix(self) -> None:
         self.assertNotIn("2-3 предложения", CHAT_OUTPUT_RULE_RU)
