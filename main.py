@@ -1976,23 +1976,10 @@ def _user_declined(raw_lower: str) -> bool:
 
 
 def _auth_telegram_id(request: Request, telegram_id: str | None) -> str:
-    # Временный bypass для разработки
-    if os.getenv("SKIP_TMA_AUTH") == "true":
-        tid = (telegram_id or "").strip()
-        if tid.isdigit():
-            return tid
-        # Если telegram_id не передан — берём из initData без валидации
-        init_data = _extract_init_data(request)
-        if init_data:
-            try:
-                pairs = dict(parse_qsl(init_data, keep_blank_values=True))
-                user_raw = pairs.get("user", "")
-                if user_raw:
-                    user_obj = json.loads(user_raw)
-                    return str(user_obj["id"])
-            except Exception:
-                pass
+    """The caller's Telegram id, only from initData signed by Telegram.
 
+    A telegram_id query parameter is never trusted: anyone could put someone else's id there.
+    """
     init_data = _extract_init_data(request)
     if init_data:
         user_obj = _validate_init_data(init_data)
@@ -5664,6 +5651,22 @@ async def _deliver_scheduled_morning(
         return False
 
 
+async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin only: a button that opens the stats page inside Telegram (signed initData)."""
+    if not update.effective_chat or not update.message:
+        return
+    if str(update.effective_chat.id) != str(ADMIN_TELEGRAM_ID):
+        return  # silent for everyone else
+    base = _public_base_url()
+    if not base:
+        await update.message.reply_text("Нет публичного адреса сервера (RAILWAY_PUBLIC_DOMAIN).")
+        return
+    markup = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📊 Статистика", web_app=WebAppInfo(url=f"{base}/webapp/admin.html"))
+    ]])
+    await update.message.reply_text("Админка:", reply_markup=markup)
+
+
 async def cmd_sendmorning(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin: force morning message to a user (e.g. /sendmorning 802927717)."""
     if not update.effective_chat or not update.message:
@@ -6314,13 +6317,18 @@ def _validate_init_data(init_data: str, max_age_seconds: int = 24 * 60 * 60) -> 
     if not received_hash:
         return None
 
-    pairs.pop("signature", None)
-
-    data_check_string = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs.keys()))
-
     secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
-    calculated = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(calculated, received_hash):
+
+    def _matches(fields: dict) -> bool:
+        data_check_string = "\n".join(f"{k}={fields[k]}" for k in sorted(fields.keys()))
+        calculated = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(calculated, received_hash)
+
+    # Telegram signs every field except hash; newer clients add "signature", which belongs
+    # in the check string. Older code dropped it, so both forms are accepted (both need the token).
+    without_signature = {k: v for k, v in pairs.items() if k != "signature"}
+    if not (_matches(pairs) or ("signature" in pairs and _matches(without_signature))):
+        log.warning("initData rejected: bad hash (fields=%s)", ",".join(sorted(pairs)))
         return None
 
     auth_date_str = pairs.get("auth_date", "")
@@ -7684,6 +7692,7 @@ def _register_telegram_handlers(app_: Application) -> None:
     app_.add_handler(CommandHandler("setup", cmd_reonboard))
     app_.add_handler(CommandHandler("weektest", cmd_weektest))
     app_.add_handler(CommandHandler("sendmorning", cmd_sendmorning))
+    app_.add_handler(CommandHandler("admin", cmd_admin))
     app_.add_handler(MessageHandler(filters.VOICE, on_voice))
     app_.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app_.add_handler(
@@ -8240,10 +8249,24 @@ async def health() -> dict[str, str | bool]:
     return {"ok": True, "build": BOT_BUILD}
 
 
+def _is_admin_request(request: Request) -> bool:
+    """Admin = secret ADMIN_STATS_KEY in the X-Admin-Key header, or Telegram-signed
+    initData of the admin account. A bare admin id is not enough: ids are not secret."""
+    expected = os.getenv("ADMIN_STATS_KEY", "").strip()
+    given = request.headers.get("X-Admin-Key", "").strip()
+    if expected and given and hmac.compare_digest(given.encode(), expected.encode()):
+        return True
+    init_data = _extract_init_data(request)
+    if init_data:
+        user_obj = _validate_init_data(init_data)
+        if user_obj and str(user_obj.get("id")) == str(ADMIN_TELEGRAM_ID):
+            return True
+    return False
+
+
 @app.get("/api/admin/stats")
 async def admin_stats(request: Request) -> dict:
-    tid = request.query_params.get("admin_id", "")
-    if str(tid) != str(ADMIN_TELEGRAM_ID):
+    if not _is_admin_request(request):
         raise HTTPException(status_code=403, detail="forbidden")
 
     now = datetime.now(timezone.utc)

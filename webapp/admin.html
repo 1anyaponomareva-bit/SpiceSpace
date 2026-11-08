@@ -97,21 +97,29 @@
       </table>
     </div>
   </div>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script>
     (() => {
-      const ADMIN_TELEGRAM_ID = "8412438788";
-      const params = new URLSearchParams(window.location.search);
-      const adminId = params.get("admin_id") || "";
+      // Secret key comes in the URL fragment (#key=...), which browsers never send to servers.
+      const hashParams = new URLSearchParams(window.location.hash.slice(1));
+      const adminKey = hashParams.get("key") || "";
+      const tgInit = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) || "";
       const denied = document.getElementById("denied");
       const app = document.getElementById("app");
       const cards = document.getElementById("cards");
       const body = document.getElementById("users-body");
       const meta = document.getElementById("meta");
 
-      if (String(adminId) !== ADMIN_TELEGRAM_ID) {
+      if (!adminKey && !tgInit) {
         denied.style.display = "block";
         meta.textContent = "Unauthorized";
         return;
+      }
+
+      function esc(value) {
+        return String(value).replace(/[&<>"']/g, (c) => ({
+          "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+        })[c]);
       }
 
       function statusCell(u) {
@@ -138,14 +146,14 @@
       function renderUsers(users) {
         body.innerHTML = (users || []).map((u) => `
           <tr>
-            <td>${String(u.name || "—")}</td>
-            <td class="goal" title="${String(u.main_goal || "")}">${String(u.main_goal || "—")}</td>
+            <td>${esc(u.name || "—")}</td>
+            <td class="goal" title="${esc(u.main_goal || "")}">${esc(u.main_goal || "—")}</td>
             <td>${Number(u.streak || 0)}</td>
             <td>${Number(u.current_week || 1)}</td>
-            <td>${String(u.last_active || "—")}</td>
+            <td>${esc(u.last_active || "—")}</td>
             <td>${u.replied_today ? "✅" : "—"}</td>
-            <td>${u.messages_today || "—"}</td>
-            <td>${u.messages_total || "—"}</td>
+            <td>${esc(u.messages_today || "—")}</td>
+            <td>${esc(u.messages_total || "—")}</td>
             <td>${statusCell(u)}</td>
           </tr>
         `).join("");
@@ -153,7 +161,10 @@
 
       async function loadStats() {
         try {
-          const resp = await fetch(`/api/admin/stats?admin_id=${encodeURIComponent(adminId)}`, { cache: "no-store" });
+          const headers = {};
+          if (adminKey) headers["X-Admin-Key"] = adminKey;
+          if (tgInit) headers["Authorization"] = `tma ${tgInit}`;
+          const resp = await fetch("/api/admin/stats", { cache: "no-store", headers });
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const data = await resp.json();
           renderStats(data.stats || {});
