@@ -5344,6 +5344,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
+    if ob.just_greeted(onboarding.get(cid)):
+        return  # greeting is already on screen — don't send it twice
     ob.start_new_onboarding(onboarding, cid, lang)
     await _bot_reply(update.message, ob.get_greeting_new(lang))
 
@@ -7801,6 +7803,8 @@ async def _bootstrap_bot() -> None:
 
                 if profile_is_blocked(profile) or not _profile_daily_enabled(profile):
                     continue
+                if not ob.profile_onboarding_complete(profile):
+                    continue  # no morning/evening before she has finished getting to know us
                 tz_name = _profile_timezone_name(profile)
                 try:
                     user_tz = ZoneInfo(tz_name)

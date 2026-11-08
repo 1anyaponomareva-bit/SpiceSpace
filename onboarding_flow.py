@@ -3070,6 +3070,16 @@ def start_new_onboarding(
     }
 
 
+def just_greeted(st: dict | None, within_seconds: int = 120) -> bool:
+    """New-user greeting was sent moments ago and she hasn't answered yet (e.g. /reset full, then /start)."""
+    if not isinstance(st, dict) or int(st.get("step") or -1) != OB_NAME:
+        return False
+    at = st.get("last_activity_at")
+    if not isinstance(at, datetime):
+        return False
+    return (datetime.now() - at).total_seconds() < within_seconds
+
+
 def start_returning_choice(
     onboarding: dict[int, dict], cid: int, lang: str = "en"
 ) -> None:
