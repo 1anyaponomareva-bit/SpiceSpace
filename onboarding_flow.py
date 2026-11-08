@@ -435,6 +435,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "vision_fallback": "Расскажи ещё чуть-чуть?",
     "goal_fallback": "Расскажи подробнее?",
     "weekly_dialog_fallback": "Расскажи подробнее?",
+    "weekly_dialog_opening": "Что ты сама хочешь успеть на этой неделе, чтобы сдвинуться к цели?",
     "default_goal": "твоя цель",
     "open_spicespace_btn": "Открыть SpiceSpace",
     "app_progress_hint": "Твой прогресс 👇",
@@ -660,6 +661,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "vision_fallback": "Tell me a bit more?",
     "goal_fallback": "Tell me more?",
     "weekly_dialog_fallback": "Tell me more?",
+    "weekly_dialog_opening": "What do you want to get done this week to move toward your goal?",
     "default_goal": "your goal",
     "open_spicespace_btn": "Open SpiceSpace",
     "app_progress_hint": "Your progress 👇",
@@ -924,18 +926,9 @@ async def _kickoff_weekly_options_message(
     try:
         if opening:
             await bot.send_message(chat_id=cid, text=opening)
-        async with typing_while(bot, cid):
-            result = await _claude_weekly_tactics_dialog(
-                [],
-                model_names,
-                main_goal=str(st.get("main_goal") or ""),
-                user_message="",
-                lang=lang,
-            )
-        reply = (
-            result.get("message") or ob_text("weekly_dialog_fallback", lang)
-        ).strip()
-        st["weekly_turns"] = [{"role": "assistant", "content": reply[:2000]}]
+        # Fixed question mid-conversation: no greeting, no Claude call.
+        reply = ob_text("weekly_dialog_opening", lang)
+        st["weekly_turns"] = [{"role": "assistant", "content": reply}]
         await bot.send_message(chat_id=cid, text=reply)
         return True
     except Exception as e:
@@ -2616,21 +2609,10 @@ async def _start_weekly_tactics_dialog(
     st: dict,
     model_names: list[str],
 ) -> None:
-    bot = msg.get_bot()
     lang = _ob_lang(st)
-    st["weekly_turns"] = []
-    async with typing_while(bot, msg.chat_id):
-        result = await _claude_weekly_tactics_dialog(
-            [],
-            model_names,
-            main_goal=str(st.get("main_goal") or ""),
-            user_message="",
-            lang=lang,
-        )
-    reply = (
-        result.get("message") or ob_text("weekly_dialog_fallback", lang)
-    ).strip()
-    st["weekly_turns"].append({"role": "assistant", "content": reply[:2000]})
+    # Fixed question mid-conversation: no greeting, no Claude call.
+    reply = ob_text("weekly_dialog_opening", lang)
+    st["weekly_turns"] = [{"role": "assistant", "content": reply}]
     await msg.reply_text(reply)
 
 
