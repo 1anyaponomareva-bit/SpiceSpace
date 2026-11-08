@@ -114,6 +114,7 @@ from telegram.ext import (
     ContextTypes,
     MessageHandler,
     PreCheckoutQueryHandler,
+    TypeHandler,
     filters,
 )
 
@@ -1155,6 +1156,16 @@ def _persist_cid_flow(cid: int) -> None:
             db_store.delete_flow_blob(cid)
     except Exception as e:
         log.warning("flow persist failed cid=%s: %s", cid, e)
+
+
+async def _persist_flow_after_update(update: object, context) -> None:
+    """Steps change onboarding state in place, which the dict hook can't see — save after every update."""
+    chat = getattr(update, "effective_chat", None)
+    if chat is None:
+        return
+    cid = int(chat.id)
+    if cid in onboarding or cid in pending_morning or cid in pending_evening:
+        _persist_cid_flow(cid)
 
 
 def _restore_cid_flow(cid: int) -> None:
@@ -5260,6 +5271,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db_store.save_subscriber(cid, True)
 
     start_arg = (context.args[0] if context.args else "").strip().lower()
+    _restore_cid_flow(cid)  # after a bot restart the onboarding step lives only in the DB
+    if not start_arg:
+        resume = ob.resume_onboarding_message(onboarding.get(cid), lang)
+        if resume:
+            await _bot_reply(update.message, resume)
+            return
     if start_arg in ("change_weekly", "change-weekly", "weekly_goal"):
         if isinstance(prof, dict) and prof.get("name"):
             model_names = context.bot_data.get("claude_model_names") or []
@@ -7736,6 +7753,7 @@ def _register_telegram_handlers(app_: Application) -> None:
         MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler)
     )
     app_.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    app_.add_handler(TypeHandler(Update, _persist_flow_after_update), group=99)
 
 
 async def _bootstrap_bot() -> None:

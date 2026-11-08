@@ -3052,6 +3052,28 @@ def start_new_onboarding(
     }
 
 
+def resume_onboarding_message(st: dict | None, lang: str = "en") -> str | None:
+    """/start in the middle of onboarding: repeat the last question instead of starting over."""
+    if not isinstance(st, dict) or not str(st.get("name") or "").strip():
+        return None
+    if int(st.get("step") or -1) in (OB_NAME, OB_RETURNING):
+        return None
+    last = ""
+    for key in ("weekly_turns", "goal_turns", "vision_turns"):  # latest step first
+        turns = st.get(key)
+        if not isinstance(turns, list):
+            continue
+        said = [str(t.get("content")) for t in turns
+                if isinstance(t, dict) and t.get("role") == "assistant" and t.get("content")]
+        if said:
+            last = said[-1]
+            break
+    if not last:
+        return None
+    lead = "Продолжим с того же места 🙂" if _is_ru(lang) else "Let's pick up where we left off 🙂"
+    return f"{lead}\n\n{last}"
+
+
 def just_greeted(st: dict | None, within_seconds: int = 120) -> bool:
     """New-user greeting was sent moments ago and she hasn't answered yet (e.g. /reset full, then /start)."""
     if not isinstance(st, dict) or int(st.get("step") or -1) != OB_NAME:
