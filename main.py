@@ -5394,8 +5394,16 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "полный",
     ):
         tid = str(cid)
-        db_store.delete_profile(tid)
         _purge_user_runtime(cid)
+        if not db_store.delete_profile(tid):
+            await _bot_reply(
+                update.message,
+                "Не получилось удалить профиль полностью, попробуй ещё раз."
+                if is_ru(lang)
+                else "Could not fully delete the profile, please try again.",
+            )
+            return
+        _purge_user_runtime(cid)  # again: nothing may have been re-cached meanwhile
         ob.start_new_onboarding(onboarding, cid, lang)
         await _bot_reply(update.message, ob.get_greeting_new(lang))
         return
@@ -8418,8 +8426,11 @@ async def reset_profile_endpoint(
     telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
 ) -> dict:
     tid = _auth_telegram_id(request, telegram_id)
-    db_store.delete_profile(tid)
     _purge_user_runtime(int(tid))
+    if not db_store.delete_profile(tid):
+        raise HTTPException(status_code=500, detail="reset incomplete: profile still present")
+    _purge_user_runtime(int(tid))  # again: nothing may have been re-cached meanwhile
+    db_store.delete_flow_blob(tid)
     return {"ok": True}
 
 

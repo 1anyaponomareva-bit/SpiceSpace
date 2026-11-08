@@ -316,11 +316,35 @@ def _merge_base(user_id: int | str) -> dict | None:
     return dict(existing or {})
 
 
-def delete_profile(user_id: int | str) -> None:
+# Everything stored per user, deleted before the profile row: tables that reference
+# user_profiles block its deletion while they still have rows.
+_USER_DATA_TABLES = (
+    ("weekly_summaries", "user_id"),
+    ("daily_summaries", "user_id"),
+    ("user_facts", "user_id"),
+    ("user_personality", "user_id"),
+    ("conversation_history", "user_id"),
+    ("tasks", "telegram_id"),
+)
+
+
+def delete_profile(user_id: int | str) -> bool:
+    """Delete the user and all their data. True when the profile row is really gone.
+
+    Dependent tables go first and the profile last; afterwards the row is read back,
+    because a failed DELETE only logs a warning and the profile would otherwise stay.
+    """
     key = str(user_id)
+    deleted = True
     if _use_supabase:
+        for table, column in _USER_DATA_TABLES:
+            if _request("DELETE", f"{table}?{column}=eq.{key}") is None:
+                log.warning("delete_profile: could not clear %s uid=%s", table, key)
         _request("DELETE", f"user_profiles?user_id=eq.{key}")
-        _request("DELETE", f"daily_summaries?user_id=eq.{key}")
+        left = _request("GET", f"user_profiles?user_id=eq.{key}&select=user_id")
+        deleted = left == []
+        if not deleted:
+            log.error("delete_profile: profile row still present uid=%s", key)
 
     profiles = _load_json(USER_PROFILES_PATH, {})
     if isinstance(profiles, dict):
@@ -340,6 +364,12 @@ def delete_profile(user_id: int | str) -> None:
             _save_json(SUBSCRIBERS_PATH, subs)
         except (TypeError, ValueError):
             pass
+
+    flows = _read_flow_file()
+    if key in flows:
+        flows.pop(key, None)
+        _save_json(FLOW_STATE_PATH, flows)
+    return deleted
 
 
 def update_profile_field(user_id: int | str, field: str, value: object) -> dict | None:
