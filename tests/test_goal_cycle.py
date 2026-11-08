@@ -14,6 +14,8 @@ if str(ROOT) not in sys.path:
 
 import re  # noqa: E402
 
+import goal_change  # noqa: E402
+
 _NAMES = {"_goal_card", "_new_goal_cycle_fields", "_same_saved_goal", "_apply_chat_state_updates"}
 
 
@@ -42,10 +44,10 @@ def _load(db: FakeDB) -> dict:
     nodes = [
         n for n in tree.body
         if (isinstance(n, ast.FunctionDef) and n.name in _NAMES)
-        or (isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "_CYCLE_DAY_FLAG" for t in n.targets))
     ]
     ns: dict = {
         "re": re,
+        "new_cycle_fields": goal_change.new_cycle_fields,
         "db_store": db,
         "user_profiles": {},
         "log": SimpleNamespace(info=lambda *a, **k: None),
@@ -93,6 +95,13 @@ class GoalCycleTests(unittest.TestCase):
             set(fields["cycle_flags"]),
             {"sub_expired_2026-07-20", "trial_sub_msg3_2026-06-12", "weekly_sent_2026-11-04"},
         )
+
+    def test_goal_statement_detection(self):
+        yes = "Моя новая цель на 12 недель: набрать 15–20 тестовых пользователей Спейс"
+        self.assertTrue(goal_change.states_new_goal(yes))
+        for no in ("обновить цель", "хочу поменять цели", "профиль", "просто поговорить",
+                   "давай обновим цель на 12 недель"):
+            self.assertFalse(goal_change.states_new_goal(no), no)
 
     def test_same_goal_keeps_cycle_and_no_card(self):
         db = FakeDB()

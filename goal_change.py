@@ -283,3 +283,37 @@ def constraint_from_message(text: str) -> str | None:
         if should_store_fact(piece) and is_refusal_constraint(piece):
             return piece[:200]
     return None
+
+
+_CYCLE_DAY_FLAG = re.compile(r"_day_\d+$")
+
+
+def new_cycle_fields(profile: dict, today: str) -> dict:
+    """Profile fields that start a new 12-week program on `today` (her local ISO date).
+
+    Only flags keyed by program day (weekly_sent_day_13, new_week_dialog_day_20, …) are
+    cleared, because day numbers restart. Date-keyed flags (subscription, trial messages,
+    weekly_sent_2026-…) stay, or those messages would be sent again.
+    """
+    flags = profile.get("cycle_flags") if isinstance(profile.get("cycle_flags"), dict) else {}
+    kept = {k: v for k, v in flags.items() if not _CYCLE_DAY_FLAG.search(str(k))}
+    return {
+        "cycle_start_date": today,
+        "goal_start_date": today,
+        "current_week": 1,
+        "cycle_flags": kept,
+        "milestones_shown": {},
+    }
+
+
+_GOAL_WORD = re.compile(r"\b(цел[ьиейюя]\w*|goal\w*)", re.IGNORECASE)
+
+
+def states_new_goal(raw: str) -> bool:
+    """A message that already says what the goal is ("Моя новая цель на 12 недель: …"),
+    as opposed to a short menu answer like "обновить цель" or "хочу поменять цели"."""
+    text = (raw or "").strip()
+    if not _GOAL_WORD.search(text):
+        return False
+    after = _GOAL_WORD.split(text, maxsplit=1)[-1]
+    return len(text) >= 40 and len(after.strip(" :—-.,")) >= 20

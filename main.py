@@ -43,7 +43,9 @@ from goal_change import (
     can_lock_as_goal,
     constraint_from_message,
     is_refusal_constraint,
+    new_cycle_fields,
     should_store_fact,
+    states_new_goal,
 )
 from lang_context import (
     coach_style_for,
@@ -4385,26 +4387,9 @@ def _goal_card(profile: dict, *, main_goal: str = "", weekly_goal: str = "") -> 
     return "\n\n".join(parts)
 
 
-_CYCLE_DAY_FLAG = re.compile(r"_day_\d+$")
-
-
 def _new_goal_cycle_fields(profile: dict) -> dict:
-    """A new 12-week goal starts a new cycle: week 1 from today (her local date).
-
-    Only flags keyed by program day (weekly_sent_day_13, new_week_dialog_day_20, …) are
-    cleared, because day numbers restart. Date-keyed flags (subscription, trial messages,
-    weekly_sent_2026-…) stay, or those messages would be sent again.
-    """
-    today = db_store._profile_local_today(profile)
-    flags = profile.get("cycle_flags") if isinstance(profile.get("cycle_flags"), dict) else {}
-    kept = {k: v for k, v in flags.items() if not _CYCLE_DAY_FLAG.search(str(k))}
-    return {
-        "cycle_start_date": today,
-        "goal_start_date": today,
-        "current_week": 1,
-        "cycle_flags": kept,
-        "milestones_shown": {},
-    }
+    """A new 12-week goal starts a new cycle: week 1 from today (her local date)."""
+    return new_cycle_fields(profile, db_store._profile_local_today(profile))
 
 
 def _apply_chat_state_updates(
@@ -5793,6 +5778,15 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
     st_ob = onboarding.get(cid)
+    if (
+        isinstance(st_ob, dict)
+        and int(st_ob.get("step") or 0) == ob.OB_RETURNING
+        and states_new_goal(raw)
+    ):
+        # "Update profile or just talk?" answered with the goal itself: take it in chat
+        # (goal card + new 12-week cycle) instead of restarting the onboarding interview.
+        onboarding.pop(cid, None)
+        st_ob = None
     if st_ob is not None:
         await handle_onboarding_turn(update, context, raw)
         return

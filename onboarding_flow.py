@@ -20,6 +20,7 @@ from goal_change import (
     build_change_12w_state,
     can_lock_as_goal,
     looks_like_confusion,
+    new_cycle_fields,
     next_step_after_weekly,
     profile_patch_for_new_cycle,
 )
@@ -2358,6 +2359,10 @@ async def _finish_change_12w(
     fields = profile_patch_for_new_cycle(st)
     main_goal = str(fields.get("main_goal") or "")
     weekly_goal = str(fields.get("weekly_goal") or "")
+    # current_week alone is recomputed from cycle_start_date by the scheduler, so the
+    # new program also needs a new start date (week 1 from today).
+    current = user_profiles.get(str(cid)) or {}
+    fields.update(new_cycle_fields(current, db._profile_local_today(current)))
     profile = db.update_profile(cid, fields)
     user_profiles[str(cid)] = profile
     onboarding.pop(cid, None)
@@ -3107,17 +3112,19 @@ async def _complete_onboarding(
     user_profiles[str(cid)] = profile
     subscribers.add(cid)
 
-    if not profile.get("cycle_start_date"):
-        try:
-            tz = ZoneInfo(str(profile.get("timezone") or _default_timezone()))
-        except Exception:
-            tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
-        today_iso = datetime.now(tz).date().isoformat()
-        profile["cycle_start_date"] = today_iso
-        db.update_profile(cid, {"cycle_start_date": today_iso})
-        if not profile.get("trial_start_date"):
-            profile["trial_start_date"] = today_iso
-            db.update_profile(cid, {"trial_start_date": today_iso})
+    # Finishing onboarding (first time or a goal change) starts a new 12-week program:
+    # week 1 from today. Before, a repeated onboarding kept the old start date, so the
+    # new goal landed on e.g. week 12 of the previous cycle.
+    try:
+        tz = ZoneInfo(str(profile.get("timezone") or _default_timezone()))
+    except Exception:
+        tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
+    today_iso = datetime.now(tz).date().isoformat()
+    cycle = new_cycle_fields(profile, today_iso)
+    if not profile.get("trial_start_date"):
+        cycle["trial_start_date"] = today_iso
+    profile.update(cycle)
+    db.update_profile(cid, cycle)
 
     name = profile.get("name", "")
     mt = profile.get("morning_time", "09:30")
