@@ -1050,8 +1050,14 @@ def greeting_after_name(name: str, lang: str = "en") -> str:
 
 def vision_question_message(lang: str = "en") -> str:
     if _is_ru(lang):
-        return "Что сейчас сильнее всего хочется изменить в своей жизни?"
-    return "What do you most want to change in your life right now?"
+        return (
+            "Расскажи, что тебе сейчас хочется запустить или поменять в жизни? "
+            "Может, в работе, в деньгах, в теле, в отношениях, а может, в чём-то своём."
+        )
+    return (
+        "Tell me, what do you want to start or change in your life right now? "
+        "Maybe work, money, your body, relationships, or something of your own."
+    )
 
 
 def message_vision(name: str, lang: str = "en") -> str:
@@ -1290,15 +1296,8 @@ async def generate_first_pain_question(
             feature="onb_first_pain_question",
         )
 
-    return await _claude_plain_text(
-        FIRST_PAIN_QUESTION_SYSTEM,
-        f"Имя пользователя: {n}" if _is_ru(lang) else f"User name: {n}",
-        model_names,
-        lang=lang,
-        fallback=fallback,
-        max_tokens=120,
-        feature="onb_first_pain_question",
-    )
+    # First meeting: fixed, proofread wording (the model kept producing odd phrasing), no Claude call.
+    return fallback
 
 
 async def generate_dont_know_exit(
