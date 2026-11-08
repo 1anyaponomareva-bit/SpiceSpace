@@ -42,10 +42,10 @@ log = logging.getLogger("coach_bot")
 
 _flow_outgoing_prepare: Callable[[int, str], str] | None = None
 
-FIRST_PAIN_QUESTION_SYSTEM = """Ты Спейс. Пользователь только что назвал своё имя.
-Задай один короткий живой вопрос про то что сейчас не так в его жизни
-или что хочется изменить. Не используй слова 'мечта', 'представь',
-'через 3 месяца'. Говори как подруга — просто и по-человечески.
+FIRST_PAIN_QUESTION_SYSTEM = """Ты Спейс, подруга в Telegram. Вы только что познакомились: она назвала имя, и ты уже поздоровалась — не обращайся по имени и не здоровайся снова.
+Задай один короткий вопрос о том, что ей сейчас хочется изменить, запустить или прокачать в жизни — в работе, деньгах, теле, отношениях или в чём-то своём.
+Вопрос про желание и движение вперёд, а не про проблемы: не спрашивай, что выматывает, раздражает, мешает или идёт не так.
+Не используй слова 'мечта', 'представь', 'через 3 месяца'. Говори как подруга — просто и по-человечески.
 Один вопрос, 1-2 предложения максимум.
 Ответь только текстом вопроса, без JSON и кавычек."""
 
@@ -56,6 +56,7 @@ Never name the type of her message ('this is a request for help'). Never tell he
 If she gave a result and a deadline or a time budget, that is enough: do not ask what, how or why.
 Ask one question at most, only if the card would be wrong without the answer. A reply without a question is fine.
 If she says she does not know, offer 2-3 concrete options built from what she already said.
+If she says everything is fine, do not dig for problems: ask what she would like to grow, start or add in her life now.
 Never say or hint that a goal is unrealistic, impossible, won't happen or can't work, and never comment on its size before the card; put in the card the result she can reach by week 12.
 A side question (tool, platform, language): answer it in one line and return; it is not a change of goal.
 Never use stock questions ("what do you really want", "what is behind it", "what makes you feel fulfilled"). Never retell her words in nicer words. Never explain her to herself.
@@ -1381,14 +1382,8 @@ async def message_vision_async(
     )
     if skip:
         return question, question
-    greet_fb = greeting_after_name(n, lang)
-    greet = await say_as_friend(
-        greet_fb,
-        model_names,
-        lang,
-        intent="short greeting after name",
-        profile=profile,
-    )
+    # Fixed greeting: the name appears once, in one message, and no extra Claude call.
+    greet = greeting_after_name(n, lang)
     msg = f"{greet}\n\n{question}"
     return msg, question
 
