@@ -2549,11 +2549,11 @@ async def _claude_weekly_tactics_dialog(
     if not messages:
         if _is_ru(lang):
             seed = (
-                f"Предложи одну цель на эту неделю для цели: {main_goal}"
+                f"Спроси, что она сама хочет сделать на этой неделе для цели: {main_goal}"
             )
         else:
             seed = (
-                f"Propose one goal for this week for this goal: {main_goal}"
+                f"Ask what she herself wants to get done this week for this goal: {main_goal}"
             )
         messages = [{"role": "user", "content": seed}]
     if extra_user_hint:
