@@ -21,21 +21,14 @@
   // [host selector, image, css] — positions relative to the host card.
   var STICKERS = {
     autumn: [
-      ['.month-card', 'clip-leopard', CLIP],
-      ['.week-card', 'mulled-wine', 'left:-14px;top:-34px;width:52px;transform:rotate(-8deg)'],
-      ['.today-card', 'pie', 'right:-14px;bottom:-26px;width:78px;transform:rotate(-5deg)'],
-      ['.times-card', 'plaid', 'left:-14px;top:-30px;width:56px;transform:rotate(-9deg)'],
-      ['.season-paper', 'clip-leopard', CLIP],
-      ['.season-paper', 'lantern', 'right:-10px;bottom:-24px;width:52px;transform:rotate(4deg)'],
+      ['.month-card', 'clip-silver', CLIP],
+      ['.season-paper', 'clip-silver', CLIP],
+      ['.season-paper', 'pie', 'right:-14px;bottom:-24px;width:74px;transform:rotate(-5deg)'],
     ],
     winter: [
       ['.month-card', 'clip-hearts', CLIP],
-      ['.week-card', 'bow', 'left:-12px;top:-30px;width:44px;transform:rotate(-12deg)'],
-      ['.today-card', 'gift', 'right:-14px;bottom:-22px;width:68px;transform:rotate(6deg)'],
-      ['.times-card', 'star', 'left:-12px;top:-26px;width:46px;transform:rotate(-14deg)'],
       ['.season-paper', 'clip-hearts', CLIP],
-      ['.season-paper', 'champagne', 'right:-6px;bottom:-22px;width:30px;transform:rotate(8deg)'],
-      ['.season-paper', 'star', 'left:-12px;top:-14px;width:40px;transform:rotate(-18deg)'],
+      ['.season-paper', 'gift', 'right:-12px;bottom:-22px;width:64px;transform:rotate(6deg)'],
     ],
   };
 
