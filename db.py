@@ -1266,6 +1266,22 @@ def load_weekly_summaries(user_id: int | str, limit: int = 4) -> list[dict]:
     return [r for r in rows if isinstance(r, dict)]
 
 
+def load_cycle_weekly_summaries(user_id: int | str, cycle_start: str) -> list[dict]:
+    """All week summaries of the current 12-week program, oldest first."""
+    rows = load_weekly_summaries(user_id, limit=24)
+    start = str(cycle_start or "")[:10]
+    if start:
+        rows = [r for r in rows if str(r.get("week_start") or "")[:10] >= _days_before(start, 6)]
+    return sorted(rows, key=lambda r: int(r.get("week_number") or 0))
+
+
+def _days_before(iso: str, days: int) -> str:
+    try:
+        return (date.fromisoformat(iso) - timedelta(days=days)).isoformat()
+    except ValueError:
+        return ""
+
+
 def load_last_weekly_summary(user_id: int | str) -> dict | None:
     rows = load_weekly_summaries(user_id, limit=1)
     return rows[0] if rows else None

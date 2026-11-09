@@ -99,3 +99,25 @@ class PersonParseTests(unittest.TestCase):
         self.assertEqual(out["state_updates"]["person"], {"relation": "мама", "name": "Ольга", "note": ""})
         out = parse_chat_reply('{"reply":"ок","state_updates":{"person":null}}')
         self.assertIsNone(out["state_updates"]["person"])
+
+
+class WeeksTests(unittest.TestCase):
+    def test_block_all_weeks_in_order(self):
+        rows = [{"week_number": 1, "summary": "Сделала лендинг. Мешала простуда."},
+                {"week_number": 2, "summary": "  Первые 3 клиента,\n брат Саша помог.  "},
+                {"week_number": 3, "summary": ""}]
+        block = mc.weeks_block(rows, "ru")
+        self.assertIn("Неделя 1: Сделала лендинг. Мешала простуда.", block)
+        self.assertIn("Неделя 2: Первые 3 клиента, брат Саша помог.", block)
+        self.assertNotIn("Неделя 3", block)
+        self.assertEqual(mc.weeks_block([], "en"), "")
+
+    def test_cycle_filter(self):
+        import db
+        rows = [{"week_number": 2, "week_start": "2026-11-09", "summary": "b"},
+                {"week_number": 1, "week_start": "2026-11-02", "summary": "a"},
+                {"week_number": 5, "week_start": "2026-08-01", "summary": "old cycle"}]
+        from unittest import mock
+        with mock.patch.object(db, "load_weekly_summaries", return_value=rows):
+            out = db.load_cycle_weekly_summaries(1, "2026-11-02")
+        self.assertEqual([r["summary"] for r in out], ["a", "b"])

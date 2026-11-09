@@ -165,3 +165,21 @@ def people_block(lines: list[str], lang: str) -> str:
         head = ("People in her life (from her own words). Remember their names and who is who; "
                 "mention them only when relevant:")
     return head + "\n" + "\n".join(f"— {x}" for x in lines)
+
+
+def weeks_block(rows: list[dict], lang: str) -> str:
+    """Chronicle of the program: one short line per finished week, all of them."""
+    lines = []
+    for r in rows:
+        text = " ".join(str(r.get("summary") or "").split())
+        if not text:
+            continue
+        n = r.get("week_number")
+        label = f"Неделя {n}" if _ru(lang) else f"Week {n}"
+        lines.append(f"{label}: {text[:400]}")
+    if not lines:
+        return ""
+    head = ("Летопись программы, итоги прошедших недель (помни их, упоминай по делу):"
+            if _ru(lang) else
+            "Program chronicle, summaries of past weeks (remember them, mention when relevant):")
+    return head + "\n" + "\n".join(lines)

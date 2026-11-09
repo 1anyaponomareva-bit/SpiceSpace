@@ -4529,8 +4529,10 @@ async def _coach_reply(
     facts_text = "\n".join(f"— {f}" for f in facts) if facts else ""
     personality = await asyncio.to_thread(db_store.load_personality, chat_id)
     personality_text = personality_text_lang(personality, lang)
-    last_week = await asyncio.to_thread(db_store.load_last_weekly_summary, chat_id)
-    weekly_context = last_week_text(last_week, lang) if last_week else ""
+    weeks = await asyncio.to_thread(
+        db_store.load_cycle_weekly_summaries, chat_id, str(prof.get("cycle_start_date") or "")
+    )
+    weekly_context = memory_context.weeks_block(weeks, lang)
     extra_parts: list[str] = [
         _current_goal_only_rule(prof),
         _chat_one_question_rule(prof),
@@ -4547,9 +4549,7 @@ async def _coach_reply(
     if personality_text:
         extra_parts.append(f"{personality_intro(lang)}\n{personality_text}")
     if weekly_context:
-        extra_parts.append(
-            f"Прошлая неделя:\n{weekly_context}" if is_russian else weekly_context
-        )
+        extra_parts.append(weekly_context)
 
     summaries = await asyncio.to_thread(db_store.list_daily_summaries, chat_id)
     completed_count = sum(
