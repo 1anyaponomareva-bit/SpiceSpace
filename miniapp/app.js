@@ -375,7 +375,6 @@
     document.documentElement.lang = window.userLang;
     applyStaticI18n();
     applyGreeting();
-    if (window.SpiceFortune?.applyI18n) window.SpiceFortune.applyI18n();
   }
 
   function syncLanguageCode() {
@@ -1591,9 +1590,6 @@
     syncTimezone();
     syncLanguageCode();
     document.querySelector('.settings-block')?.classList.add('loaded');
-    if (window.SpiceFortune?.tryShow) {
-      await window.SpiceFortune.tryShow();
-    }
   }
 
   if (document.readyState === 'loading') {

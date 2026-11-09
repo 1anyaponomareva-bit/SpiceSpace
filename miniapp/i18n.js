@@ -84,14 +84,6 @@ const translations = {
     incomplete_text:
       'В боте нажми /start, затем напиши «заново» — или кнопку ниже. Цели из Supabase подтянутся после настройки.',
     incomplete_btn: 'Настроить цели в боте',
-    fortune_title_html: 'Твоё предсказание<br>на сегодня',
-    fortune_tap: 'нажми',
-    fortune_open_aria: 'Открыть печеньку',
-    fortune_signature: 'сохрани это предсказание что бы увидеть что я была права',
-    fortune_btn_save: 'Скачать картинку',
-    fortune_btn_go: 'Погнали дальше →',
-    fortune_fallback: 'Скоро твоя цель станет ближе — если сделаешь один честный шаг на этой неделе.',
-    fortune_test_btn: '🥠 Тест печеньки',
     welcome_title: 'Привет, я Спейс',
     welcome_desc:
       'Помогаю не сливаться с целей. Помню что ты говорила вчера. Мягко тыкаю если забываешь про себя.',
@@ -183,14 +175,6 @@ const translations = {
     incomplete_text:
       'In the bot send /start, then type «start over» — or use the button below.',
     incomplete_btn: 'Set up goals in bot',
-    fortune_title_html: 'Your fortune<br>for today',
-    fortune_tap: 'tap',
-    fortune_open_aria: 'Open fortune cookie',
-    fortune_signature: 'save this fortune to see if I was right',
-    fortune_btn_save: 'Download image',
-    fortune_btn_go: "Let's go →",
-    fortune_fallback: 'Your goal gets closer soon — if you take one honest step this week.',
-    fortune_test_btn: '🥠 Test fortune cookie',
     welcome_title: "Hi, I'm Space",
     welcome_desc:
       "I help you stay on track with your goals. I remember what you said yesterday. I gently nudge you when you forget about yourself.",

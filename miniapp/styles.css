@@ -670,8 +670,7 @@ body.tg-app { background: var(--bg); }
   transition: opacity 0.3s;
 }
 
-.settings-btn[hidden],
-.settings-btn--fortune-test[hidden] {
+.settings-btn[hidden] {
   display: none !important;
 }
 
