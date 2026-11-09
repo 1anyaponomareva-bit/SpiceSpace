@@ -101,3 +101,25 @@ class FirstStepQuestionTests(unittest.TestCase):
         self.assertIn("сегодня", ru)
         self.assertNotIn("уже сделала", ru)
         self.assertNotIn("бот", ru)  # works for any goal, not only the owner's
+
+
+class QuietAfterOnboardingTests(unittest.TestCase):
+    def test_morning_soon_after_onboarding_is_skipped_evening_kept(self):
+        prof = {"morning_time": "09:00", "evening_time": "21:00"}
+        out = ob.quiet_slots_after_onboarding(prof, datetime(2026, 11, 9, 8, 51))
+        self.assertEqual(out, {"last_morning_sent_date": "2026-11-09"})
+
+    def test_catchup_morning_in_afternoon_is_skipped(self):
+        prof = {"morning_time": "09:00", "evening_time": "21:00"}
+        out = ob.quiet_slots_after_onboarding(prof, datetime(2026, 11, 9, 14, 0))
+        self.assertEqual(out, {"last_morning_sent_date": "2026-11-09"})
+
+    def test_late_onboarding_skips_both(self):
+        prof = {"morning_time": "09:00", "evening_time": "21:00"}
+        out = ob.quiet_slots_after_onboarding(prof, datetime(2026, 11, 9, 19, 30))
+        self.assertIn("last_evening_sent_date", out)
+        self.assertIn("last_morning_sent_date", out)
+
+    def test_early_onboarding_keeps_morning(self):
+        prof = {"morning_time": "09:00", "evening_time": "21:00"}
+        self.assertEqual(ob.quiet_slots_after_onboarding(prof, datetime(2026, 11, 9, 5, 0)), {})

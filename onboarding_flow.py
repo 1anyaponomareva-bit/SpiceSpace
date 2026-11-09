@@ -3110,6 +3110,31 @@ def start_reonboarding(
     }
 
 
+def quiet_slots_after_onboarding(
+    profile: dict, now_local: datetime, quiet_minutes: int = 180
+) -> dict:
+    """Mark today's morning/evening as already sent when they fall before now+quiet.
+
+    She has just finished onboarding and got a question to answer; a morning message
+    minutes later (or a catch-up one hours after 09:00) talks over that conversation.
+    """
+    out: dict = {}
+    today_iso = now_local.date().isoformat()
+    limit = now_local.hour * 60 + now_local.minute + quiet_minutes
+    for field, key, default in (
+        ("morning_time", "last_morning_sent_date", "09:30"),
+        ("evening_time", "last_evening_sent_date", "21:00"),
+    ):
+        raw = str(profile.get(field) or default).strip()
+        m = re.match(r"^(\d{1,2})[:.](\d{2})", raw)
+        if not m:
+            continue
+        slot = int(m.group(1)) * 60 + int(m.group(2))
+        if slot < limit:
+            out[key] = today_iso
+    return out
+
+
 async def _complete_onboarding(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -3141,6 +3166,7 @@ async def _complete_onboarding(
     cycle = new_cycle_fields(profile, today_iso)
     if not profile.get("trial_start_date"):
         cycle["trial_start_date"] = today_iso
+    cycle.update(quiet_slots_after_onboarding(profile, datetime.now(tz)))
     profile.update(cycle)
     db.update_profile(cid, cycle)
 
