@@ -37,6 +37,7 @@ import uvicorn
 
 import db as db_store
 import onboarding_flow as ob
+import safety
 from bot_ui import ui_lang, ui_text
 from bot_typing import typing_while
 from goal_change import (
@@ -5364,7 +5365,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if ob.just_greeted(onboarding.get(cid)):
         return  # greeting is already on screen — don't send it twice
     ob.start_new_onboarding(onboarding, cid, lang)
-    await _bot_reply(update.message, ob.get_greeting_new(lang))
+    await _bot_reply(
+        update.message,
+        ob.get_greeting_new(lang),
+        reply_markup=ob.age_keyboard(lang),
+    )
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -5428,7 +5433,11 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         _purge_user_runtime(cid)  # again: nothing may have been re-cached meanwhile
         ob.start_new_onboarding(onboarding, cid, lang)
-        await _bot_reply(update.message, ob.get_greeting_new(lang))
+        await _bot_reply(
+            update.message,
+            ob.get_greeting_new(lang),
+            reply_markup=ob.age_keyboard(lang),
+        )
         return
 
     await _bot_reply(
@@ -5764,6 +5773,103 @@ async def cmd_reonboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _bot_reply(update.message, opening)
 
 
+async def _handle_crisis_message(
+    update: Update, cid: int, raw: str, prof: object
+) -> None:
+    prof_d = prof if isinstance(prof, dict) else {}
+    lang = _user_lang(prof_d or None, update)
+    repeat = safety.note_crisis(cid)
+    log.warning("crisis message detected cid=%s repeat=%s", cid, repeat)  # no text in logs
+    reply = safety.crisis_reply(lang, repeat=repeat)
+    # Plain reply_text: the vetted text must not go through the outgoing rewriters.
+    await update.message.reply_text(reply)
+    _append_history_turn(cid, raw, reply)
+    pending_morning.pop(cid, None)
+    pending_evening.pop(cid, None)
+    if (
+        repeat
+        or not ob.profile_onboarding_complete(prof_d)
+        or not _profile_daily_enabled(prof_d)
+    ):
+        return
+    premium = _profile_is_premium_active(prof_d, _profile_local_date(prof_d))
+    await asyncio.sleep(1)
+    await update.message.reply_text(
+        safety.pause_question(lang, premium),
+        reply_markup=safety.pause_keyboard(lang),
+    )
+
+
+async def handle_age_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """18+ confirmation at the start of onboarding."""
+    query = update.callback_query
+    if not query or not query.data or not query.message:
+        return
+    await query.answer()
+    cid = query.message.chat_id
+    _restore_cid_flow(cid)
+    lang = (query.from_user.language_code if query.from_user else None) or "en"
+    st = onboarding.get(cid)
+    if isinstance(st, dict):
+        lang = str(st.get("lang") or lang)
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception as e:
+        log.warning("age edit_markup failed cid=%s: %s", cid, e)
+    if not isinstance(st, dict) or int(st.get("step") or 0) != ob.OB_NAME:
+        return  # stale button: onboarding already moved on
+    if query.data == "ob_age:yes":
+        onboarding[cid] = {**st, "age_ok": True, "age_blocked": False}
+        await context.bot.send_message(chat_id=cid, text=ob.age_reply_text("ask_name", lang))
+    else:
+        onboarding[cid] = {**st, "age_blocked": True}
+        await context.bot.send_message(chat_id=cid, text=ob.age_reply_text("under", lang))
+
+
+async def handle_safety_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Buttons under the crisis reply: pause / keep / resume morning and evening messages."""
+    query = update.callback_query
+    if not query or not query.data or not query.message:
+        return
+    await query.answer()
+    cid = query.message.chat_id
+    data = query.data.strip()
+    prof = user_profiles.get(str(cid)) or db_store.get_profile(cid) or {}
+    if not isinstance(prof, dict):
+        return
+    lang = ui_lang(prof)
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception as e:
+        log.warning("safety edit_markup failed cid=%s: %s", cid, e)
+
+    if data == "safety:pause":
+        db_store.update_profile(cid, {"daily_enabled": False})
+        prof["daily_enabled"] = False
+        user_profiles[str(cid)] = prof
+        pending_morning.pop(cid, None)
+        pending_evening.pop(cid, None)
+        await context.bot.send_message(
+            chat_id=cid,
+            text=safety.paused_text(lang),
+            reply_markup=safety.resume_keyboard(lang),
+        )
+        return
+    if data == "safety:resume":
+        db_store.save_subscriber(cid, True)
+        subscribers.add(cid)
+        db_store.update_profile(cid, {"daily_enabled": True})
+        prof["daily_enabled"] = True
+        user_profiles[str(cid)] = prof
+        await context.bot.send_message(chat_id=cid, text=safety.resumed_text(lang))
+        return
+    await context.bot.send_message(chat_id=cid, text=safety.keep_text(lang))
+
+
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_chat or not update.message or not update.message.text:
         return
@@ -5779,6 +5885,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     prof_early = user_profiles.get(str(cid)) or db_store.get_profile(cid)
     if isinstance(prof_early, dict):
         _touch_user_message_date(cid, prof_early)
+
+    if safety.detect_crisis(raw):
+        # Before onboarding and chat: a crisis message gets vetted text, not a model reply.
+        await _handle_crisis_message(update, cid, raw, prof_early)
+        return
 
     st_ob = onboarding.get(cid)
     if (
@@ -5885,7 +5996,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user_profiles.get(str(cid)) and not ob.onboarding_resume_held(cid):
         lang = (update.effective_user.language_code if update.effective_user else None) or "en"
         ob.start_new_onboarding(onboarding, cid, lang)
-        await _bot_reply(update.message, ob.get_greeting_new(lang))
+        await _bot_reply(
+            update.message,
+            ob.get_greeting_new(lang),
+            reply_markup=ob.age_keyboard(lang),
+        )
         return
 
     prof_raw = user_profiles.get(str(cid))
@@ -6209,7 +6324,11 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else:
             lang = (update.effective_user.language_code if update.effective_user else None) or "en"
             ob.start_new_onboarding(onboarding, cid, lang)
-            await _bot_reply(msg, ob.get_greeting_new(lang))
+            await _bot_reply(
+                msg,
+                ob.get_greeting_new(lang),
+                reply_markup=ob.age_keyboard(lang),
+            )
             return
 
     prof_photo = user_profiles.get(str(cid)) or db_store.get_profile(cid)
@@ -7747,6 +7866,15 @@ def _register_telegram_handlers(app_: Application) -> None:
             handle_open_subscription_callback,
             pattern=r"^open_subscription$",
         )
+    )
+    app_.add_handler(
+        CallbackQueryHandler(
+            handle_safety_callback,
+            pattern=r"^safety:(pause|keep|resume)$",
+        )
+    )
+    app_.add_handler(
+        CallbackQueryHandler(handle_age_callback, pattern=r"^ob_age:(yes|no)$")
     )
     app_.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
     app_.add_handler(

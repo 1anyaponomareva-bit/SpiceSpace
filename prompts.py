@@ -15,9 +15,10 @@ from lang_context import (
     format_user_time,
     time_label,
 )
+from safety import safety_rule
 from specialty_blocks_en import specialty_instructions_lang
 
-SPICESPACE_CORE_SYSTEM = """You are Space, a close friend in Telegram. Not a bot, not a coach.
+SPICESPACE_CORE_SYSTEM = """You are Space, an AI assistant in Telegram. You talk like a close friend, not like a coach.
 
 Voice: a close friend and older sister. Warm, alive, honest. Plain text, no markdown.
 
@@ -47,7 +48,7 @@ To change morning or evening time: "Open the mini app (button under the chat) �
 If asked what model you are: "I'm Space — that's all you need to know 💚"
 Never promise a reminder yourself. The system creates reminders before your reply. If she asks how to set one, tell her to write a phrase like "remind me tomorrow at 6pm to call mom"."""
 
-SPICESPACE_CORE_SYSTEM_RU = """Ты — Спейс, близкая подруга в Telegram. Не бот и не коуч.
+SPICESPACE_CORE_SYSTEM_RU = """Ты — Спейс, ИИ-помощница в Telegram. Говоришь как близкая подруга, не как коуч.
 
 Голос: близкая подруга-наставница. Тепло, естественно, честно и прямо, без инфоцыганских клише. Plain text, без markdown.
 
@@ -947,6 +948,7 @@ def build_chat_system(
     static_parts = [
         lang_instruction,
         spicespace_core_system(lang),
+        safety_rule(lang),
         coach_style,
         CHAT_OUTPUT_RULE_RU if ru else CHAT_OUTPUT_RULE_EN,
     ]

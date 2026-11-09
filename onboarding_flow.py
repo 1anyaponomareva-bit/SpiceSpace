@@ -16,6 +16,7 @@ from telegram.ext import ContextTypes
 
 import db
 from bot_typing import typing_while
+from safety import SAFETY_RULE_EN
 from goal_change import (
     build_change_12w_state,
     can_lock_as_goal,
@@ -174,9 +175,56 @@ OB_ASK_NAME = OB_NAME
 OB_ASK_MORNING_TIME = OB_MORNING_TIME
 OB_ASK_EVENING_TIME = OB_EVENING_TIME
 
-GREETING_NEW_RU = "Привет! 👋 Меня зовут Спейс. Как тебя зовут?"
-GREETING_NEW_EN = "Hey! 👋 I'm Space. What's your name?"
+GREETING_NEW_RU = (
+    "Привет! 👋 Меня зовут Спейс. Я ИИ-помощница: помогаю поставить цель на 12 недель "
+    "и идти к ней по шагам.\n\n"
+    "Важно: я не психолог и не врач, и я только для взрослых. "
+    "Подтверди, пожалуйста, что тебе есть 18."
+)
+GREETING_NEW_EN = (
+    "Hey! 👋 I'm Space, an AI assistant: I help you set a 12-week goal "
+    "and move toward it step by step.\n\n"
+    "Important: I'm not a therapist or a doctor, and I'm for adults only. "
+    "Please confirm that you are 18 or older."
+)
 GREETING_NEW = GREETING_NEW_EN
+
+
+AGE_ASK_NAME_RU = "Спасибо 💙 Как тебя зовут?"
+AGE_ASK_NAME_EN = "Thank you 💙 What's your name?"
+AGE_UNDER_RU = (
+    "Спасибо, что честно сказала 💙 Спейс только для взрослых, поэтому дальше "
+    "я не смогу с тобой работать."
+)
+AGE_UNDER_EN = (
+    "Thank you for being honest 💙 Space is for adults only, so I can't continue with you."
+)
+AGE_PRESS_RU = "Нажми, пожалуйста, кнопку ниже 👇 Это нужно один раз."
+AGE_PRESS_EN = "Please tap a button below 👇 It's needed only once."
+
+
+def age_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    ru = _is_ru(lang)
+    return InlineKeyboardMarkup(
+        [[
+            InlineKeyboardButton("Мне есть 18" if ru else "I'm 18+", callback_data="ob_age:yes"),
+            InlineKeyboardButton("Мне меньше 18" if ru else "I'm under 18", callback_data="ob_age:no"),
+        ]]
+    )
+
+
+def age_reply_text(kind: str, lang: str = "en") -> str:
+    ru = _is_ru(lang)
+    return {
+        "ask_name": AGE_ASK_NAME_RU if ru else AGE_ASK_NAME_EN,
+        "under": AGE_UNDER_RU if ru else AGE_UNDER_EN,
+        "press": AGE_PRESS_RU if ru else AGE_PRESS_EN,
+    }[kind]
+
+
+def age_pending(st: dict | None) -> bool:
+    """New onboarding waits for the 18+ button (states from before this check have no key)."""
+    return isinstance(st, dict) and st.get("age_ok") is False
 
 
 def get_greeting_new(lang: str = "en") -> str:
@@ -233,8 +281,11 @@ _EN_USER_OVERRIDE = (
 def _system_with_lang(system: str, lang: str) -> str:
     lc = str(lang or "en").lower()
     if lc.startswith("ru"):
-        return "IMPORTANT: User speaks Russian. Respond in Russian only.\n\n" + system
-    return _EN_SYSTEM_PREFIX + system
+        return (
+            "IMPORTANT: User speaks Russian. Respond in Russian only.\n\n"
+            + system + "\n\n" + SAFETY_RULE_EN
+        )
+    return _EN_SYSTEM_PREFIX + system + "\n\n" + SAFETY_RULE_EN
 
 
 def _user_content_with_lang(content: str, lang: str) -> str:
@@ -3054,6 +3105,7 @@ def start_new_onboarding(
         "language_code": lc,
         "last_activity_at": datetime.now(),
         "reminder_sent": False,
+        "age_ok": False,
     }
 
 
@@ -3337,6 +3389,12 @@ async def handle_onboarding_turn(
     st["language_code"] = lang
     touch_onboarding_activity(st)
     step = int(st.get("step") or OB_NAME)
+    if step == OB_NAME and age_pending(st):
+        if st.get("age_blocked"):
+            await msg.reply_text(age_reply_text("under", lang))
+        else:
+            await msg.reply_text(age_reply_text("press", lang), reply_markup=age_keyboard(lang))
+        return
     _note_kids_from_answer(st, raw)
     model_names = context.bot_data.get("claude_model_names") or []
 
