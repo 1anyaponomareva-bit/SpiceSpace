@@ -48,7 +48,6 @@ html[data-season="winter"] {
   --dark: #3B2A22;
   --season-red: #8E1C1C;
   --season-brown: #6B4130;
-  --snow: rgba(170, 120, 110, 0.55);
 }
 html[data-season="winter"] body { background: var(--bg); }
 html[data-season="winter"] .week-card,
@@ -93,7 +92,6 @@ html[data-season="autumn"] {
   --dark: #3A2A20;
   --season-rust: #A4471E;
   --season-brown: #5C3B26;
-  --snow: #C26A2E;
 }
 html[data-season="autumn"] body { background: var(--bg); }
 html[data-season="autumn"] .week-card,
@@ -117,12 +115,6 @@ html[data-season="autumn"] .user-name { font-size: 28px; }
 html[data-season="autumn"] .calendar-title { font-style: italic; color: var(--season-rust); font-size: 30px; }
 html[data-season="autumn"] .season-note { display: block; color: var(--season-rust); }
 html[data-season="autumn"] .tab-bar { background: rgba(243, 234, 220, 0.92); }
-
-/* Falling decoration: snowflakes in winter, a few leaves in autumn, nothing otherwise. */
-html:not([data-season]) .snow { display: none; }
-html[data-season="autumn"] .snow i::before { content: "\1F342"; }
-html[data-season="autumn"] .snow i { opacity: 0.55; }
-html[data-season="autumn"] .snow i:nth-child(even) { display: none; }
 
 /* The streak logo is lime: gold in winter, amber in autumn. */
 html[data-season="autumn"] .streak-logo-icon { filter: hue-rotate(-50deg) saturate(1.3); }
