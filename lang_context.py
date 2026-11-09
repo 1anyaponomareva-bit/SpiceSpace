@@ -176,7 +176,15 @@ def coach_style_for(lang: object, ru_text: str) -> str:
 # ---------------------------------------------------------------- extra context blocks
 
 def facts_header(lang: object) -> str:
-    return "Важные факты:" if is_ru(lang) else "Important facts:"
+    if is_ru(lang):
+        return (
+            "Важные факты о ней (её слова). Это фон, а не тема каждого ответа: упоминай факт, "
+            "только если он прямо меняет ответ. Если факт расходится с последними репликами, верь репликам:"
+        )
+    return (
+        "Important facts about her (her own words). Background, not the topic of every reply: mention a fact "
+        "only if it really changes the answer. If a fact conflicts with recent messages, trust the messages:"
+    )
 
 
 def personality_intro(lang: object) -> str:

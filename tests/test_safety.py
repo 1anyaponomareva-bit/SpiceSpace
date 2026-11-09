@@ -62,8 +62,12 @@ class ReplyTests(unittest.TestCase):
                 text = safety.crisis_reply(lang, repeat=repeat)
                 self.assertIn("112", text)
                 self.assertIn("findahelpline.com", text)
-                self.assertIn("988", text)
                 self.assertIn("?", text)  # asks whether she is safe
+                if lang == "ru":
+                    self.assertIn("findahelpline.com/ru-RU", text)
+                if not repeat:
+                    self.assertIn("988", text)
+        self.assertIn("+7 495 989-50-50", safety.crisis_reply("ru"))
 
     def test_repeat_window(self):
         safety._last_crisis_at.pop(1, None)
@@ -214,3 +218,25 @@ class PaywallSafetyTests(unittest.TestCase):
     def test_after_crisis_any_message_passes(self):
         safety._last_crisis_at[703] = __import__("time").time()
         self.assertFalse(self._blocked(703, "нет"))
+
+
+class RulesTests(unittest.TestCase):
+    def test_health_and_numbers_in_safety_rule(self):
+        for lang in ("ru", "en"):
+            rule = safety.safety_rule(lang)
+            self.assertIn("findahelpline.com", rule)
+            self.assertIn("112", rule)
+        self.assertIn("лекарства", safety.SAFETY_RULE_RU)
+        self.assertIn("medicines", safety.SAFETY_RULE_EN)
+
+    def test_core_prompt_time_of_day_and_no_invented_self(self):
+        from prompts import SPICESPACE_CORE_SYSTEM, SPICESPACE_CORE_SYSTEM_RU
+        self.assertIn("ночь", SPICESPACE_CORE_SYSTEM_RU)
+        self.assertIn("Не выдумывай о себе", SPICESPACE_CORE_SYSTEM_RU)
+        self.assertIn("night", SPICESPACE_CORE_SYSTEM)
+        self.assertIn("Never invent things about yourself", SPICESPACE_CORE_SYSTEM)
+
+    def test_fact_rule_only_her_words(self):
+        from claude_budget import CHAT_OUTPUT_RULE_EN, CHAT_OUTPUT_RULE_RU
+        self.assertIn("не «фотограф»", CHAT_OUTPUT_RULE_RU)
+        self.assertIn("Never store your own advice", CHAT_OUTPUT_RULE_EN)

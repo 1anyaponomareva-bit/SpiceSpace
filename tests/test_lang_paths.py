@@ -116,14 +116,15 @@ class EveningBlocksLanguageTests(unittest.TestCase):
         facts, personality = self._blocks("en")
         self.assertFalse(has_cyrillic(facts), facts)
         self.assertFalse(has_cyrillic(personality), personality)
-        self.assertTrue(facts.startswith("Important facts:\n"))
+        self.assertTrue(facts.startswith("Important facts about her"))
         self.assertIn("Communication style: short and direct", personality)
 
     def test_russian_blocks_keep_old_text(self) -> None:
         facts, personality = self._blocks("ru")
         self.assertEqual(
             facts,
-            "Важные факты о пользователе:\n— runs every morning\n— has a cat",
+            "Важные факты о пользователе (фон, упоминай только если прямо нужно для ответа):\n"
+            "— runs every morning\n— has a cat",
         )
         self.assertEqual(
             personality,

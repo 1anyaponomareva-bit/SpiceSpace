@@ -2142,7 +2142,11 @@ def _facts_block_for_prompt(chat_id: int, lang: str = "ru") -> str:
     facts = db_store.load_user_facts(chat_id, limit=memory_context.CHAT_FACTS_LIMIT)
     facts_text = "\n".join(f"— {f}" for f in facts) if facts else ""
     if facts_text:
-        header = "Важные факты о пользователе:" if is_ru(lang) else facts_header(lang)
+        header = (
+            "Важные факты о пользователе (фон, упоминай только если прямо нужно для ответа):"
+            if is_ru(lang)
+            else facts_header(lang)
+        )
         return f"{header}\n{facts_text}"
     return ""
 

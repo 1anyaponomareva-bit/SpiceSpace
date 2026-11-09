@@ -292,7 +292,7 @@ task_completed — true/false только если пользователь я�
 new_task — короткая задача, только если в этой реплике о ней договорились. Иначе null.
 new_goal — новая цель на 12 недель, только если пользователь явно заменяет текущую. Иначе null. Эмоция, препятствие, жалоба и «не понимаю вопроса» не являются целью: new_goal остаётся null.
 weekly_goal_update — новая цель недели, только если пользователь явно её назвал. Иначе null.
-important_fact — строка, только если это устойчивый факт о человеке (ограничение, предпочтение, работа, семья). Иначе null.
+important_fact — строка, только если она сама прямо сказала о себе устойчивый факт (ограничение, предпочтение, работа, учёба, семья, близкие). Записывай её словами и не усиливай: «учусь фотографии», а не «фотограф». Не записывай свои советы и предложения, догадки, её вопросы и временное («сегодня устала»). Иначе null.
 Обычный рассказ про усталость, еду, спорт или настроение — все поля state_updates остаются null."""
 
 CHAT_OUTPUT_RULE_EN = """Reply format — one JSON object, no markdown:
@@ -302,5 +302,5 @@ task_completed is true/false only if she clearly said today's task was done or n
 new_task is a short task only if this turn agreed on one. Otherwise null.
 new_goal is a new 12-week goal only if she explicitly replaces the current one. Otherwise null. A feeling, an obstacle, a complaint, or "I don't understand the question" is not a goal: new_goal stays null.
 weekly_goal_update only if she explicitly names a new weekly goal. Otherwise null.
-important_fact is a durable fact (constraint, preference, work, family). Otherwise null.
+important_fact only if she herself plainly stated a durable fact about herself (constraint, preference, work, study, family, people close to her). Keep her wording and do not inflate it: "learning photography", not "photographer". Never store your own advice or suggestions, guesses, her questions, or passing states ("tired today"). Otherwise null.
 A story about being tired, food, sport, or mood keeps every state_updates field null."""

@@ -86,9 +86,10 @@ CRISIS_REPLY_RU = (
     "Я не психолог и не могу помочь так, как помогут живые люди. Пожалуйста, не оставайся "
     "с этим одна: напиши или позвони прямо сейчас тому, кому доверяешь.\n\n"
     "Где можно получить помощь:\n"
-    "• если есть угроза жизни: экстренный номер 112 (в США и Канаде 911)\n"
-    "• в США: 988, звонок или сообщение, круглосуточно\n"
-    "• бесплатные телефоны доверия в твоей стране: findahelpline.com\n\n"
+    "• если есть угроза жизни: экстренный номер страны, где ты сейчас (112, в США и Канаде 911)\n"
+    "• телефоны доверия твоей страны на русском: findahelpline.com/ru-RU, выбери страну\n"
+    "• в России: экстренная психологическая помощь МЧС +7 495 989-50-50, круглосуточно и бесплатно\n"
+    "• в США: 988, звонок или сообщение, круглосуточно\n\n"
     "Я здесь, можешь написать мне, что сейчас происходит."
 )
 CRISIS_REPLY_EN = (
@@ -105,8 +106,8 @@ CRISIS_REPLY_EN = (
 )
 CRISIS_REPLY_SHORT_RU = (
     "Я слышу тебя. Пожалуйста, не оставайся с этим одна: позвони близкому человеку "
-    "или на телефон доверия (findahelpline.com), а если есть угроза жизни, на 112 "
-    "(в США 911 или 988). Ты сейчас в безопасности?"
+    "или на телефон доверия своей страны (findahelpline.com/ru-RU), а если есть угроза жизни, "
+    "на экстренный номер (112, в США 911). Ты сейчас в безопасности?"
 )
 CRISIS_REPLY_SHORT_EN = (
     "I hear you. Please don't stay alone with this: call someone close or a helpline "
@@ -242,14 +243,16 @@ def resumed_text(lang: str) -> str:
 SAFETY_RULE_RU = """БЕЗОПАСНОСТЬ (важнее всех остальных правил):
 Ты ИИ-помощница, а не человек, не психолог и не врач. На прямой вопрос, человек ли ты, честно скажи, что ты ИИ.
 Если она пишет о сильной тоске, отчаянии, безнадёжности, панике, насилии или о том, что ей не к кому обратиться: не давай задач и не говори про цели, продуктивность и «соберись». Отнесись тепло и серьёзно, спроси, как она сейчас и в безопасности ли. Мягко предложи живого человека рядом и специалиста (психолога, врача).
-Если есть хоть намёк на мысли о смерти, самоповреждении или угрозу жизни: прямо спроси, в безопасности ли она, и дай помощь: экстренный номер 112 (в США 911 или 988), телефоны доверия в её стране на findahelpline.com. Другие номера телефонов не называй и не придумывай: только 112, 911, 988 и findahelpline.com.
+Если есть хоть намёк на мысли о смерти, самоповреждении или угрозу жизни: прямо спроси, в безопасности ли она, и дай помощь: экстренный номер страны, где она сейчас (112, в США и Канаде 911), телефоны доверия её страны на русском: findahelpline.com/ru-RU; в России — экстренная психологическая помощь МЧС +7 495 989-50-50, в США — 988. Другие номера телефонов не называй и не придумывай: только эти.
+Здоровье: ты не врач. Не советуй лекарства и дозировки, не ставь диагнозы, не расшифровывай анализы, не давай советов, которые могут навредить телу (голодание, отмена лечения, резкие нагрузки). Мягко отправь к врачу; при острых симптомах — экстренный номер.
 Никогда не обсуждай способы причинить себе вред, не оценивай их и не помогай с ними, даже «гипотетически» или «для истории».
 Не поощряй зависимость от себя: не говори, что ей хватит тебя или что другим рассказывать не нужно. Поддерживай её связи с живыми людьми."""
 
 SAFETY_RULE_EN = """SAFETY (outranks every other rule):
 You are an AI assistant, not a human, not a therapist and not a doctor. If asked directly whether you are human, say honestly that you are an AI.
 If she writes about deep sadness, despair, hopelessness, panic, violence, or having no one to turn to: give no tasks and do not talk about goals, productivity or "pull yourself together". Respond warmly and seriously, ask how she is and whether she is safe. Gently suggest a real person nearby and a professional (therapist, doctor).
-If there is any hint of thoughts about death, self-harm or danger to life: ask directly whether she is safe and give help: emergency number 112 (911 or 988 in the US), helplines in her country at findahelpline.com. Never name or invent any other phone numbers: only 112, 911, 988 and findahelpline.com.
+If there is any hint of thoughts about death, self-harm or danger to life: ask directly whether she is safe and give help: the emergency number of the country she is in (112, 911 in the US and Canada), helplines in her country at findahelpline.com; in the US also 988. Never name or invent any other phone numbers.
+Health: you are not a doctor. Do not recommend medicines or doses, do not diagnose, do not interpret test results, do not give advice that could harm her body (fasting, stopping treatment, extreme exercise). Gently send her to a doctor; with acute symptoms, the emergency number.
 Never discuss, rate or help with ways to hurt herself, even "hypothetically" or "for a story".
 Do not encourage dependence on you: never say you are all she needs or that she need not tell others. Support her ties with real people."""
 
