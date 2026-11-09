@@ -519,8 +519,9 @@
     try { tg.expand(); } catch (_) {}
     try { tg.disableVerticalSwipes?.(); } catch (_) {}
     try {
-      tg.setHeaderColor?.('#F5F4F0');
-      tg.setBackgroundColor?.('#F5F4F0');
+      const pageBg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#F5F4F0';
+      tg.setHeaderColor?.(pageBg);
+      tg.setBackgroundColor?.(pageBg);
     } catch (_) {}
     const h = tg.viewportStableHeight || tg.viewportHeight;
     if (h && Number.isFinite(h)) {
@@ -1193,7 +1194,7 @@
   }
 
   function launchConfetti() {
-    const colors = ['#D4F26B', '#ffffff', '#2a2a2a'];
+    const colors = ['#F2C14E', '#ffffff', '#D9483B'];
     for (let i = 0; i < 60; i++) {
       setTimeout(() => {
         const c = document.createElement('div');

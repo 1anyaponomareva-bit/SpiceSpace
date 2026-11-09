@@ -1,0 +1,144 @@
+/* Seasonal themes. season.js sets <html data-season="autumn|winter"> by date
+   (or ?season=autumn|winter|off for previews). Without a season the base look stays. */
+
+/* Stickers: the owner's photo cut-outs placed on card edges by season.js. */
+.sticker {
+  position: absolute;
+  z-index: 2;
+  height: auto;
+  pointer-events: none;
+  filter: drop-shadow(0 4px 6px rgba(60, 30, 10, 0.28));
+  user-select: none;
+}
+.has-sticker { position: relative; }
+
+/* 12-week grid as a sheet of paper held by a clip. */
+.season-paper {
+  position: relative;
+  margin: 14px 0 34px;
+  padding: 30px 14px 18px;
+  background: var(--card);
+  border-radius: 18px;
+  box-shadow: 0 1px 0 var(--border), 0 10px 26px rgba(110, 60, 30, 0.10);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+html[data-season] .month-card { margin-top: 18px; padding-top: 30px; }
+
+.season-note {
+  display: none;
+  font-family: 'Marck Script', cursive;
+  font-size: 21px;
+  line-height: 1.15;
+  margin: -6px 0 6px;
+  transform: rotate(-2deg);
+  transform-origin: left center;
+}
+
+/* ---------------- Winter / New Year ---------------- */
+html[data-season="winter"] {
+  --bg: #F4ECE1;
+  --card: #FFFDF9;
+  --border: #EADFD0;
+  --accent: #D4AE5A;
+  --accent-rgb: 212, 174, 90;
+  --badge-bg: #F7E9C8;
+  --badge-text: #8C2A1E;
+  --dark: #3B2A22;
+  --season-red: #8E1C1C;
+  --season-brown: #6B4130;
+  --snow: rgba(170, 120, 110, 0.55);
+}
+html[data-season="winter"] body { background: var(--bg); }
+html[data-season="winter"] .week-card,
+html[data-season="winter"] .today-card,
+html[data-season="winter"] .streak-card,
+html[data-season="winter"] .times-card { box-shadow: 0 1px 0 var(--border), 0 6px 18px rgba(110, 60, 30, 0.06); }
+
+html[data-season="winter"] .month-card {
+  background: linear-gradient(160deg, #9B2226 0%, #7A1717 100%);
+  box-shadow: 0 10px 24px rgba(122, 23, 23, 0.25);
+}
+html[data-season="winter"] .card-label--light { color: #F2D9A6; }
+html[data-season="winter"] .month-card__stars { color: #F2D9A6; opacity: 0.45; }
+html[data-season="winter"] .card-label { color: #B88F3E; }
+html[data-season="winter"] .card-label--light { color: #F2D9A6; }
+
+html[data-season="winter"] .user-name,
+html[data-season="winter"] .calendar-title {
+  font-family: 'Playfair Display', Georgia, serif;
+  color: var(--season-brown);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+html[data-season="winter"] .user-name { font-size: 28px; }
+html[data-season="winter"] .calendar-title {
+  font-style: italic;
+  color: var(--season-red);
+  font-size: 30px;
+}
+html[data-season="winter"] .season-note { display: block; color: var(--season-red); }
+html[data-season="winter"] .tab-bar { background: rgba(244, 236, 225, 0.92); }
+
+/* ---------------- Autumn / November ---------------- */
+html[data-season="autumn"] {
+  --bg: #F3EADC;
+  --card: #FFFCF6;
+  --border: #E8DCC8;
+  --accent: #D9853B;
+  --accent-rgb: 217, 133, 59;
+  --badge-bg: #F6E2C9;
+  --badge-text: #8A4316;
+  --dark: #3A2A20;
+  --season-rust: #A4471E;
+  --season-brown: #5C3B26;
+  --snow: #C26A2E;
+}
+html[data-season="autumn"] body { background: var(--bg); }
+html[data-season="autumn"] .week-card,
+html[data-season="autumn"] .today-card,
+html[data-season="autumn"] .streak-card,
+html[data-season="autumn"] .times-card { box-shadow: 0 1px 0 var(--border), 0 6px 18px rgba(110, 70, 30, 0.06); }
+html[data-season="autumn"] .month-card {
+  background: linear-gradient(160deg, #5A3A28 0%, #3E281C 100%);
+  box-shadow: 0 10px 24px rgba(62, 40, 28, 0.25);
+}
+html[data-season="autumn"] .card-label { color: #B5763A; }
+html[data-season="autumn"] .card-label--light { color: #F0C99A; }
+html[data-season="autumn"] .month-card__stars { color: #F0C99A; opacity: 0.45; }
+html[data-season="autumn"] .user-name,
+html[data-season="autumn"] .calendar-title {
+  font-family: 'Playfair Display', Georgia, serif;
+  color: var(--season-brown);
+  font-weight: 700;
+}
+html[data-season="autumn"] .user-name { font-size: 28px; }
+html[data-season="autumn"] .calendar-title { font-style: italic; color: var(--season-rust); font-size: 30px; }
+html[data-season="autumn"] .season-note { display: block; color: var(--season-rust); }
+html[data-season="autumn"] .tab-bar { background: rgba(243, 234, 220, 0.92); }
+
+/* Falling decoration: snowflakes in winter, a few leaves in autumn, nothing otherwise. */
+html:not([data-season]) .snow { display: none; }
+html[data-season="autumn"] .snow i::before { content: "\1F342"; }
+html[data-season="autumn"] .snow i { opacity: 0.55; }
+html[data-season="autumn"] .snow i:nth-child(even) { display: none; }
+
+/* The streak logo is lime: gold in winter, amber in autumn. */
+html[data-season="autumn"] .streak-logo-icon { filter: hue-rotate(-50deg) saturate(1.3); }
+
+/* Calendar "missed" days: festive red in winter, deep brown in autumn instead of black. */
+html[data-season="winter"] .day-dot.missed,
+html[data-season="winter"] .legend-dot--miss { background: var(--season-red); }
+html[data-season="winter"] .day-dot.partial,
+html[data-season="winter"] .legend-dot--partial { background: linear-gradient(90deg, var(--accent) 50%, var(--season-red) 50%); }
+html[data-season="winter"] .day-dot.future { background: #E9DFD2; }
+html[data-season="autumn"] .day-dot.missed,
+html[data-season="autumn"] .legend-dot--miss { background: var(--season-brown); }
+html[data-season="autumn"] .day-dot.partial,
+html[data-season="autumn"] .legend-dot--partial { background: linear-gradient(90deg, var(--accent) 50%, var(--season-brown) 50%); }
+html[data-season="autumn"] .day-dot.future { background: #E8DCCB; }
+
+/* Exact halves for half-filled days (the season colors above reset these via the shorthand). */
+html[data-season] .day-dot.partial,
+html[data-season] .legend-dot--partial { background-origin: border-box; background-repeat: no-repeat; }
