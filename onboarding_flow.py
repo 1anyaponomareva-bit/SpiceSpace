@@ -178,14 +178,14 @@ OB_ASK_EVENING_TIME = OB_EVENING_TIME
 GREETING_NEW_RU = (
     "Привет! 👋 Меня зовут Спейс. Я ИИ-помощница: помогаю поставить цель на 12 недель "
     "и идти к ней по шагам.\n\n"
-    "Важно: я не психолог и не врач, и я только для взрослых. "
-    "Подтверди, пожалуйста, что тебе есть 18."
+    "Пара важных моментов: я не психолог и не врач, а пользоваться Спейс можно с 18 лет. "
+    "Подтверди, пожалуйста, возраст кнопкой ниже."
 )
 GREETING_NEW_EN = (
     "Hey! 👋 I'm Space, an AI assistant: I help you set a 12-week goal "
     "and move toward it step by step.\n\n"
-    "Important: I'm not a therapist or a doctor, and I'm for adults only. "
-    "Please confirm that you are 18 or older."
+    "A couple of things: I'm not a therapist or a doctor, and Space is available from age 18. "
+    "Please confirm your age with a button below."
 )
 GREETING_NEW = GREETING_NEW_EN
 
@@ -193,11 +193,11 @@ GREETING_NEW = GREETING_NEW_EN
 AGE_ASK_NAME_RU = "Спасибо 💙 Как тебя зовут?"
 AGE_ASK_NAME_EN = "Thank you 💙 What's your name?"
 AGE_UNDER_RU = (
-    "Спасибо, что честно сказала 💙 Спейс только для взрослых, поэтому дальше "
-    "я не смогу с тобой работать."
+    "Спасибо, что честно сказала 💙 Пользоваться Спейс можно с 18 лет, поэтому "
+    "пока я не смогу с тобой работать."
 )
 AGE_UNDER_EN = (
-    "Thank you for being honest 💙 Space is for adults only, so I can't continue with you."
+    "Thank you for being honest 💙 Space is available from age 18, so I can't continue with you for now."
 )
 AGE_PRESS_RU = "Нажми, пожалуйста, кнопку ниже 👇 Это нужно один раз."
 AGE_PRESS_EN = "Please tap a button below 👇 It's needed only once."
