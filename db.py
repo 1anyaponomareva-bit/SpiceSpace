@@ -1167,19 +1167,55 @@ def save_user_fact(user_id: int | str, fact: str, category: str = "general") -> 
 
 
 def load_user_facts(user_id: int | str, limit: int = 20) -> list[str]:
-    """Load facts about the user."""
+    """Load facts about the user (people are kept apart, see load_people)."""
     key = str(user_id)
     if not _use_supabase:
         return []
     rows = _request(
         "GET",
-        f"user_facts?user_id=eq.{key}&order=created_at.desc&limit={limit}",
+        f"user_facts?user_id=eq.{key}&or=(category.is.null,category.neq.{PERSON_CATEGORY})"
+        f"&order=created_at.desc&limit={limit}",
     ) or []
     return [
         str(r.get("fact", ""))
         for r in rows
         if isinstance(r, dict) and r.get("fact")
     ]
+
+
+PERSON_CATEGORY = "person"
+
+
+def load_people(user_id: int | str, limit: int = 60) -> list[str]:
+    """Every person she told about, oldest first: these always go into the chat."""
+    key = str(user_id)
+    if not _use_supabase:
+        return []
+    rows = _request(
+        "GET",
+        f"user_facts?user_id=eq.{key}&category=eq.{PERSON_CATEGORY}"
+        f"&select=fact&order=created_at.asc&limit={limit}",
+    ) or []
+    return [str(r.get("fact", "")) for r in rows if isinstance(r, dict) and r.get("fact")]
+
+
+def save_person(user_id: int | str, line: str, same_as: list[str]) -> None:
+    """Insert a person line, dropping older lines about the same person."""
+    key = str(user_id)
+    if not _use_supabase or not line.strip():
+        return
+    for old in same_as:
+        encoded = quote(str(old), safe="")
+        _request(
+            "DELETE",
+            f"user_facts?user_id=eq.{key}&category=eq.{PERSON_CATEGORY}&fact=eq.{encoded}",
+        )
+    _request(
+        "POST",
+        "user_facts",
+        json={"user_id": int(key), "fact": line.strip()[:400], "category": PERSON_CATEGORY},
+        headers={**_headers(), "Prefer": "return=minimal"},
+    )
 
 
 def delete_user_facts(user_id: int | str) -> None:

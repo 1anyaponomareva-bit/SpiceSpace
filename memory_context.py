@@ -120,3 +120,48 @@ def recent_days_block(summaries: list[dict], today: date, lang: str, *, days: in
     for d, text in past:
         lines.append(f"{_fmt_day(d, lang)}: {text[:300]}")
     return "\n".join(lines)
+
+
+def person_line(person: dict) -> str:
+    """'мама — Ольга: живёт в Казани' (name or note may be missing)."""
+    relation = str(person.get("relation") or "").strip()
+    name = str(person.get("name") or "").strip()
+    note = str(person.get("note") or "").strip()
+    head = " — ".join(x for x in (relation, name) if x)
+    if not head:
+        return ""
+    return f"{head}: {note}" if note else head
+
+
+def _head_parts(line: str) -> tuple[str, str]:
+    head = line.split(":", 1)[0]
+    rel, _, name = head.partition(" — ")
+    return rel.strip().lower(), name.strip().lower()
+
+
+def same_person_lines(existing: list[str], person: dict) -> list[str]:
+    """Older lines about the same person: same name, or same relation when neither has a name."""
+    name = str(person.get("name") or "").strip().lower()
+    relation = str(person.get("relation") or "").strip().lower()
+    out = []
+    for line in existing:
+        rel, nm = _head_parts(line)
+        if name and nm == name:
+            out.append(line)
+        elif not name and not nm and relation and rel == relation:
+            out.append(line)
+        elif name and not nm and relation and rel == relation:
+            out.append(line)  # she now told the name of someone already known by relation
+    return out
+
+
+def people_block(lines: list[str], lang: str) -> str:
+    if not lines:
+        return ""
+    if _ru(lang):
+        head = ("Люди в её жизни (с её слов). Помни их имена и кто есть кто; "
+                "упоминай, только когда речь о них:")
+    else:
+        head = ("People in her life (from her own words). Remember their names and who is who; "
+                "mention them only when relevant:")
+    return head + "\n" + "\n".join(f"— {x}" for x in lines)

@@ -2147,8 +2147,11 @@ def _facts_block_for_prompt(chat_id: int, lang: str = "ru") -> str:
             if is_ru(lang)
             else facts_header(lang)
         )
-        return f"{header}\n{facts_text}"
-    return ""
+        block = f"{header}\n{facts_text}"
+    else:
+        block = ""
+    people = memory_context.people_block(db_store.load_people(chat_id), lang)
+    return "\n\n".join(b for b in (block, people) if b)
 
 
 def _personality_block_for_prompt(chat_id: int, lang: str = "ru") -> str:
@@ -4474,6 +4477,14 @@ def _apply_chat_state_updates(
         if not category:
             category = "constraint" if is_refusal_constraint(fact) else "personal"
         db_store.save_user_fact(chat_id, fact, category)
+    person = updates.get("person")
+    if isinstance(person, dict):
+        line = memory_context.person_line(person)
+        if line:
+            existing = db_store.load_people(chat_id)
+            same = memory_context.same_person_lines(existing, person)
+            if line not in same or len(same) > 1:
+                db_store.save_person(chat_id, line, same)
     return _goal_card(profile, main_goal=card_goal, weekly_goal=card_weekly)
 
 
@@ -4529,6 +4540,10 @@ async def _coach_reply(
         extra_parts.append(topic)
     if facts_text:
         extra_parts.append(f"{facts_header(lang)}\n{facts_text}")
+    people = await asyncio.to_thread(db_store.load_people, chat_id)
+    people_block = memory_context.people_block(people, lang)
+    if people_block:
+        extra_parts.append(people_block)
     if personality_text:
         extra_parts.append(f"{personality_intro(lang)}\n{personality_text}")
     if weekly_context:

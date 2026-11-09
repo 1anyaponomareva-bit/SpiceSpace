@@ -196,6 +196,7 @@ def parse_structured_reply(raw: str) -> dict[str, Any]:
                 "new_goal": None,
                 "weekly_goal_update": None,
                 "important_fact": None,
+                "person": None,
             },
         }
     updates = data.get("state_updates")
@@ -233,8 +234,21 @@ def parse_structured_reply(raw: str) -> dict[str, Any]:
             "weekly_goal_update": text_or_none(updates.get("weekly_goal_update")),
             "important_fact": fact_text,
             "important_fact_category": fact_category,
+            "person": _person_or_none(updates.get("person")),
         },
     }
+
+
+def _person_or_none(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    out = {}
+    for k in ("relation", "name", "note"):
+        v = value.get(k)
+        out[k] = "" if _nullish(v) else str(v).strip()[:200]
+    if not out["relation"] and not out["name"]:
+        return None
+    return out
 
 
 def _blank_if_null(value: object) -> str:
@@ -286,21 +300,23 @@ def parse_evening_bundle(raw: str) -> dict[str, str]:
 
 
 CHAT_OUTPUT_RULE_RU = """Формат ответа — один JSON-объект, без markdown:
-{"reply":"текст пользователю","state_updates":{"task_completed":null,"new_task":null,"new_goal":null,"weekly_goal_update":null,"important_fact":null}}
+{"reply":"текст пользователю","state_updates":{"task_completed":null,"new_task":null,"new_goal":null,"weekly_goal_update":null,"important_fact":null,"person":null}}
 reply — обычный текст Спейс. Короткий ответ допустим, но не обязателен: простой вопрос — коротко, сложная ситуация и практический запрос — настолько полно, насколько нужно.
 task_completed — true/false только если пользователь явно сказал, что задача дня сделана или нет. Иначе null.
 new_task — короткая задача, только если в этой реплике о ней договорились. Иначе null.
 new_goal — новая цель на 12 недель, только если пользователь явно заменяет текущую. Иначе null. Эмоция, препятствие, жалоба и «не понимаю вопроса» не являются целью: new_goal остаётся null.
 weekly_goal_update — новая цель недели, только если пользователь явно её назвал. Иначе null.
-important_fact — строка, только если она сама прямо сказала о себе устойчивый факт (ограничение, предпочтение, работа, учёба, семья, близкие). Записывай её словами и не усиливай: «учусь фотографии», а не «фотограф». Не записывай свои советы и предложения, догадки, её вопросы и временное («сегодня устала»). Иначе null.
+important_fact — строка, только если она сама прямо сказала о себе устойчивый факт (ограничение, предпочтение, работа, учёба, семья, близкие). Записывай её словами и не усиливай: «учусь фотографии», а не «фотограф». Не записывай свои советы и предложения, догадки, её вопросы и временное («сегодня устала»). Иначе null. Близкого человека сюда не пиши, для этого person.
+person — объект {"relation":"мама","name":"Ольга","note":"живёт в Казани, болеет"}, только если в этой реплике она сама назвала близкого человека (родные, партнёр, друзья, дети, коллеги) или сообщила о нём новое. name — как она его назвала, или пусто, если имени нет. note — коротко, что важно помнить, с тем, что уже известно из списка людей и всё ещё верно. Если отношения изменились («мы расстались»), отрази это в relation или note. Ничего не додумывай. Иначе null.
 Обычный рассказ про усталость, еду, спорт или настроение — все поля state_updates остаются null."""
 
 CHAT_OUTPUT_RULE_EN = """Reply format — one JSON object, no markdown:
-{"reply":"text for the user","state_updates":{"task_completed":null,"new_task":null,"new_goal":null,"weekly_goal_update":null,"important_fact":null}}
+{"reply":"text for the user","state_updates":{"task_completed":null,"new_task":null,"new_goal":null,"weekly_goal_update":null,"important_fact":null,"person":null}}
 reply is the Space message. A short reply is allowed, not required: a simple question stays short, a complicated situation or a practical request is as complete as it needs to be.
 task_completed is true/false only if she clearly said today's task was done or not. Otherwise null.
 new_task is a short task only if this turn agreed on one. Otherwise null.
 new_goal is a new 12-week goal only if she explicitly replaces the current one. Otherwise null. A feeling, an obstacle, a complaint, or "I don't understand the question" is not a goal: new_goal stays null.
 weekly_goal_update only if she explicitly names a new weekly goal. Otherwise null.
-important_fact only if she herself plainly stated a durable fact about herself (constraint, preference, work, study, family, people close to her). Keep her wording and do not inflate it: "learning photography", not "photographer". Never store your own advice or suggestions, guesses, her questions, or passing states ("tired today"). Otherwise null.
+important_fact only if she herself plainly stated a durable fact about herself (constraint, preference, work, study, family, people close to her). Keep her wording and do not inflate it: "learning photography", not "photographer". Never store your own advice or suggestions, guesses, her questions, or passing states ("tired today"). Otherwise null. Do not put people close to her here; use person.
+person is an object {"relation":"mom","name":"Olga","note":"lives in Boston, unwell"} only if in this turn she herself named someone close (family, partner, friends, children, colleagues) or said something new about them. name as she called them, or empty if no name. note: short, what to remember, merged with what the people list already says and is still true. If the relationship changed ("we broke up"), show it in relation or note. Invent nothing. Otherwise null.
 A story about being tired, food, sport, or mood keeps every state_updates field null."""

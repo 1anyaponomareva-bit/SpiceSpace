@@ -45,6 +45,9 @@ class _FakeStore:
     def load_personality(self, _chat_id: int) -> dict | None:
         return self._personality
 
+    def load_people(self, _chat_id: int) -> list[str]:
+        return []
+
 EN_PROFILE = {
     "language_code": "en",
     "name": "Anna",

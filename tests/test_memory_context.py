@@ -69,3 +69,33 @@ class RecentDaysTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PeopleTests(unittest.TestCase):
+    def test_line(self):
+        self.assertEqual(mc.person_line({"relation": "мама", "name": "Ольга", "note": "живёт в Казани"}),
+                         "мама — Ольга: живёт в Казани")
+        self.assertEqual(mc.person_line({"relation": "брат", "name": "", "note": ""}), "брат")
+        self.assertEqual(mc.person_line({"relation": "", "name": "", "note": "x"}), "")
+
+    def test_same_person_by_name_and_relation(self):
+        existing = ["мама — Ольга: живёт в Казани", "парень — Дима", "брат", "подруга — Катя"]
+        self.assertEqual(mc.same_person_lines(existing, {"relation": "бывший", "name": "Дима"}),
+                         ["парень — Дима"])
+        self.assertEqual(mc.same_person_lines(existing, {"relation": "брат", "name": "Саша"}), ["брат"])
+        self.assertEqual(mc.same_person_lines(existing, {"relation": "подруга", "name": "Лена"}), [])
+
+    def test_block(self):
+        block = mc.people_block(["мама — Ольга"], "ru")
+        self.assertIn("Люди в её жизни", block)
+        self.assertIn("— мама — Ольга", block)
+        self.assertEqual(mc.people_block([], "ru"), "")
+
+
+class PersonParseTests(unittest.TestCase):
+    def test_parse(self):
+        from claude_budget import parse_structured_reply as parse_chat_reply
+        out = parse_chat_reply('{"reply":"ок","state_updates":{"person":{"relation":"мама","name":"Ольга","note":null}}}')
+        self.assertEqual(out["state_updates"]["person"], {"relation": "мама", "name": "Ольга", "note": ""})
+        out = parse_chat_reply('{"reply":"ок","state_updates":{"person":null}}')
+        self.assertIsNone(out["state_updates"]["person"])
