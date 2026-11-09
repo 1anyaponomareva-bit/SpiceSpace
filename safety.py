@@ -138,15 +138,15 @@ def note_crisis(cid: int, now: float | None = None) -> bool:
 def pause_question(lang: str, premium: bool) -> str:
     if _is_ru(lang):
         text = (
-            "И ещё: хочешь, я пока не буду писать тебе первой по утрам и вечерам? "
-            "Писать мне сама ты можешь в любое время."
+            "Если сейчас не до утренних и вечерних сообщений, могу пока их не присылать. "
+            "А я здесь, пиши мне в любое время."
         )
         if premium:
             text += " Подписка при этом остаётся, ничего не отключится."
         return text
     text = (
-        "One more thing: would you like me to stop messaging you first in the mornings "
-        "and evenings for now? You can write to me any time."
+        "If morning and evening messages are too much right now, I can hold them for a "
+        "while. And I'm here, write to me any time."
     )
     if premium:
         text += " Your subscription stays as it is, nothing gets switched off."
@@ -157,8 +157,8 @@ def pause_keyboard(lang: str) -> InlineKeyboardMarkup:
     ru = _is_ru(lang)
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("Да, пауза" if ru else "Yes, pause", callback_data="safety:pause")],
-            [InlineKeyboardButton("Нет, пиши как обычно" if ru else "No, keep writing",
+            [InlineKeyboardButton("Пока не присылай" if ru else "Hold them for now", callback_data="safety:pause")],
+            [InlineKeyboardButton("Присылай как обычно" if ru else "Keep them as usual",
                                   callback_data="safety:keep")],
         ]
     )
