@@ -948,7 +948,7 @@
     let pct = Math.max(0, Math.min(100, Number(prof.weekly_score || 0)));
     const cycle = Array.isArray(prof?.week_cycle_days) ? prof.week_cycle_days : null;
     if (cycle && cycle.length === 7) {
-      const full = 100 / 7;
+      const full = 100 / 6; // day 7 is the recap day, no task
       const half = full / 2;
       pct = Math.round(
         cycle.reduce((sum, d) => {

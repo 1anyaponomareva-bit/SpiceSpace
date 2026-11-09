@@ -7199,7 +7199,8 @@ def _sanitize_today_task(text: str, weekly_goal: str = "") -> str:
 
 
 WEEK_CYCLE_LEN = 7
-DAY_SCORE_FULL = 100.0 / WEEK_CYCLE_LEN
+# The last day of the cycle is the recap day (no task), so a fully done week = 100 %.
+DAY_SCORE_FULL = 100.0 / (WEEK_CYCLE_LEN - 1)
 DAY_SCORE_PARTIAL = DAY_SCORE_FULL / 2
 
 
