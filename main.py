@@ -2416,6 +2416,29 @@ def _today_has_task(chat_id: int, profile: dict) -> bool:
     return bool(task) and len(task) > 5
 
 
+def _evening_next_step_rule(profile: dict) -> str:
+    """Tomorrow's step comes from her weekly goal, not from side topics of the chat."""
+    ru = str(profile.get("language_code") or "en").lower().startswith("ru")
+    weekly = str(profile.get("weekly_goal") or "").strip()
+    main = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
+    target = weekly or main
+    if ru:
+        head = f"Цель этой недели: «{target}». " if target else ""
+        return (
+            head + "Если предлагаешь шаг на завтра — только шаг, который прямо ведёт к этой цели. "
+            "Не предлагай дел, которые к ней не ведут, даже если о них говорили в чате "
+            "(например, показать продукт людям, когда цель недели — его доделать). "
+            "Если она сказала, чем сейчас занята ради цели, поддержи именно это, без нового задания."
+        )
+    head = f'This week\'s goal: "{target}". ' if target else ""
+    return (
+        head + "If you suggest a step for tomorrow, it must lead straight to this goal. "
+        "Do not suggest things that don't serve it, even if they came up in chat "
+        "(e.g. showing the product to people when this week's goal is to finish it). "
+        "If she said what she is working on for the goal, back exactly that, no new assignment."
+    )
+
+
 async def _evening_message_text(
     chat_id: int,
     profile: dict,
@@ -2461,6 +2484,14 @@ async def _evening_message_text(
     display_name = name or ("подруга" if ru else "friend")
     name_instruction = _exact_name_prompt_instruction(profile, chat_id)
     goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
+    weekly_goal = str(profile.get("weekly_goal") or "").strip()
+    if weekly_goal and not _same_saved_goal(weekly_goal, goal):
+        if not goal:
+            goal = weekly_goal
+        elif ru:
+            goal = f"{goal} (цель этой недели: {weekly_goal})"
+        else:
+            goal = f"{goal} (this week's goal: {weekly_goal})"
     facts_block = _facts_block_for_prompt(chat_id, lang)
     personality_block = _personality_block_for_prompt(chat_id, lang)
     na = "не указана" if ru else "not specified"
@@ -2532,6 +2563,7 @@ async def _evening_message_text(
         f"{_evening_personal_system(lang)}\n\n"
         f"{dialog_rule}\n\n"
         f"{_current_goal_only_rule(profile)}\n\n"
+        f"{_evening_next_step_rule(profile)}\n\n"
         f"{name_instruction}"
         + (f"\n\n{evening_extra}" if evening_extra else "")
     )

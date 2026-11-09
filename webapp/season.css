@@ -134,3 +134,22 @@ html[data-season="autumn"] .day-dot.future { background: #E8DCCB; }
 /* Exact halves for half-filled days (the season colors above reset these via the shorthand). */
 html[data-season] .day-dot.partial,
 html[data-season] .legend-dot--partial { background-origin: border-box; background-repeat: no-repeat; }
+
+/* Empty days must stay visible on the cream sheet and on the highlighted current week:
+   "ahead" is a clear ring, "no answer" a dashed ring. Legend dots match. */
+html[data-season] .day-dot.future,
+html[data-season] .legend-dot--future {
+  background: #F4E9D8;
+  border: 2px solid #CDB08A;
+  box-sizing: border-box;
+}
+html[data-season] .day-dot.no-data,
+html[data-season] .legend-dot--no-data {
+  background: #FFFFFF;
+  border: 2px dashed #B9946A;
+  box-sizing: border-box;
+}
+html[data-season] .legend-dot--future,
+html[data-season] .legend-dot--no-data { border-width: 1.5px; }
+/* Keep the last legend word clear of the corner sticker. */
+html[data-season] .season-paper .calendar-legend { padding-right: 52px; }
