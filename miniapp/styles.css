@@ -5,7 +5,6 @@
   /* New Year: warm gold instead of the old lime accent. */
   --accent: #F2C14E;
   --accent-rgb: 242, 193, 78;
-  --snow: rgba(120, 152, 190, 0.75);
   --dark: #2C2C2C;
   --card: #fff;
   --muted: #999;
@@ -1184,46 +1183,6 @@ body.tg-app { background: var(--bg); }
 .welcome-trial { font-size: 12px; color: #bbb; }
 
 
-/* New Year theme: soft snowfall behind the content (decorative, no clicks). */
-.snow {
-  position: fixed;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-  z-index: 0;
-}
-.app { position: relative; z-index: 1; }
-.snow i {
-  position: absolute;
-  top: -12px;
-  color: var(--snow);
-  font-style: normal;
-  font-size: 16px;
-  line-height: 1;
-  animation: snow-fall linear infinite;
-  opacity: 0.9;
-}
-.snow i::before { content: "\2744"; }
-.snow i:nth-child(1)  { left: 4%;  animation-duration: 14s; animation-delay: -2s;  font-size: 14px; }
-.snow i:nth-child(2)  { left: 12%; animation-duration: 18s; animation-delay: -9s;  font-size: 18px; }
-.snow i:nth-child(3)  { left: 21%; animation-duration: 16s; animation-delay: -5s; }
-.snow i:nth-child(4)  { left: 29%; animation-duration: 20s; animation-delay: -13s; font-size: 13px; }
-.snow i:nth-child(5)  { left: 37%; animation-duration: 15s; animation-delay: -1s;  font-size: 17px; }
-.snow i:nth-child(6)  { left: 46%; animation-duration: 19s; animation-delay: -11s; font-size: 14px; }
-.snow i:nth-child(7)  { left: 54%; animation-duration: 17s; animation-delay: -7s;  font-size: 19px; }
-.snow i:nth-child(8)  { left: 62%; animation-duration: 21s; animation-delay: -15s; font-size: 13px; }
-.snow i:nth-child(9)  { left: 70%; animation-duration: 16s; animation-delay: -3s; }
-.snow i:nth-child(10) { left: 78%; animation-duration: 18s; animation-delay: -12s; font-size: 17px; }
-.snow i:nth-child(11) { left: 86%; animation-duration: 15s; animation-delay: -6s;  font-size: 14px; }
-.snow i:nth-child(12) { left: 94%; animation-duration: 20s; animation-delay: -10s; font-size: 18px; }
-@keyframes snow-fall {
-  0%   { transform: translate3d(0, -20px, 0) rotate(0deg); }
-  50%  { transform: translate3d(14px, 50vh, 0) rotate(120deg); }
-  100% { transform: translate3d(-6px, 105vh, 0) rotate(240deg); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .snow { display: none; }
-}
 
 /* The streak logo image is lime; tint it gold for the New Year theme. */
 .streak-logo-icon { filter: hue-rotate(-38deg) saturate(1.15) brightness(1.02); }
