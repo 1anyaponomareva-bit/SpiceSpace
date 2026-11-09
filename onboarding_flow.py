@@ -372,7 +372,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "Погнали 💚"
     ),
     "progress_open": "Смотри как выглядит твой прогресс 👇",
-    "first_msg_fallback": "Кому первому отправишь бота на тест? 💚",
+    "first_step_question": "Давай начнём с маленького шага. Что одно ты можешь сделать для цели этой недели уже сегодня? Если не знаешь, с чего начать, напиши, разложим вместе 💚",
     "returning_just_chat": "Хорошо, я здесь. Напиши что у тебя на душе.",
     "returning_hint": (
         "Напиши «заново» или «обновить цели» — перенастроим цели. "
@@ -599,7 +599,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "Let's go 💙"
     ),
     "progress_open": "See how your progress looks 👇",
-    "first_msg_fallback": "Who will you send the bot to first for testing? 💚",
+    "first_step_question": "Let's start with one small step. What is one thing you can do for this week's goal today? If you are not sure where to start, tell me and we will break it down together 💚",
     "returning_just_chat": "Okay, I'm here. Tell me what's on your mind.",
     "returning_hint": (
         "Type «start over» or «update goals» to reconfigure. Or «just chat» to talk."
@@ -3188,46 +3188,6 @@ async def _complete_onboarding(
         reply_markup=progress_kb,
     )
 
-    lang_note = (
-        ""
-        if _is_ru(lang)
-        else "\nUser speaks English — write the message in English.\n"
-    )
-    first_msg_prompt = f"""Ты — Спейс. Онбординг только что завершился.{lang_note}
-Пользователь поставила цель на 12 недель: {st.get('main_goal', '')}
-Цель первой недели: {st.get('weekly_goal', '')}
-
-Напиши одно живое сообщение — продолжи разговор как подруга.
-Не повторяй цели — она их только что видела.
-Задай один конкретный вопрос про первую неделю — что уже сделала, с кого начнёшь, что мешает.
-Тон: тёплый, живой, без коуч-языка. 1-2 предложения максимум.
-ЗАПРЕЩЕНО: приветствия ("Привет", "Доброе утро"), обращение по имени, "рада познакомиться".
-ЗАПРЕЩЕНО: "Удачи!", "Увидимся", прощания, markdown."""
-
-    def get_first_msg() -> str:
-        first_system = _system_with_lang(
-            "You are Space. Write one short Telegram message after onboarding.",
-            lang,
-        )
-        for mid in model_names:
-            try:
-                return claude_generate(
-                    mid,
-                    [
-                        {
-                            "role": "user",
-                            "content": _user_content_with_lang(first_msg_prompt, lang),
-                        }
-                    ],
-                    system=first_system,
-                    max_tokens=150,
-                    cache_core=False,
-                    feature="onb_first_message",
-                ).strip()
-            except Exception:
-                pass
-        return ob_text("first_msg_fallback", lang)
-
     await asyncio.sleep(1)
     webapp_base = os.getenv(
         "WEBAPP_URL", "https://spicespace-production.up.railway.app/webapp"
@@ -3249,9 +3209,9 @@ async def _complete_onboarding(
         reply_markup=keyboard,
     )
     await asyncio.sleep(1)
-    async with typing_while(context.bot, cid):
-        first_msg = await asyncio.to_thread(get_first_msg)
-    await msg.reply_text(first_msg)
+    # Fixed text: a generated question here read as "have you already done it?"
+    # right after the goal was set. Ask about the first step forward instead.
+    await msg.reply_text(ob_text("first_step_question", lang))
 
 
 async def handle_returning_choice(

@@ -88,3 +88,16 @@ class PersistRestoreRoundTripTests(unittest.TestCase):
             self.assertEqual(restored["step"], ob.OB_WEEKLY_TACTICS)
             self.assertIn("Что успеешь?", ob.resume_onboarding_message(restored, "ru"))
             dict.pop(main.onboarding, cid, None)
+
+
+class FirstStepQuestionTests(unittest.TestCase):
+    def test_asks_about_next_step_not_past_progress(self):
+        import onboarding_flow as ob
+        for lang in ("ru", "en"):
+            text = ob.ob_text("first_step_question", lang)
+            self.assertTrue(text)
+            self.assertEqual(text.count("?"), 1)
+        ru = ob.ob_text("first_step_question", "ru")
+        self.assertIn("сегодня", ru)
+        self.assertNotIn("уже сделала", ru)
+        self.assertNotIn("бот", ru)  # works for any goal, not only the owner's
