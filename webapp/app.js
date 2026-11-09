@@ -379,6 +379,7 @@
 
   function syncLanguageCode() {
     const lang = window.userLang || 'en';
+    if (profile?.language_code === lang) return;
     apiFetch('/api/profile/language', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -1135,7 +1136,7 @@
   function syncTimezone() {
     try {
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      if (!tz) return;
+      if (!tz || profile?.timezone === tz) return;
       apiFetch('/api/profile/timezone', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -1587,6 +1588,7 @@
     setGoalActionsVisible(profileHasGoals(profile));
     renderTimes(profile);
     paintMainScreenTimes(profileMorningTime(profile), profileEveningTime(profile));
+    document.querySelector('.settings-block')?.classList.add('loaded');
     calendarData = await calendarP;
     if (typeof renderCalendar === 'function') {
       renderCalendar(calendarData);
@@ -1594,7 +1596,6 @@
     await streakP;
     syncTimezone();
     syncLanguageCode();
-    document.querySelector('.settings-block')?.classList.add('loaded');
   }
 
   if (document.readyState === 'loading') {

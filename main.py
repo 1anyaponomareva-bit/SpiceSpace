@@ -8661,7 +8661,7 @@ class LanguagePayload(BaseModel):
 
 
 @app.patch("/api/profile/language")
-async def patch_language(
+def patch_language(
     request: Request,
     payload: LanguagePayload,
     telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
@@ -8670,7 +8670,10 @@ async def patch_language(
     profile = _resolve_user_profile(tid)
     if not isinstance(profile, dict):
         raise HTTPException(status_code=404, detail="profile not found")
-    profile["language_code"] = payload.language_code.strip()[:10]
+    new_lang = payload.language_code.strip()[:10]
+    if str(profile.get("language_code") or "") == new_lang:
+        return {"ok": True}  # sent on every Mini App open; skip the write when unchanged
+    profile["language_code"] = new_lang
     db_store.upsert_profile(int(tid), profile)
     user_profiles[tid] = profile
     return {"ok": True}
@@ -8794,7 +8797,7 @@ async def patch_profile_times_endpoint(
 
 
 @app.patch("/api/profile/timezone")
-async def patch_profile_timezone_endpoint(
+def patch_profile_timezone_endpoint(
     request: Request,
     payload: TimezonePayload,
     telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
@@ -8812,6 +8815,8 @@ async def patch_profile_timezone_endpoint(
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid timezone") from exc
 
+    if str(profile.get("timezone") or "") == new_tz:
+        return {"ok": True}  # sent on every Mini App open; skip the write when unchanged
     profile["timezone"] = new_tz
     db_store.upsert_profile(int(tid), profile)
     user_profiles[tid] = profile
@@ -9010,11 +9015,12 @@ def mark_day_endpoint(
 
     if isinstance(body, dict) and body.get("streak_only"):
         _touch_streak_for_activity(int(tid), profile)
+        # The Mini App only needs the numbers here; rebuilding the whole profile
+        # cost several extra Supabase calls on every open.
         return {
             "ok": True,
             "streak": int(profile.get("streak") or 0),
             "display_streak": _cycle_week_day_streak(profile) or 1,
-            "profile": _enrich_profile_for_api(profile, tid),
         }
 
     tc = None
