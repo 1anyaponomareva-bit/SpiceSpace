@@ -1572,9 +1572,13 @@
 
     applyLanguageFromProfile(profile);
     showMain();
-    await checkMilestone();
-    await markStreakOnOpen();
-    tasks = await fetchTasks();
+    // All follow-up requests start at once; before, tasks and the calendar waited
+    // for the milestone and streak calls one after another.
+    const tasksP = fetchTasks().catch(() => []);
+    const calendarP = fetchCalendar().catch(() => null);
+    const streakP = markStreakOnOpen();
+    checkMilestone();
+    tasks = await tasksP;
     renderTasks(profile, tasks);
     renderAll(tgUser);
     hideSyncBanner();
@@ -1583,10 +1587,11 @@
     setGoalActionsVisible(profileHasGoals(profile));
     renderTimes(profile);
     paintMainScreenTimes(profileMorningTime(profile), profileEveningTime(profile));
-    calendarData = await fetchCalendar();
+    calendarData = await calendarP;
     if (typeof renderCalendar === 'function') {
       renderCalendar(calendarData);
     }
+    await streakP;
     syncTimezone();
     syncLanguageCode();
     document.querySelector('.settings-block')?.classList.add('loaded');

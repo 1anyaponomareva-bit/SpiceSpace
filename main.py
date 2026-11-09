@@ -17,6 +17,7 @@ Optional .env:
 from __future__ import annotations
 
 import asyncio
+import time
 import base64
 import hashlib
 import hmac
@@ -8407,6 +8408,16 @@ async def root() -> dict:
     }
 
 
+@app.middleware("http")
+async def _log_slow_api(request: Request, call_next):
+    t0 = time.perf_counter()
+    response = await call_next(request)
+    ms = (time.perf_counter() - t0) * 1000
+    if request.url.path.startswith("/api/") and ms > 300:
+        log.info("slow api %s %s %.0fms", request.method, request.url.path, ms)
+    return response
+
+
 @app.get("/health")
 async def health() -> dict[str, str | bool]:
     from onboarding_flow import BOT_BUILD
@@ -8517,7 +8528,7 @@ async def admin_stats(request: Request) -> dict:
 
 
 @app.get("/api/profile")
-async def get_profile(
+def get_profile(
     request: Request,
     telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
 ) -> dict:
@@ -8877,7 +8888,7 @@ def _milestone_fallback(name: str, completed_days: int, lang: str) -> str:
 
 
 @app.get("/api/milestone")
-async def get_milestone(
+def get_milestone(
     request: Request,
     telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
 ) -> dict:
@@ -8925,7 +8936,7 @@ async def get_milestone(
                 log.warning("milestone generate %s: %s", mid, e)
         return _milestone_fallback(name, completed_days, lang)
 
-    message = await asyncio.to_thread(generate_message)
+    message = generate_message()  # sync endpoint: already off the event loop
 
     fresh_profile = db_store.mark_milestone_shown(int(tid), completed_days)
     if isinstance(fresh_profile, dict):
@@ -8941,7 +8952,7 @@ async def get_milestone(
 
 
 @app.get("/api/calendar")
-async def calendar_endpoint(
+def calendar_endpoint(
     request: Request,
     telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
 ) -> dict:
@@ -8987,7 +8998,7 @@ async def calendar_endpoint(
 
 
 @app.post("/api/mark-day")
-async def mark_day_endpoint(
+def mark_day_endpoint(
     request: Request,
     telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
     body: dict | None = Body(default=None),
@@ -9029,7 +9040,7 @@ class TaskCreatePayload(BaseModel):
 
 
 @app.get("/api/tasks")
-async def list_tasks(
+def list_tasks(
     request: Request,
     telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
 ) -> dict:
