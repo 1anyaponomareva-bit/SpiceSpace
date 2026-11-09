@@ -39,6 +39,7 @@ import uvicorn
 import db as db_store
 import onboarding_flow as ob
 import safety
+import memory_context
 from bot_ui import ui_lang, ui_text
 from bot_typing import typing_while
 from goal_change import (
@@ -2138,7 +2139,7 @@ def _format_today_conversation_context(chat_id: int, max_turns: int = 10) -> str
 
 
 def _facts_block_for_prompt(chat_id: int, lang: str = "ru") -> str:
-    facts = db_store.load_user_facts(chat_id, limit=10)
+    facts = db_store.load_user_facts(chat_id, limit=memory_context.CHAT_FACTS_LIMIT)
     facts_text = "\n".join(f"— {f}" for f in facts) if facts else ""
     if facts_text:
         header = "Важные факты о пользователе:" if is_ru(lang) else facts_header(lang)
@@ -3356,10 +3357,16 @@ async def _send_subscription_paywall(
 
 
 async def _reply_subscription_paywall_if_needed(
-    update: Update, cid: int, profile: dict
+    update: Update, cid: int, profile: dict, text: str = ""
 ) -> bool:
-    """Block chat when trial ended and no active subscription."""
+    """Block chat when trial ended and no active subscription.
+
+    Never blocks someone in a bad state: a distress message, or anything within 24h
+    of a crisis message, goes to the chat (which carries the safety rule)."""
     if not SUBSCRIPTIONS_ENABLED:
+        return False
+    if safety.in_crisis_window(cid) or (text and safety.detect_distress(text)):
+        log.info("paywall skipped for distress cid=%s", cid)
         return False
     if onboarding.get(cid) is not None:
         return False
@@ -4501,7 +4508,9 @@ async def _coach_reply(
     tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name)
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
-    facts = await asyncio.to_thread(db_store.load_user_facts, chat_id, 3)
+    facts = await asyncio.to_thread(
+        db_store.load_user_facts, chat_id, memory_context.CHAT_FACTS_LIMIT
+    )
     facts_text = "\n".join(f"— {f}" for f in facts) if facts else ""
     personality = await asyncio.to_thread(db_store.load_personality, chat_id)
     personality_text = personality_text_lang(personality, lang)
@@ -4531,6 +4540,16 @@ async def _coach_reply(
     extra_parts.append(
         level_context_text(level["key"], level["name"], completed_count, lang)
     )
+    local_today = _profile_local_date(prof)
+    tz_local = resolve_user_timezone(prof)
+    recent_days = memory_context.recent_days_block(summaries, local_today, lang)
+    if recent_days:
+        extra_parts.append(recent_days)
+    gap = memory_context.gap_note(
+        histories.get(chat_id) or [], local_today, tz_local, lang
+    )
+    if gap:
+        extra_parts.append(gap)
 
     extra = "\n\n".join(extra_parts)
 
@@ -4559,7 +4578,9 @@ async def _coach_reply(
     effective_text = _user_text_with_reply_context(user_text, reply_context)
 
     hist = histories.setdefault(chat_id, [])
-    hist_recent = recent_history(hist)
+    hist_recent = memory_context.history_with_dates(
+        recent_history(hist), _profile_local_date(prof), resolve_user_timezone(prof), lang
+    )
     if reply_context:
         history_prefixes: list[list[dict]] = [[]]
     else:
@@ -4683,7 +4704,9 @@ async def _coach_reply_photo(
     ]
 
     hist = histories.setdefault(chat_id, [])
-    hist_recent = recent_history(hist)
+    hist_recent = memory_context.history_with_dates(
+        recent_history(hist), _profile_local_date(prof), resolve_user_timezone(prof), lang
+    )
     if reply_context:
         history_prefixes: list[list[dict]] = [[]]
     else:
@@ -5164,8 +5187,9 @@ async def _try_flow_escape(
 
 def _append_history_turn(chat_id: int, user_text: str, model_text: str) -> None:
     hist = histories.setdefault(chat_id, [])
-    hist.append({"role": "user", "parts": [user_text]})
-    hist.append({"role": "model", "parts": [model_text]})
+    ts = memory_context.now_ts()
+    hist.append({"role": "user", "parts": [user_text], "ts": ts})
+    hist.append({"role": "model", "parts": [model_text], "ts": ts})
     max_turns = 40
     if len(hist) > max_turns:
         histories[chat_id] = hist[-max_turns:]
@@ -6018,7 +6042,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     prof_access = prof_d or user_profiles.get(str(cid)) or db_store.get_profile(cid)
     if isinstance(prof_access, dict):
         user_profiles[str(cid)] = prof_access
-        if await _reply_subscription_paywall_if_needed(update, cid, prof_access):
+        if await _reply_subscription_paywall_if_needed(update, cid, prof_access, raw):
             return
 
     model_chain: list[str] = context.bot_data.get("claude_model_names") or []
@@ -6269,19 +6293,16 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             reply = await _coach_reply(
                 cid, raw, model_names, reply_context=reply_ctx
             )
-    except anthropic.RateLimitError:
-        log.exception("Claude quota exhausted")
-        await _bot_reply(
-            update.message,
-            ui_text("claude_quota", profile=prof_d),
-        )
-        return
     except Exception as e:
         log.exception("Claude error: %s", e)
-        await _bot_reply(
-            update.message,
-            ui_text("claude_error", profile=prof_d),
-        )
+        if safety.in_crisis_window(cid) or safety.detect_distress(raw):
+            # The model is down, but someone in a bad state still gets a human answer.
+            await update.message.reply_text(
+                safety.crisis_reply(_user_lang(prof_d or None, update), repeat=True)
+            )
+            return
+        key = "claude_quota" if isinstance(e, anthropic.RateLimitError) else "claude_error"
+        await _bot_reply(update.message, ui_text(key, profile=prof_d))
         return
 
     prof_for_turn = prof_d or _resolve_user_profile(str(cid)) or {}
@@ -6337,7 +6358,9 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user_profiles[str(cid)] = prof_photo
         _touch_streak_for_activity(cid, prof_photo)
         _touch_user_message_date(cid, prof_photo)
-        if await _reply_subscription_paywall_if_needed(update, cid, prof_photo):
+        if await _reply_subscription_paywall_if_needed(
+            update, cid, prof_photo, msg.caption or ""
+        ):
             return
 
     model_names: list[str] = context.bot_data["claude_model_names"]

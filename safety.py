@@ -135,6 +135,55 @@ def note_crisis(cid: int, now: float | None = None) -> bool:
     return prev is not None and now - prev < REPEAT_WINDOW_SECONDS
 
 
+def in_crisis_window(cid: int, now: float | None = None) -> bool:
+    """True for 24h after a crisis message: the chat must not hit a paywall then."""
+    now = time.time() if now is None else now
+    prev = _last_crisis_at.get(cid)
+    return prev is not None and now - prev < REPEAT_WINDOW_SECONDS
+
+
+# Softer signs that someone is in a bad state right now. These do not get the vetted
+# crisis text (the model answers with the safety rule), but they must never get a paywall.
+_DISTRESS_PATTERNS_RU = [
+    r"мне\s+(очень\s+|совсем\s+|так\s+)?(плохо|страшно|хреново|херово)",
+    r"(очень|совсем)\s+плохо",
+    r"не\s+могу\s+больше",
+    r"больше\s+не\s+могу",
+    r"не\s+вывожу",
+    r"паническ",
+    r"паника",
+    r"задыха",
+    r"не\s+могу\s+дышать",
+    r"скор(ая|ую|ой)",
+    r"истерик",
+    r"трясет",
+    r"помоги(те)?\s*(мне)?\s*[!.]*$",
+    r"мне\s+нужна\s+помощь",
+    r"(меня|он|она)\s+(бь[её]т|избил|избила|ударил)",
+    r"депресси",
+]
+_DISTRESS_PATTERNS_EN = [
+    r"i\s*('?m|\s+am)\s+(not\s+okay|not\s+ok|scared|terrified)",
+    r"i\s+feel\s+(terrible|awful|so\s+bad|hopeless)",
+    r"can'?t\s+(take\s+it|go\s+on|breathe)",
+    r"panic",
+    r"ambulance",
+    r"(please\s+)?help\s+me",
+    r"i\s+need\s+help",
+    r"depress",
+]
+_DISTRESS_RU_RE = re.compile("|".join(_DISTRESS_PATTERNS_RU))
+_DISTRESS_EN_RE = re.compile("|".join(_DISTRESS_PATTERNS_EN))
+
+
+def detect_distress(text: str) -> bool:
+    """Crisis or a softer 'I am in a bad state' message."""
+    if detect_crisis(text):
+        return True
+    t = _norm(text)
+    return bool(_DISTRESS_RU_RE.search(t) or _DISTRESS_EN_RE.search(t))
+
+
 def pause_question(lang: str, premium: bool) -> str:
     if _is_ru(lang):
         text = (

@@ -103,6 +103,7 @@ class EveningBlocksLanguageTests(unittest.TestCase):
             {"_facts_block_for_prompt", "_personality_block_for_prompt"},
             {
                 "db_store": _FakeStore(["runs every morning", "has a cat"], PERSONALITY_ROW),
+                "memory_context": __import__("memory_context"),
                 "is_ru": lang_context.is_ru,
                 "facts_header": lang_context.facts_header,
                 "personality_intro": lang_context.personality_intro,

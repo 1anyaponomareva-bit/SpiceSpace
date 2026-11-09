@@ -118,7 +118,7 @@ class DialogDepthTests(unittest.TestCase):
         self.assertIn("Вчера застряла на текстах", dynamic)
         self.assertNotIn("ТРИГГЕРНЫЙ ХУК", dynamic)
         source = (ROOT / "main.py").read_text(encoding="utf-8")
-        self.assertIn("load_user_facts, chat_id, 3", source)
+        self.assertIn("load_user_facts, chat_id, memory_context.CHAT_FACTS_LIMIT", source)
         lang_source = (ROOT / "lang_context.py").read_text(encoding="utf-8")
         intro = lang_source.split("def personality_intro", 1)[1].split("\ndef ", 1)[0]
         self.assertIn("старый фон", intro)

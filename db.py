@@ -1058,6 +1058,7 @@ def load_history(user_id: int | str, limit: int = 20) -> list[dict]:
                 {
                     "role": row["role"],
                     "parts": [row["content"]],
+                    "ts": str(row.get("created_at") or ""),
                 }
             )
     return turns

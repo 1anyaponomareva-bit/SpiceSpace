@@ -165,3 +165,52 @@ class CrisisHandlerTests(unittest.TestCase):
         safety._last_crisis_at.pop(502, None)
         sent = self._run({}, 502)
         self.assertEqual(len(sent), 1)
+
+
+class DistressTests(unittest.TestCase):
+    def test_distress_phrases(self):
+        for t in ["Мне очень плохо", "ночью паническая атака", "скорая не может приехать",
+                  "больше не могу", "I feel terrible", "please help me", "не хочу жить"]:
+            self.assertTrue(safety.detect_distress(t), t)
+
+    def test_ordinary_phrases(self):
+        for t in ["сегодня сделала задачу", "помоги разложить план на неделю",
+                  "плохо спала, но всё ок", "I feel great"]:
+            self.assertFalse(safety.detect_distress(t), t)
+
+    def test_crisis_window(self):
+        safety._last_crisis_at[601] = 1000.0
+        self.assertTrue(safety.in_crisis_window(601, now=1000.0 + 3600))
+        self.assertFalse(safety.in_crisis_window(601, now=1000.0 + 25 * 3600))
+        self.assertFalse(safety.in_crisis_window(602))
+
+
+class PaywallSafetyTests(unittest.TestCase):
+    def _blocked(self, cid, text):
+        import main
+        sent = []
+
+        class Msg:
+            async def reply_text(self, *a, **kw):
+                sent.append(a)
+
+        update = mock.Mock()
+        update.message = Msg()
+        prof = {"language_code": "ru", "name": "Аня", "trial_start_date": "2020-01-01"}
+        with mock.patch.object(main, "SUBSCRIPTIONS_ENABLED", True), \
+             mock.patch.object(main, "_bot_reply", new=mock.AsyncMock()) as br, \
+             mock.patch.object(main, "_subscription_offer_keyboard", return_value=None):
+            res = asyncio.run(main._reply_subscription_paywall_if_needed(update, cid, prof, text))
+        return res
+
+    def test_trial_over_blocks_ordinary_message(self):
+        safety._last_crisis_at.pop(701, None)
+        self.assertTrue(self._blocked(701, "привет, что сегодня делаем"))
+
+    def test_distress_passes_paywall(self):
+        safety._last_crisis_at.pop(702, None)
+        self.assertFalse(self._blocked(702, "мне очень плохо, не могу больше"))
+
+    def test_after_crisis_any_message_passes(self):
+        safety._last_crisis_at[703] = __import__("time").time()
+        self.assertFalse(self._blocked(703, "нет"))
