@@ -486,7 +486,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "vision_fallback": "Расскажи ещё чуть-чуть?",
     "goal_fallback": "Расскажи подробнее?",
     "weekly_dialog_fallback": "Расскажи подробнее?",
-    "weekly_dialog_opening": "Что ты сама хочешь успеть на этой неделе, чтобы сдвинуться к цели?",
+    "weekly_dialog_opening": "Что ты сама хочешь успеть на этой неделе, чтобы стать ближе к цели?",
     "default_goal": "твоя цель",
     "open_spicespace_btn": "Открыть SpiceSpace",
     "app_progress_hint": "Твой прогресс 👇",
