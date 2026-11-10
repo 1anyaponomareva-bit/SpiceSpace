@@ -2195,10 +2195,77 @@ def _is_goal_confirm_yes(raw: str) -> bool:
     if first in ("да", "ага", "угу", "yes", "ок", "окей", "yeah", "yep"):
         if not rest:
             return True
-        return any(
-            w in rest for w in ("верно", "подходит", "соглас", "точно", "именно", "ок")
+        words = rest.split()
+        if any(
+            w in rest for w in ("верно", "подходит", "соглас", "точно", "именно")
+        ) or "ок" in words:
+            return True
+        # "да и смайлик ракеты": a short add-on without a correction is still a yes.
+        corrections = {
+            "но", "не", "нет", "только", "лучше", "убери", "давай", "другое", "другую",
+            "иначе", "подожди", "стоп", "but", "not", "no", "only", "other", "wait",
+        }
+        return len(words) <= 5 and not (set(words) & corrections) and not any(
+            w.startswith(("измен", "помен", "исправ", "переп", "change", "fix")) for w in words
         )
     return any(w in low for w in ("верно", "подходит", "согласна", "записывай", "запиши"))
+
+
+_EMOJI_WORDS = (
+    ("ракет", "🚀"), ("rocket", "🚀"),
+    ("сердеч", "💚"), ("heart", "💚"),
+    ("звезд", "⭐"), ("звёзд", "⭐"), ("star", "⭐"),
+    ("огон", "🔥"), ("огн", "🔥"), ("fire", "🔥"),
+    ("искр", "✨"), ("sparkle", "✨"),
+    ("цвет", "🌸"), ("flower", "🌸"),
+    ("денег", "💰"), ("деньг", "💰"), ("money", "💰"),
+)
+
+
+def _requested_emoji(raw: str) -> str:
+    """Emoji she asked to add ("да и смайлик ракеты"), or ''."""
+    low = (raw or "").lower()
+    if not any(w in low for w in ("смайл", "эмодз", "эмоджи", "значок", "emoji", "smiley")):
+        return ""
+    for word, emoji in _EMOJI_WORDS:
+        if word in low:
+            return emoji
+    return ""
+
+
+def wants_weekly_only_change(raw: str) -> bool:
+    """'Keep the 12-week goal, change only this week's goal.'"""
+    low = (raw or "").lower()
+    keep = any(
+        w in low
+        for w in (
+            "оставим", "оставь", "оставляем", "оставить", "не меняем", "не меняй",
+            "та же цель", "уже есть", "keep", "same goal", "already have",
+        )
+    )
+    return keep and any(w in low for w in ("недел", "week"))
+
+
+_POLISH_META_MARKERS = (
+    "формулировк", "не содержит", "придумыва", "шлифовать", "напиши", "цели нет",
+    "нет цели", "не указан", "doesn't contain", "does not contain", "no goal",
+    "please write", "i won't", "i will not", "nothing to polish",
+)
+
+
+def same_goal_text(a: str, b: str) -> bool:
+    """Same goal apart from case, punctuation, emoji and spacing."""
+    def norm(t: str) -> str:
+        t = re.sub(r"[^\w\s]", " ", (t or "").casefold().replace("ё", "е"))
+        return re.sub(r"\s+", " ", t).strip()
+    na, nb = norm(a), norm(b)
+    return bool(na) and na == nb
+
+
+def _polish_looks_like_meta(text: str) -> bool:
+    """The model talked about the request instead of returning a goal."""
+    low = (text or "").lower()
+    return any(m in low for m in _POLISH_META_MARKERS)
 
 
 def _is_goal_confirm_no(raw: str) -> bool:
@@ -2241,6 +2308,9 @@ async def _polish_goal(
                     feature="onb_polish_goal",
                 ).strip()
                 if text:
+                    if _polish_looks_like_meta(text):
+                        log.warning("polish_goal meta reply model=%s: %s", mid, text[:200])
+                        return ""
                     return text.strip().strip('"').strip()[:2000]
             except Exception as e:
                 log.warning("polish_goal %s: %s", mid, e)
@@ -2258,6 +2328,7 @@ async def _propose_goal_confirm(
     goal_type: str,
     model_names: list[str],
     after: str,
+    fallback: str = "",
 ) -> None:
     bot = msg.get_bot()
     async with typing_while(bot, msg.chat_id):
@@ -2265,7 +2336,7 @@ async def _propose_goal_confirm(
             raw, goal_type, model_names, lang=_ob_lang(st)
         )
     if not polished.strip():
-        polished = (raw or "").strip()[:2000]
+        polished = (fallback or raw or "").strip()[:2000]
     st["goal_confirm"] = {
         "field": field,
         "polished": polished,
@@ -2409,8 +2480,15 @@ async def _finish_change_12w(
     weekly_goal = str(fields.get("weekly_goal") or "")
     # current_week alone is recomputed from cycle_start_date by the scheduler, so the
     # new program also needs a new start date (week 1 from today).
-    current = user_profiles.get(str(cid)) or {}
-    fields.update(new_cycle_fields(current, db._profile_local_today(current)))
+    current = user_profiles.get(str(cid)) or db.get_profile(cid) or {}
+    old_goal = str(current.get("main_goal") or current.get("final_goal") or "")
+    if old_goal and same_goal_text(old_goal, main_goal):
+        # Same 12-week goal (maybe a new emoji or punctuation): keep the program's week.
+        for key in ("current_week", "weekly_score"):
+            fields.pop(key, None)
+        log.info("12w goal unchanged, cycle kept cid=%s", cid)
+    else:
+        fields.update(new_cycle_fields(current, db._profile_local_today(current)))
     profile = db.update_profile(cid, fields)
     user_profiles[str(cid)] = profile
     onboarding.pop(cid, None)
@@ -3414,11 +3492,34 @@ async def handle_onboarding_turn(
         await msg.reply_text(pause_msg)
         return
 
+    if (
+        str(st.get("change_mode") or "") in ("new_12w", "adjust_12w")
+        and str(st.get("main_goal") or "").strip()
+        and wants_weekly_only_change(raw)
+    ):
+        prior_user = [
+            dict(t)
+            for t in (st.get("goal_turns") or [])
+            if isinstance(t, dict) and t.get("role") == "user"
+        ]
+        base = dict(user_profiles.get(str(cid)) or {})
+        base["main_goal"] = str(st.get("main_goal") or "")
+        base.setdefault("language_code", lang)
+        start_change_weekly(onboarding, cid, base)
+        st = onboarding[cid]
+        st["weekly_turns"] = prior_user[-4:]
+        step = OB_CHANGE_WEEKLY
+        log.info("goal change switched to weekly-only cid=%s", cid)
+
     if st.get("goal_confirm"):
         confirm = st["goal_confirm"]
         if _is_goal_confirm_yes(raw):
             field = str(confirm.get("field") or "weekly_goal")
-            st[field] = str(confirm.get("polished") or "")[:2000]
+            chosen = str(confirm.get("polished") or "").strip()
+            emoji = _requested_emoji(raw)
+            if emoji and emoji not in chosen:
+                chosen = f"{chosen} {emoji}"
+            st[field] = chosen[:2000]
             after = str(confirm.get("after") or "")
             st.pop("goal_confirm", None)
             await _dispatch_goal_confirm_after(
@@ -3452,14 +3553,24 @@ async def handle_onboarding_turn(
             return
         if len(raw.strip()) >= 8 and not _is_dont_know_streak_phrase(raw):
             st.pop("goal_confirm", None)
+            proposed = str(confirm.get("polished") or "").strip()
+            edit = raw.strip()
+            # A short remark ("добавь срок") edits the proposed goal; a long one is a new goal.
+            if proposed and len(edit.split()) <= 6:
+                edit = (
+                    f"{proposed} (правка от неё: {edit})"
+                    if _is_ru(lang)
+                    else f"{proposed} (her edit: {edit})"
+                )
             await _propose_goal_confirm(
                 msg,
                 st,
                 field=str(confirm.get("field") or "weekly_goal"),
-                raw=raw.strip(),
+                raw=edit,
                 goal_type=str(confirm.get("goal_type") or GOAL_TYPE_WEEKLY),
                 model_names=model_names,
                 after=str(confirm.get("after") or ""),
+                fallback=proposed,
             )
             return
         confirm_hint = await say_as_friend(
