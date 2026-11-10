@@ -710,8 +710,10 @@ _LOW_STATE_MARKERS = (
     "сил нет", "нет сил", "сил никаких", "без сил", "энергии нет", "нет энергии",
     "не своя жизнь", "не свою жизнь", "не моя жизнь", "чужую жизнь", "чужая жизнь",
     "устала", "вымоталась", "выгор", "апати", "опустош", "тоск", "грустно",
-    "одиноко", "болот", "ничего не хочу", "не хочется ничего",
-    "плохо себя чувств", "плачу", "подъедает", "гложет",
+    "одиноко", "болот", "ничего не хочу", "не хочется ничего", "ничего не хочется",
+    "ленив", "плохо себя чувств", "плач", "навалил", "все чужое", "всё чужое",
+    "бросить все", "бросить всё", "зачем мне все", "зачем мне всё", "зачем мне вообще",
+    "аппетит", "не ем", "подъедает", "гложет", "руки опускаются", "не справляюсь",
     "no energy", "exhausted", "burned out", "burnt out", "not my life",
     "feel empty", "feel stuck", "so tired", "lonely", "i feel low", "drained",
 )
@@ -745,22 +747,76 @@ SUPPORT_MODE_RULE_RU = """СЕЙЧАС РАЗГОВОР О ЕЁ СОСТОЯНИ
 - Вопрос «твоя задача?», «зачем ты?», «что ты делаешь?» — это вопрос о тебе. Ответь про свою роль в этом разговоре: быть рядом и помочь ей разобраться, что с ней происходит. Не пересказывай её задачу дня.
 - Не своди её чувства к цели («поэтому так важен твой продукт»).
 - Совет, который ты уже дала в этом разговоре (врач, анализы, отдых), не повторяй. Одного раза достаточно.
-- Если про безопасность уже спрашивала и она ответила — больше не спрашивай.
+- Не спрашивай «ты в безопасности?», если она не намекала на мысли о смерти, вред себе или насилие. Слёзы, усталость, «всё чужое», «бросить всё» (про дела) — это не повод: сначала просто тепло и участие. Если про безопасность уже спрашивала и она ответила — больше не спрашивай.
+- Не подбадривай планами и успехами: не говори «у тебя уже есть бот», «ты уже меняешь», «ты двигаешься к цели». Не спорь с её «ничего не поменяешь» — просто побудь с этим чувством.
+- Еда, сон и тело — спокойно и без оценок. Никогда не говори, что её еда «не еда», «неправильная», и не пугай («я серьёзно беспокоюсь»). Любая еда, когда нет аппетита, — уже хорошо. Психотерапевта и психиатра сама не предлагай. Про терапевта и анализы — максимум один раз за разговор, спокойно, если состояние тянется давно.
+- Не начинай ответ с её имени.
 - Не ставь диагнозов и не объясняй ей, что она чувствует («это горе», «ты проживаешь потерю»). Догадку можно только вопросом: «Может быть, тебе не хватает…?»
 - Факты из памяти не выдавай так, будто она сказала их сейчас.
+- Говори только о том, что она сама написала. Не приписывай ей того, чего она не говорила: слёз, бессонницы, «который день», «не ешь», если она этого не писала.
+- Не повторяй вопрос, который уже задавала в этом разговоре, даже другими словами.
 - Ровно один простой вопрос в конце, без вариантов через «или». Можно и без вопроса — просто побыть рядом.
-- Вопрос конкретный и живой, обычными словами, как спросила бы подруга: «Ты сейчас дома, можешь прилечь?», «Что сегодня было тяжелее всего?», «Ты сегодня ела нормально?». Без абстрактных и книжных оборотов: «в самом простом смысле», «на уровне ощущений», «что ты чувствуешь в теле», «как ты в моменте»."""
+- Вопрос конкретный и живой, обычными словами, как спросила бы подруга, например «Что сегодня было тяжелее всего?». Без выбора через «или»: не «устала или тяжело на душе?», а один простой вопрос. Без абстрактных и книжных оборотов: «в самом простом смысле», «на уровне ощущений», «что ты чувствуешь в теле», «как ты в моменте»."""
 
 SUPPORT_MODE_RULE_EN = """THIS CONVERSATION IS ABOUT HOW SHE FEELS (outranks the goal and task rules):
 - Do not mention today's task, the goal, her product, strategy, social media or reminders, and suggest no tasks, not even "the smallest thing". Go back to work only if she herself asks about her task or starts talking about work.
 - "What's your task?", "why are you here?", "what are you doing?" is a question about you. Answer about your role in this conversation: to be with her and help her understand what is going on. Do not repeat her task for today.
 - Do not tie her feelings back to the goal ("that's why your product matters").
 - Advice you already gave in this conversation (doctor, tests, rest) is not repeated. Once is enough.
-- If you already asked whether she is safe and she answered, do not ask again.
+- Do not ask "are you safe?" unless she hinted at thoughts of death, self-harm or violence. Tears, tiredness, "everything feels foreign", "maybe quit it all" (about work) are not a reason: first just warmth. If you already asked whether she is safe and she answered, do not ask again.
+- Do not cheer her up with plans and progress: no "you already have the bot", "you are already changing things", "you are moving toward your goal". Do not argue with "nothing can change" — just stay with that feeling.
+- Food, sleep and the body: calm, no judgement. Never say her food "isn't food" or is "wrong", and do not alarm her ("I'm seriously worried"). Any food when there is no appetite is already good. Do not suggest a psychotherapist or psychiatrist yourself. A GP and basic tests at most once per conversation, calmly, if this has gone on for a while.
+- Do not start the reply with her name.
 - Do not diagnose or tell her what she feels ("this is grief", "you are going through a loss"). A guess only as a question: "Could it be that you miss…?"
 - Do not present remembered facts as if she just said them.
+- Talk only about what she herself wrote. Never attribute to her what she did not say: tears, sleepless nights, "for days now", "not eating", unless she wrote it.
+- Do not repeat a question you already asked in this conversation, even in other words.
 - Exactly one simple question at the end, no "or" options. Or no question at all, just be with her.
-- The question is concrete and plain, the way a friend would ask: "Are you at home, can you lie down?", "What was the hardest part of today?", "Did you eat properly today?". No abstract or bookish phrasing: "in the simplest sense", "on the level of sensations", "what do you feel in your body", "how are you in the moment"."""
+- The question is concrete and plain, the way a friend would ask, e.g. "What was the hardest part of today?". No "or" choice: not "tired or heavy at heart?", just one simple question. No abstract or bookish phrasing: "in the simplest sense", "on the level of sensations", "what do you feel in your body", "how are you in the moment"."""
+
+
+_SENTENCE_RE = re.compile(r"[^.!?…]+[.!?…]+[\"»)]*\s*|[^.!?…]+$")
+_LEAD_CONJ_RE = re.compile(r"^(?:и|а|или|но|and|or|but)\s+", re.IGNORECASE)
+
+
+def _keep_one_question(text: str) -> str:
+    """Support mode: keep only the first question; later ones are often fragments."""
+    if (text or "").count("?") <= 1:
+        return text
+    paragraphs = text.split("\n")
+    first_p = min(i for i, p in enumerate(paragraphs) if "?" in p)
+    out: list[str] = []
+    for i, para in enumerate(paragraphs):
+        if "?" not in para:
+            out.append(para)
+            continue
+        parts = [m.group(0) for m in _SENTENCE_RE.finditer(para)]
+        q_idx = [j for j, sent in enumerate(parts) if sent.rstrip(" \"»)").endswith("?")]
+        keep_q = q_idx[0] if i == first_p and q_idx else None
+        kept = []
+        for j, sent in enumerate(parts):
+            if j in q_idx and j != keep_q:
+                continue
+            kept.append(sent)
+        joined = "".join(kept).strip()
+        if joined:
+            out.append(joined)
+    result = "\n".join(out)
+    return re.sub(r"\n{3,}", "\n\n", result).strip()
+
+
+def _strip_leading_name(text: str, name: str) -> str:
+    """Support mode: no 'Аня, ...' at the very start."""
+    name = (name or "").strip()
+    if not name or not text:
+        return text
+    stems = {name, name[:-1] + "ь"} if len(name) > 2 else {name}
+    for stem in stems:
+        m = re.match(rf"^\s*{re.escape(stem)}\s*[,!.—-]+\s*", text, re.IGNORECASE)
+        if m:
+            rest = text[m.end():]
+            return rest[:1].upper() + rest[1:] if rest else text
+    return text
 
 
 def _support_mode_rule(profile: dict) -> str:
@@ -4662,7 +4718,8 @@ async def _coach_reply(
         _current_goal_only_rule(prof),
         _chat_one_question_rule(prof),
     ]
-    if _in_support_mode(histories.get(chat_id) or [], user_text):
+    support_mode = _in_support_mode(histories.get(chat_id) or [], user_text)
+    if support_mode:
         extra_parts.append(_support_mode_rule(prof))
         log.info("coach_reply support mode cid=%s", chat_id)
     if extra_rule:
@@ -4778,6 +4835,8 @@ async def _coach_reply(
 
     parsed = parse_structured_reply(reply)
     reply = sanitize_bot_reply(parsed["reply"] or reply)
+    if support_mode:
+        reply = _keep_one_question(_strip_leading_name(reply, str(prof.get("name") or "")))
     card = _apply_chat_state_updates(chat_id, prof, effective_text, parsed["state_updates"])
     if card:
         reply = f"{reply}\n\n{card}"

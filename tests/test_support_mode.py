@@ -14,7 +14,7 @@ import safety  # noqa: E402
 from tests.test_lang_paths import _main_functions  # noqa: E402
 
 _src = (ROOT / "main.py").read_text(encoding="utf-8")
-_ns: dict = {"safety": safety}
+_ns: dict = {"safety": safety, "re": __import__("re")}
 exec(_src[_src.index("_LOW_STATE_MARKERS = ("):_src.index("def _support_mode_rule")], _ns)
 NS = _main_functions({"_support_mode_rule"}, _ns)
 
@@ -51,3 +51,45 @@ class SupportModeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+_post = {"re": __import__("re")}
+exec(_src[_src.index("_SENTENCE_RE = re.compile"):_src.index("def _support_mode_rule")], _post)
+
+
+class SupportPostProcessTests(unittest.TestCase):
+    def test_keeps_first_question(self) -> None:
+        text = "Аня, это важно. Как давно ты так ешь? И что вообще получается съесть за день?"
+        out = _post["_keep_one_question"](text)
+        self.assertEqual(out.count("?"), 1)
+        self.assertIn("Как давно ты так ешь?", out)
+        self.assertIn("это важно.", out)
+        self.assertNotIn("съесть за день", out)
+
+    def test_questions_in_two_paragraphs(self) -> None:
+        text = "Понимаю.\n\nТы сейчас дома? Муж и дети спят?"
+        out = _post["_keep_one_question"](text)
+        self.assertEqual(out, "Понимаю.\n\nТы сейчас дома?")
+
+    def test_fragment_question_dropped(self) -> None:
+        text = "Это тяжело.\n\nЧто конкретно даёт это ощущение? Про что-то ещё?"
+        self.assertEqual(
+            _post["_keep_one_question"](text),
+            "Это тяжело.\n\nЧто конкретно даёт это ощущение?",
+        )
+
+    def test_single_question_untouched(self) -> None:
+        text = "Тогда ложись.\n\nТы поела сегодня?"
+        self.assertEqual(_post["_keep_one_question"](text), text)
+
+    def test_strip_name(self) -> None:
+        self.assertEqual(
+            _post["_strip_leading_name"]("Аня, сейчас почти полночь.", "Аня"),
+            "Сейчас почти полночь.",
+        )
+        self.assertEqual(_post["_strip_leading_name"]("Ань, слышу.", "Аня"), "Слышу.")
+        self.assertEqual(_post["_strip_leading_name"]("Слышу тебя, Аня.", "Аня"), "Слышу тебя, Аня.")
+
+    def test_new_trigger_words(self) -> None:
+        self.assertTrue(NS["_in_support_mode"]([], "Ничего не хочется, наверное я просто ленивая"))
+        self.assertTrue(NS["_in_support_mode"]([], "Сижу плачу"))
