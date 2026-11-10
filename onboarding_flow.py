@@ -2380,7 +2380,8 @@ async def _complete_change_weekly_from_dialog(
         )
     else:
         done_msg = ob_text("weekly_saved", lang, weekly=weekly)
-    await msg.reply_text(done_msg)
+    if done_msg:
+        await msg.reply_text(done_msg)
 
 
 async def _finish_change_weekly(
@@ -2451,7 +2452,8 @@ async def _dispatch_goal_confirm_after(
             )
         else:
             done_msg = ob_text("weekly_saved", _ob_lang(st), weekly=weekly)
-        await msg.reply_text(done_msg)
+        if done_msg:
+            await msg.reply_text(done_msg)
         return
 
     if after == "finish_12w":

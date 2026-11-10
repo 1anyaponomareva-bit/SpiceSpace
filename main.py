@@ -7615,24 +7615,30 @@ async def _after_weekly_goal_saved(
     weekly: str,
     from_week_start: bool,
 ) -> str:
-    """Pick confirmation text and send today's task/morning immediately when due."""
+    """Confirm the weekly goal, then send today's task/morning when due.
+
+    The confirmation goes first, so the message with a question ("что берёшь?")
+    is the last one in the chat and the dialog keeps going. Returns "" when the
+    messages were already sent here.
+    """
     lang = _user_lang(profile)
     tz_name = _profile_timezone_name(profile)
     now_local = datetime.now(_zone_or_default(tz_name))
     due_now = _morning_slot_due_now(profile, now_local)
 
-    if due_now:
-        if from_week_start:
-            await _post_weekly_goal_morning(bot, cid, profile, model_names)
-        else:
-            await _post_today_task_after_weekly(bot, cid, profile, model_names)
-        return ob.ob_text("weekly_saved_morning_now", lang, weekly=weekly)
-
-    if from_week_start:
+    if from_week_start and not due_now:
         return ob.ob_text("weekly_saved_evening", lang, weekly=weekly)
 
-    await _post_today_task_after_weekly(bot, cid, profile, model_names)
-    return ob.ob_text("weekly_saved", lang, weekly=weekly)
+    key = "weekly_saved_morning_now" if due_now else "weekly_saved"
+    try:
+        await bot.send_message(chat_id=cid, text=ob.ob_text(key, lang, weekly=weekly))
+    except Exception as e:
+        log.warning("weekly saved confirm failed cid=%s: %s", cid, e)
+    if due_now and from_week_start:
+        await _post_weekly_goal_morning(bot, cid, profile, model_names)
+    else:
+        await _post_today_task_after_weekly(bot, cid, profile, model_names)
+    return ""
 
 
 def _mark_morning_slot_sent(
