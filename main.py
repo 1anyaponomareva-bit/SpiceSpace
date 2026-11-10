@@ -6124,7 +6124,31 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 _append_history_turn(cid, raw, msg)
                 return
 
+            now_rem = datetime.now(
+                _zone_or_default(_profile_timezone_name(prof_rem))
+            )
             parsed = _extract_hhmm_from_text(raw) or _parse_daily_time(raw.strip())
+            if not parsed and _asks_current_time(raw):
+                msg = ui_text(
+                    "reminder_now_time",
+                    profile=prof_rem,
+                    now=now_rem.strftime("%H:%M"),
+                    time=_suggest_reminder_time(now_rem),
+                )
+                await _bot_reply(update.message, msg)
+                _append_history_turn(cid, raw, msg)
+                return
+            if parsed and parsed <= now_rem.strftime("%H:%M"):
+                msg = ui_text(
+                    "reminder_time_passed",
+                    profile=prof_rem,
+                    time=parsed,
+                    now=now_rem.strftime("%H:%M"),
+                    suggest=_suggest_reminder_time(now_rem),
+                )
+                await _bot_reply(update.message, msg)
+                _append_history_turn(cid, raw, msg)
+                return
             if parsed:
                 pending_morning.pop(cid, None)
                 task_title = task_title or ui_text(
@@ -6897,13 +6921,43 @@ async def _task_day_followup_text(
     return await asyncio.to_thread(call)
 
 
+_ASKS_TIME_MARKERS = (
+    "сколько сейчас врем", "сколько времени", "который час", "котор час",
+    "сколько у меня врем", "what time", "time is it",
+)
+
+
+def _asks_current_time(raw: str) -> bool:
+    low = (raw or "").lower().replace("ё", "е")
+    return any(m in low for m in _ASKS_TIME_MARKERS)
+
+
+def _suggest_reminder_time(now_local: datetime) -> str:
+    """A sensible example time: 14:00 in the morning, else ~2 hours from now."""
+    if now_local.hour < 12:
+        return "14:00"
+    hour = min(now_local.hour + 2, 23)
+    return f"{hour:02d}:00"
+
+
+def _reminder_ask_text(profile: dict, now_local: datetime) -> str:
+    if now_local.hour < 12:
+        return ui_text("midday_reminder_ask", profile=profile)
+    return ui_text(
+        "later_reminder_ask", profile=profile, time=_suggest_reminder_time(now_local)
+    )
+
+
 async def _ask_midday_reminder(bot, chat_id: int, profile: dict, task: str) -> None:
-    """Ask user if they want a midday reminder for today's task."""
+    """Ask user if they want a reminder for today's task (wording fits the hour)."""
     await asyncio.sleep(1)
+    now_local = datetime.now(_zone_or_default(_profile_timezone_name(profile)))
+    if now_local.hour >= 21:
+        return
     try:
         await bot.send_message(
             chat_id=chat_id,
-            text=ui_text("midday_reminder_ask", profile=profile),
+            text=_reminder_ask_text(profile, now_local),
         )
     except Exception as e:
         log.warning("midday reminder ask failed cid=%s: %s", chat_id, e)

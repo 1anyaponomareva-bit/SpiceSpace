@@ -13,6 +13,24 @@ _UI: dict[str, dict[str, str]] = {
             "Send a time — e.g. 14:00. Or «no» if you don't need one."
         ),
     },
+    "later_reminder_ask": {
+        "ru": (
+            "Напомнить тебе про задачу попозже? "
+            "Напиши время — например, {time}. Или «нет» если не нужно."
+        ),
+        "en": (
+            "Want a reminder about your task later today? "
+            "Send a time — e.g. {time}. Or «no» if you don't need one."
+        ),
+    },
+    "reminder_now_time": {
+        "ru": "У тебя сейчас {now}. Во сколько напомнить? Например, {time}. Или «нет».",
+        "en": "It's {now} for you now. What time should I remind you? E.g. {time}. Or «no».",
+    },
+    "reminder_time_passed": {
+        "ru": "{time} уже прошло — у тебя сейчас {now}. Напиши время попозже, например {suggest}. Или «нет».",
+        "en": "{time} has already passed — it's {now} for you. Send a later time, e.g. {suggest}. Or «no».",
+    },
     "ok_short": {"ru": "Окей 💚", "en": "Okay 💚"},
     "reminder_at": {"ru": "Напомню в {time} 💚", "en": "I'll remind you at {time} 💚"},
     "reminder_save_failed": {
