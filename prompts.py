@@ -461,8 +461,8 @@ EVENING_MESSAGE_PROMPT_RU = """ВАЖНЕЙШЕЕ ПРАВИЛО:
 ЗАПРЕЩЕНО начинать с нуля как будто сегодня ничего не было.
 
 Задача на сегодня: {today_task}
-Напиши коротко: подведи итог дня, спроси честно — получилась ли задача на сегодня.
-Потом — поставим задачу на завтра или утром займёмся.
+Напиши коротко: подведи итог дня и закончи вопросом, получилась ли задача на сегодня. Под сообщением будут кнопки «Выполнила / Частично / Не вышло».
+Это ЕДИНСТВЕННЫЙ вопрос в сообщении и он стоит последним. Не спрашивай про завтра, планы и другие дела — про завтра поговорим после её ответа.
 2-3 предложения максимум. Без markdown.
 
 ЗАПРЕЩЕНО:
@@ -473,7 +473,6 @@ EVENING_MESSAGE_PROMPT_RU = """ВАЖНЕЙШЕЕ ПРАВИЛО:
 - Закрывающие вопросы и фразы ("Всё на сегодня?", "Ещё что-то?", "Чем ещё могу помочь?", "Если что — пиши!")
 
 Если пользователь говорит "давай наметим задачу" — это означает что он ХОЧЕТ поставить задачу, а не что уже выполнил её.
-Просто спроси: "Что конкретно сделаешь завтра?"
 
 {name_rule}
 
@@ -510,8 +509,8 @@ Use this context — mention a specific detail from today's chat.
 FORBIDDEN to start from scratch as if nothing happened today.
 
 Today's task: {today_task}
-Write briefly: wrap up the day, ask honestly — did today's task happen?
-Then — we'll set tomorrow's task or handle it in the morning.
+Write briefly: wrap up the day and end by asking whether today's task happened. Buttons "Done / Partly / Didn't" will be under the message.
+This is the ONLY question in the message and it comes last. Do not ask about tomorrow, plans or other things — tomorrow comes after her answer.
 2-3 sentences max. No markdown.
 
 FORBIDDEN:
@@ -522,7 +521,6 @@ FORBIDDEN:
 - Closing questions ("All for today?", "Anything else?", "How else can I help?", "If you need anything!")
 
 If she says "let's plan a task" — she WANTS to set a task, not that she finished.
-Just ask: "What specifically will you do tomorrow?"
 
 {name_rule}
 

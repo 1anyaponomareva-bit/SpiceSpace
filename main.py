@@ -1384,6 +1384,28 @@ def _task_completion_callback_label(callback_data: str, profile: dict) -> str:
     return labels.get(callback_data, callback_data)
 
 
+def _task_outcome_reply_rule(profile: dict, outcome: str, task: str) -> str:
+    """How to answer a tap on Done / Partly / Didn't under the evening message."""
+    ru = str(profile.get("language_code") or "en").lower().startswith("ru")
+    if ru:
+        status = {"true": "выполнила", "partial": "частично", "false": "не вышло"}.get(outcome, outcome)
+        about = f"задача дня «{task}»" if task else "задача дня"
+        return (
+            f"ОТВЕТ НА КНОПКУ: она нажала кнопку под вечерним сообщением: {about} — {status}. "
+            "Итог уже записан. Ответь коротко, 1–2 предложения: тёплая реакция на этот итог. "
+            "Не уточняй, про какую задачу речь — ты это знаешь. Не задавай вопросов. "
+            "Не предлагай дотягивать задачу сейчас и не планируй завтра — утром будет новое сообщение."
+        )
+    status = {"true": "done", "partial": "partly", "false": "didn't happen"}.get(outcome, outcome)
+    about = f"today's task «{task}»" if task else "today's task"
+    return (
+        f"BUTTON REPLY: she tapped a button under the evening message: {about} — {status}. "
+        "It is already saved. Reply briefly, 1–2 sentences: a warm reaction to this result. "
+        "Do not ask which task it was — you know it. Ask no questions. "
+        "Do not push to finish it now or plan tomorrow — a new message comes in the morning."
+    )
+
+
 def _evening_message_keyboard(cid: int, profile: dict) -> InlineKeyboardMarkup:
     lang = _user_lang(profile)
     ru = lang.lower().startswith("ru")
@@ -4218,9 +4240,16 @@ async def handle_task_completion_callback(
 
     model_names: list[str] = context.bot_data.get("claude_model_names") or []
     label = _task_completion_callback_label(query.data, prof)
+    summ_today = db_store.get_daily_summary(cid, today) or {}
+    task_title = str((summ_today or {}).get("task") or "").strip()
     try:
         async with typing_while(context.bot, cid):
-            reply = await _coach_reply(cid, label, model_names)
+            reply = await _coach_reply(
+                cid,
+                label,
+                model_names,
+                extra_rule=_task_outcome_reply_rule(prof, outcome, task_title),
+            )
     except anthropic.RateLimitError:
         log.exception("Claude quota exhausted on task completion callback")
         await context.bot.send_message(
@@ -4605,6 +4634,7 @@ async def _coach_reply(
     *,
     append_history: bool = True,
     reply_context: str | None = None,
+    extra_rule: str | None = None,
 ) -> str:
     tid = str(chat_id)
     prof = db_store.get_profile(chat_id) or user_profiles.get(tid) or {}
@@ -4633,6 +4663,8 @@ async def _coach_reply(
     if _in_support_mode(histories.get(chat_id) or [], user_text):
         extra_parts.append(_support_mode_rule(prof))
         log.info("coach_reply support mode cid=%s", chat_id)
+    if extra_rule:
+        extra_parts.append(extra_rule)
     topic = specialty_instructions(user_text, lang=lang)
     if topic:
         extra_parts.append(topic)
