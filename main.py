@@ -704,6 +704,67 @@ def _chat_one_question_rule(profile: dict) -> str:
         return CHAT_ONE_QUESTION_RULE
     return CHAT_ONE_QUESTION_RULE_EN
 
+
+# She talks about how she feels (no energy, "not my life", tired, stuck).
+_LOW_STATE_MARKERS = (
+    "сил нет", "нет сил", "сил никаких", "без сил", "энергии нет", "нет энергии",
+    "не своя жизнь", "не свою жизнь", "не моя жизнь", "чужую жизнь", "чужая жизнь",
+    "устала", "вымоталась", "выгор", "апати", "опустош", "тоск", "грустно",
+    "одиноко", "болот", "ничего не хочу", "не хочется ничего",
+    "плохо себя чувств", "плачу", "подъедает", "гложет",
+    "no energy", "exhausted", "burned out", "burnt out", "not my life",
+    "feel empty", "feel stuck", "so tired", "lonely", "i feel low", "drained",
+)
+
+
+def _text_of_turn(turn: dict) -> str:
+    parts = turn.get("parts") if isinstance(turn, dict) else None
+    if isinstance(parts, list):
+        return " ".join(str(p) for p in parts if isinstance(p, str))
+    return str(parts or "")
+
+
+def _in_support_mode(history: list, user_text: str, lookback: int = 6) -> bool:
+    """Her latest messages are about her state, so tasks and goals wait."""
+    recent_user = [
+        _text_of_turn(t)
+        for t in (history or [])[-lookback * 2:]
+        if isinstance(t, dict) and t.get("role") == "user"
+    ][-lookback:]
+    for text in recent_user + [user_text or ""]:
+        low = text.lower().replace("ё", "е")
+        if any(m.replace("ё", "е") in low for m in _LOW_STATE_MARKERS):
+            return True
+        if safety.detect_distress(text):
+            return True
+    return False
+
+
+SUPPORT_MODE_RULE_RU = """СЕЙЧАС РАЗГОВОР О ЕЁ СОСТОЯНИИ (важнее правил про цель и задачи):
+- Не упоминай задачу дня, цель, продукт, стратегию, соцсети, напоминания и не предлагай дел, даже «самое малое». Вернись к делам, только если она сама прямо спросит про свою задачу или заговорит о работе.
+- Вопрос «твоя задача?», «зачем ты?», «что ты делаешь?» — это вопрос о тебе. Ответь про свою роль в этом разговоре: быть рядом и помочь ей разобраться, что с ней происходит. Не пересказывай её задачу дня.
+- Не своди её чувства к цели («поэтому так важен твой продукт»).
+- Совет, который ты уже дала в этом разговоре (врач, анализы, отдых), не повторяй. Одного раза достаточно.
+- Если про безопасность уже спрашивала и она ответила — больше не спрашивай.
+- Не ставь диагнозов и не объясняй ей, что она чувствует («это горе», «ты проживаешь потерю»). Догадку можно только вопросом: «Может быть, тебе не хватает…?»
+- Факты из памяти не выдавай так, будто она сказала их сейчас.
+- Ровно один простой вопрос в конце, без вариантов через «или». Можно и без вопроса — просто побыть рядом."""
+
+SUPPORT_MODE_RULE_EN = """THIS CONVERSATION IS ABOUT HOW SHE FEELS (outranks the goal and task rules):
+- Do not mention today's task, the goal, her product, strategy, social media or reminders, and suggest no tasks, not even "the smallest thing". Go back to work only if she herself asks about her task or starts talking about work.
+- "What's your task?", "why are you here?", "what are you doing?" is a question about you. Answer about your role in this conversation: to be with her and help her understand what is going on. Do not repeat her task for today.
+- Do not tie her feelings back to the goal ("that's why your product matters").
+- Advice you already gave in this conversation (doctor, tests, rest) is not repeated. Once is enough.
+- If you already asked whether she is safe and she answered, do not ask again.
+- Do not diagnose or tell her what she feels ("this is grief", "you are going through a loss"). A guess only as a question: "Could it be that you miss…?"
+- Do not present remembered facts as if she just said them.
+- Exactly one simple question at the end, no "or" options. Or no question at all, just be with her."""
+
+
+def _support_mode_rule(profile: dict) -> str:
+    lang = str(profile.get("language_code") or "en")
+    return SUPPORT_MODE_RULE_RU if lang.lower().startswith("ru") else SUPPORT_MODE_RULE_EN
+
 MORNING_PROMPT = """Коротко (до 6 предложений), по-человечески. Напомни цель из контекста. Без «как настроение».
 Не выдавай конкретную задачу на день в этом сообщении — только настрой и якорь на цель. Конец: приглашение написать, когда удобно."""
 
@@ -4569,6 +4630,9 @@ async def _coach_reply(
         _current_goal_only_rule(prof),
         _chat_one_question_rule(prof),
     ]
+    if _in_support_mode(histories.get(chat_id) or [], user_text):
+        extra_parts.append(_support_mode_rule(prof))
+        log.info("coach_reply support mode cid=%s", chat_id)
     topic = specialty_instructions(user_text, lang=lang)
     if topic:
         extra_parts.append(topic)
