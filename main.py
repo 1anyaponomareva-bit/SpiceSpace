@@ -7229,13 +7229,18 @@ def _effective_task_completed(summ: dict | None) -> str | None:
     if not isinstance(summ, dict):
         return None
     tc = db_store.normalize_task_completed(summ.get("task_completed"))
+    completed = summ.get("completed")
+    if completed is True and not tc:
+        tc = "true"
+    elif completed is False and not tc:
+        tc = "false"
+    # A day without a task can't be "not done": guesses from the day's text or the
+    # bot's own reply used to paint such days as missed. Only a done/partial mark counts.
+    has_task = len(str(summ.get("task") or "").strip()) > 5
+    if not has_task:
+        return tc if tc in ("true", "partial") else None
     if tc:
         return tc
-    completed = summ.get("completed")
-    if completed is True:
-        return "true"
-    if completed is False:
-        return "false"
     blob = " ".join(
         str(summ.get(k) or "")
         for k in ("summary", "mood", "key_detail")
