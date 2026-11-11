@@ -32,9 +32,11 @@ class EveningButtonsTests(unittest.TestCase):
         )
         self.assertIn("частично", rule)
         self.assertIn("Собрать маркетинговую стратегию", rule)
-        self.assertIn("Не задавай вопросов", rule)
+        self.assertIn("ОДИН простой живой вопрос", rule)
+        self.assertNotIn("Не задавай вопросов", rule)
         en = NS["_task_outcome_reply_rule"]({"language_code": "en"}, "true", "")
-        self.assertIn("Ask no questions", en)
+        self.assertIn("ONE simple, friendly question", en)
+        self.assertNotIn("Ask no questions", en)
 
 
 if __name__ == "__main__":

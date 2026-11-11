@@ -1450,16 +1450,24 @@ def _task_outcome_reply_rule(profile: dict, outcome: str, task: str) -> str:
         about = f"задача дня «{task}»" if task else "задача дня"
         return (
             f"ОТВЕТ НА КНОПКУ: она нажала кнопку под вечерним сообщением: {about} — {status}. "
-            "Итог уже записан. Ответь коротко, 1–2 предложения: тёплая реакция на этот итог. "
-            "Не уточняй, про какую задачу речь — ты это знаешь. Не задавай вопросов. "
+            "Итог уже записан. Ответь коротко: тёплая реакция на этот итог (1–2 предложения), "
+            "а в конце — ОДИН простой живой вопрос, чтобы разговор продолжился: про неё и её вечер, "
+            "про то, что было за день, как она сейчас себя чувствует, что порадовало. "
+            "Вечером людям хочется поговорить — не обрывай разговор. "
+            "Вопрос не про задачи, не про цель и не про завтра; без «или»; не «почему не вышло». "
+            "Не уточняй, про какую задачу речь — ты это знаешь. "
             "Не предлагай дотягивать задачу сейчас и не планируй завтра — утром будет новое сообщение."
         )
     status = {"true": "done", "partial": "partly", "false": "didn't happen"}.get(outcome, outcome)
     about = f"today's task «{task}»" if task else "today's task"
     return (
         f"BUTTON REPLY: she tapped a button under the evening message: {about} — {status}. "
-        "It is already saved. Reply briefly, 1–2 sentences: a warm reaction to this result. "
-        "Do not ask which task it was — you know it. Ask no questions. "
+        "It is already saved. Reply briefly: a warm reaction to this result (1–2 sentences), "
+        "then end with ONE simple, friendly question that keeps the conversation going: about her and her evening, "
+        "how the day went, how she feels now, what made her glad. "
+        "People want to talk in the evening — do not close the conversation. "
+        "The question is not about tasks, goals or tomorrow; no either/or; not \"why didn't it work\". "
+        "Do not ask which task it was — you know it. "
         "Do not push to finish it now or plan tomorrow — a new message comes in the morning."
     )
 
