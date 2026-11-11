@@ -486,6 +486,11 @@ STRINGS: dict[str, dict[str, str]] = {
     "goal_fallback": "Расскажи подробнее?",
     "weekly_dialog_fallback": "Расскажи подробнее?",
     "weekly_dialog_opening": "Что ты сама хочешь успеть на этой неделе, чтобы стать ближе к цели?",
+    "new_week_morning_nudge": (
+        "Доброе утро 💚 Вчера вечером мы начали ставить цель на новую неделю. "
+        "Что ты сама хочешь успеть на этой неделе, чтобы стать ближе к цели?"
+    ),
+    "new_week_morning_resume": "Доброе утро 💚 Вчера мы не договорили про цель на новую неделю.",
     "default_goal": "твоя цель",
     "open_spicespace_btn": "Открыть SpiceSpace",
     "app_progress_hint": "Твой прогресс 👇",
@@ -711,6 +716,11 @@ STRINGS: dict[str, dict[str, str]] = {
     "goal_fallback": "Tell me more?",
     "weekly_dialog_fallback": "Tell me more?",
     "weekly_dialog_opening": "What do you want to get done this week to move toward your goal?",
+    "new_week_morning_nudge": (
+        "Good morning 💚 Last night we started setting your goal for the new week. "
+        "What do you want to get done this week to move toward your goal?"
+    ),
+    "new_week_morning_resume": "Good morning 💚 Yesterday we didn't finish setting your goal for the new week.",
     "default_goal": "your goal",
     "open_spicespace_btn": "Open SpiceSpace",
     "app_progress_hint": "Your progress 👇",

@@ -7834,6 +7834,77 @@ def _should_skip_morning_for_weekly_flow(
     return started_day == today
 
 
+def _unanswered_new_week_flow(cid: int, profile: dict, today: str) -> dict | None:
+    """Day-7 "goal for the new week" dialog started on an earlier day and still open."""
+    st = onboarding.get(cid)
+    if not isinstance(st, dict):
+        return None
+    if int(st.get("step") or -1) != ob.OB_CHANGE_WEEKLY:
+        return None
+    if not st.get("from_week_start"):
+        return None
+    started_day = _weekly_flow_started_local_date(st, _profile_timezone_name(profile))
+    if not started_day or started_day >= today:
+        return None
+    return st
+
+
+def _new_week_nudge_turns(turns: list[dict], lang: str) -> tuple[list[dict], str]:
+    """Morning text that re-asks the open weekly-goal question, and the new dialog turns."""
+    turns = [t for t in (turns or []) if isinstance(t, dict)]
+    answered = any(t.get("role") == "user" and t.get("content") for t in turns)
+    last_q = ""
+    if turns and turns[-1].get("role") == "assistant":
+        last_q = str(turns[-1].get("content") or "").strip()
+    if answered and last_q:
+        text = ob.ob_text("new_week_morning_resume", lang) + "\n\n" + last_q
+        return turns[:-1] + [{"role": "assistant", "content": text}], text
+    text = ob.ob_text("new_week_morning_nudge", lang)
+    if answered:
+        return turns + [{"role": "assistant", "content": text}], text
+    return [{"role": "assistant", "content": text}], text
+
+
+async def _deliver_new_week_goal_nudge(
+    bot,
+    cid: int,
+    profile: dict,
+    st: dict,
+    *,
+    today: str,
+    user_profiles: dict[str, dict],
+) -> bool:
+    """Instead of a regular morning: gently repeat yesterday's weekly-goal question.
+
+    The flow becomes a same-day change: once the goal is saved, today's task is
+    proposed; if she does not answer, the flow is dropped tomorrow and mornings
+    go back to normal.
+    """
+    if not db_store.claim_send_slot(cid, "last_morning_sent_date", today):
+        return False
+    _mark_morning_slot_sent(cid, profile, today, user_profiles)
+    lang = _user_lang(profile)
+    turns, text = _new_week_nudge_turns(st.get("weekly_turns") or [], lang)
+    new_st = dict(st)
+    new_st["weekly_turns"] = turns
+    new_st["from_week_start"] = False
+    new_st["weekly_flow_started_at"] = datetime.now(timezone.utc).isoformat()
+    onboarding[cid] = new_st
+    try:
+        await bot.send_message(
+            chat_id=cid,
+            text=sanitize_bot_reply(text),
+            reply_markup=_webapp_keyboard(cid, lang),
+        )
+        histories.setdefault(cid, []).append({"role": "model", "parts": [text]})
+        return True
+    except Exception as e:
+        log.warning("new week goal nudge failed cid=%s: %s", cid, e)
+        if is_telegram_block_error(e):
+            _mark_telegram_blocked(cid, profile)
+        return False
+
+
 def _in_weekly_special_flow(cid: int, profile: dict | None = None, today: str = "") -> bool:
     if profile and today:
         _clear_stale_weekly_onboarding(cid, profile, today)
@@ -8444,7 +8515,22 @@ async def _bootstrap_bot() -> None:
                         )
                         user_profiles[key] = profile
 
-                if in_morning:
+                new_week_st = (
+                    _unanswered_new_week_flow(cid, profile, today)
+                    if in_morning and not reengage_sent_now
+                    else None
+                )
+                if new_week_st is not None:
+                    if await _deliver_new_week_goal_nudge(
+                        bot,
+                        cid,
+                        profile,
+                        new_week_st,
+                        today=today,
+                        user_profiles=user_profiles,
+                    ):
+                        log.info("daily_check new-week goal nudge cid=%s", cid)
+                elif in_morning:
                     skip_regular_morning = reengage_sent_now or _should_skip_morning_for_weekly_flow(
                         cid, profile, today
                     )
