@@ -167,6 +167,30 @@ def _nullish(value: object) -> bool:
     return False
 
 
+_REPLY_FIELD_RE = re.compile(
+    r'"reply"\s*:\s*"(?P<reply>.*?)"\s*,\s*"state_updates"\s*:\s*(?P<updates>\{.*\})',
+    re.DOTALL,
+)
+
+
+def _salvage_broken_json(text: str) -> dict[str, Any] | None:
+    """JSON with unescaped quotes inside "reply" (e.g. «"Launch my app"»): cut the reply out
+    by its neighbours so the user never sees raw JSON."""
+    m = _REPLY_FIELD_RE.search(text or "")
+    if not m:
+        return None
+    reply = m.group("reply").replace("\\n", "\n").replace('\\"', '"').strip()
+    raw_updates = m.group("updates")
+    updates: object = {}
+    for candidate in (raw_updates, raw_updates[: raw_updates.rfind("}")].rstrip()):
+        try:
+            updates = json.loads(candidate)
+            break
+        except json.JSONDecodeError:
+            continue
+    return {"reply": reply, "state_updates": updates if isinstance(updates, dict) else {}}
+
+
 def parse_structured_reply(raw: str) -> dict[str, Any]:
     """Split a chat completion into user-facing text and optional state updates.
 
@@ -186,7 +210,7 @@ def parse_structured_reply(raw: str) -> dict[str, Any]:
             try:
                 data = json.loads(match.group(0))
             except json.JSONDecodeError:
-                data = None
+                data = _salvage_broken_json(text)
     if not isinstance(data, dict) or "reply" not in data:
         return {
             "reply": (raw or "").strip(),

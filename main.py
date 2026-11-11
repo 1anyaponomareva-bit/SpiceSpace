@@ -4457,6 +4457,17 @@ async def _generate_weekly_recap_message(
     week_context, completed_days, days_with_notes = _collect_week_recap_facts(
         cid, profile, days_since_start
     )
+    # With no notes a "0 of 1" count only makes the letter reproachful.
+    done_line_ru = (
+        f"Дней с выполненной задачей: {completed_days} из {days_with_notes}\n"
+        if days_with_notes
+        else ""
+    )
+    done_line_en = (
+        f"Days with completed daily task: {completed_days} of {days_with_notes}\n"
+        if days_with_notes
+        else ""
+    )
 
     if lang.startswith("ru"):
         prompt = f"""Напиши итог личной недели для {name}. Это готовое сообщение в Telegram — пользователь только читает.
@@ -4464,9 +4475,8 @@ async def _generate_weekly_recap_message(
 Цель на 12 недель: {main_goal or "не указана"}
 Цель этой недели: {weekly_goal or "не указана"}
 Мечта: {vision or "не указана"}
-Дней с выполненной задачей: {completed_days} из {max(days_with_notes, 1)}
-Записи бота за неделю (ЕДИНСТВЕННЫЙ источник фактов):
-{week_context or "мало записей — опирайся на цели, не выдумывай события"}
+{done_line_ru}Что было за неделю (ЕДИНСТВЕННЫЙ источник фактов):
+{week_context or "подробностей нет — опирайся на цели, события не выдумывай, об отсутствии подробностей не пиши"}
 
 Правила:
 - Ты САМА подводишь итог. ЗАПРЕЩЕНО задавать вопросы и просить ответить
@@ -4478,6 +4488,9 @@ async def _generate_weekly_recap_message(
 - ЗАПРЕЩЕНО писать «завтра утром поставим цель» / «сама поставь цель» — цель на неделю вы сразу после этого сообщения обсудите в чате
 - 5–7 предложений, без markdown, без списков и буллетов
 - Не упоминай воскресенье/понедельник как дни недели
+- Если неделя была тяжёлой (нет сил, плохое самочувствие, тяжёлые разговоры): не перечисляй её жалобы и симптомы, не считай провалы («ни один день не выполнен»), не давай указаний про еду, сон и здоровье. Скажи тепло, что неделя была непростой, отметь то, что всё-таки получилось, и предложи шаги полегче
+- Если подробностей мало — не говори об этом («в боте нет записей», «записей немного»), не пиши «давай честно», не упрекай; просто опирайся на цели
+- Без слов «невозможно», «нереально», «провал»
 - Обращайся по имени {name}"""
         system = (
             "Ты Спейс. Пишешь готовый итог недели. Только текст сообщения, без вопросов."
@@ -4488,9 +4501,8 @@ async def _generate_weekly_recap_message(
 12-week goal: {main_goal or "not set"}
 This week's goal: {weekly_goal or "not set"}
 Dream: {vision or "not set"}
-Days with completed daily task: {completed_days}
-Bot notes this week (ONLY fact source):
-{week_context or "few notes — use goals, do not invent events"}
+{done_line_en}What happened this week (ONLY fact source):
+{week_context or "no details — rely on the goals, do not invent events, do not mention the lack of details"}
 
 Rules:
 - YOU summarize. FORBIDDEN to ask questions or request a reply
@@ -4498,9 +4510,12 @@ Rules:
 - Be honest and warm: praise where earned; name gaps gently
 - Remind the 12-week goal in one phrase
 - 2–3 concrete steps for next week (statements, not questions)
-- End with: tomorrow morning we'll set a new weekly goal together
+- FORBIDDEN to say "tomorrow morning we'll set a goal" — the weekly goal talk starts in the chat right after this message
 - 5–7 sentences, no markdown, no bullet lists
 - Do not mention Sunday/Monday
+- If the week was hard (no energy, feeling unwell, heavy talks): do not list her complaints or symptoms, do not count failures ("not a single day done"), give no instructions about food, sleep or health. Say warmly that the week was not easy, note what did work, suggest lighter steps
+- If there are few notes, do not mention it ("there are no notes", "let's be honest") and do not reproach; just rely on the goals
+- No "impossible", "unrealistic", "failure"
 - Address by name {name}"""
         system = "You are Space. Week recap text only. No questions."
 

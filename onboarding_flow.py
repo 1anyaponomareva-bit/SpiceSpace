@@ -447,8 +447,7 @@ STRINGS: dict[str, dict[str, str]] = {
     ),
     "new_week_opening": (
         "Теперь поставим цель на следующую неделю 💚\n\n"
-        "Твоя цель на 12 недель: {main_goal}\n\n"
-        "Сейчас предложу варианты — выбери или напиши свой."
+        "Твоя цель на 12 недель: {main_goal}"
     ),
     "weekly_saved_evening": (
         "Записала 💚 Цель на эту неделю: {weekly}. "
@@ -673,8 +672,7 @@ STRINGS: dict[str, dict[str, str]] = {
     ),
     "new_week_opening": (
         "Let's set your goal for the coming week 💚\n\n"
-        "12-week goal: {main_goal}\n\n"
-        "I'll suggest a few options — pick one or write your own."
+        "12-week goal: {main_goal}"
     ),
     "weekly_saved_evening": (
         "Saved 💚 This week's goal: {weekly}. "
