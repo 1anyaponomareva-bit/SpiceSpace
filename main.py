@@ -2433,10 +2433,44 @@ def _morning_message_fallback(chat_id: int, profile: dict) -> str:
     return f"{display_name}, good morning 🌅\n\nWhat are you planning for today?"
 
 
+def _task_words(task: str) -> list[str]:
+    return [w[:5] for w in re.findall(r"[а-яёa-z]{5,}", (task or "").lower())]
+
+
+def _mentions_task(text: str, task: str) -> bool:
+    """The message names the task (at least one meaningful word of it)."""
+    words = _task_words(task)
+    if not words:
+        return False
+    low = (text or "").lower()
+    return any(w in low for w in words)
+
+
+def _carried_task_question(task: str, ru: bool) -> str:
+    if ru:
+        return f"Вчера наметили: «{task}». Всё в силе — берём это на сегодня?"
+    return f"Yesterday we planned: «{task}». Still on — shall we take it for today?"
+
+
 async def _morning_message_text(
     chat_id: int,
     profile: dict,
     model_names: list[str],
+) -> str:
+    """Morning text; if yesterday's task is still open, it ends asking whether it stays."""
+    carried = _yesterday_unfinished_task(chat_id, profile)
+    ru = str(profile.get("language_code") or "en").lower().startswith("ru")
+    text = await _morning_message_text_base(chat_id, profile, model_names, carried)
+    if carried and not _mentions_task(text, carried):
+        text = f"{text.rstrip()}\n\n{_carried_task_question(carried, ru)}"
+    return text
+
+
+async def _morning_message_text_base(
+    chat_id: int,
+    profile: dict,
+    model_names: list[str],
+    carried: str = "",
 ) -> str:
     lang = str(profile.get("language_code") or "en")
     ru = lang.lower().startswith("ru")
@@ -2460,7 +2494,14 @@ async def _morning_message_text(
             f"Это утреннее сообщение. Вот последний разговор с пользователем: {last_messages}\n"
             "Учитывай этот контекст — не начинай с нуля.\n"
             "Если вчера обсуждали что-то конкретное — продолжи оттуда.\n\n"
-            f"{name_instruction}"
+            + (
+                f"Вчера была намечена задача «{carried}», и она не закрыта. "
+                "В конце спроси, всё ли в силе и берём ли её на сегодня, назвав задачу. "
+                "Это единственный вопрос в сообщении.\n\n"
+                if carried
+                else ""
+            )
+            + f"{name_instruction}"
         )
         user_content = f"Напиши утреннее сообщение для {display_name}."
     else:
@@ -2471,7 +2512,14 @@ async def _morning_message_text(
             f"with the user: {last_messages}\n"
             "Use this context — don't start from scratch.\n"
             "If you discussed something specific yesterday — continue from there.\n\n"
-            f"{name_instruction}"
+            + (
+                f"Yesterday's task «{carried}» is still open. "
+                "At the end ask whether it is still on and she takes it for today, naming the task. "
+                "This is the only question in the message.\n\n"
+                if carried
+                else ""
+            )
+            + f"{name_instruction}"
         )
         user_content = f"Write the morning message for {display_name}."
     morning_system = prepend_user_time(profile, morning_body)
@@ -2519,8 +2567,7 @@ _EVENING_PERSONAL_SYSTEM_RU = (
     '- Путать намерение ("давай сделаем") с фактом ("сделала")\n'
     "- Материться или использовать слова: бля, блин, чёрт, фиг и подобные\n"
     "- Задавать один и тот же вопрос дважды подряд\n\n"
-    'Если пользователь говорит "давай наметим задачу" — он ХОЧЕТ поставить задачу, а не выполнил её.\n'
-    'Просто спроси: "Что конкретно сделаешь завтра?"'
+    'Если пользователь говорит "давай наметим задачу" — он ХОЧЕТ поставить задачу, а не выполнил её.'
 )
 
 _EVENING_PERSONAL_SYSTEM = (
@@ -2531,8 +2578,7 @@ _EVENING_PERSONAL_SYSTEM = (
     '- Confusing intent ("let\'s do it") with fact ("I did it")\n'
     "- Profanity\n"
     "- Asking the same question twice in a row\n\n"
-    'If she says "let\'s plan a task" — she WANTS to set a task, not that she finished.\n'
-    'Just ask: "What specifically will you do tomorrow?"'
+    'If she says "let\'s plan a task" — she WANTS to set a task, not that she finished.'
 )
 
 
@@ -6367,12 +6413,15 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 reply_type = str(classified.get("type") or "chat").lower()
                 saved_task: str | None = None
                 if reply_type == "confirm":
-                    saved_task = _commit_morning_task(
-                        cid,
-                        prof_d,
+                    carried = (
                         _yesterday_unfinished_task(cid, prof_d)
-                        or str(morning_state.get("task") or "").strip(),
+                        or str(morning_state.get("task") or "").strip()
                     )
+                    # "Ок" confirms only a task the morning message actually named.
+                    if carried and _mentions_task(morning_text, carried):
+                        saved_task = _commit_morning_task(cid, prof_d, carried)
+                    else:
+                        log.info("morning confirm skipped: task not in morning text cid=%s", cid)
                 elif reply_type == "new_task":
                     weekly = str(prof_d.get("weekly_goal") or "").strip()
                     task = _sanitize_today_task(
