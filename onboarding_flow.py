@@ -3302,8 +3302,11 @@ async def _complete_onboarding(
         tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     today_iso = datetime.now(tz).date().isoformat()
     cycle = new_cycle_fields(profile, today_iso)
-    new_trial = not profile.get("trial_start_date")
-    if new_trial:
+    # persist_profile already filled trial_start_date for a brand-new user, so a
+    # trial that starts today means this is her first setup.
+    own_trial = str(profile.get("trial_start_date") or "").strip()[:10]
+    new_trial = not own_trial or own_trial == today_iso
+    if not own_trial:
         cycle["trial_start_date"] = today_iso
     cycle.update(quiet_slots_after_onboarding(profile, datetime.now(tz)))
     profile.update(cycle)
@@ -3386,7 +3389,15 @@ async def _complete_onboarding(
     await asyncio.sleep(1)
     # Fixed text: a generated question here read as "have you already done it?"
     # right after the goal was set. Ask about the first step forward instead.
-    await msg.reply_text(ob_text("first_step_question", lang))
+    first_step = ob_text("first_step_question", lang)
+    await msg.reply_text(first_step)
+    # Keep the question in the chat history: without it the next reply looks like
+    # the first contact and the model greets her again.
+    histories.setdefault(cid, []).append({"role": "model", "parts": [first_step]})
+    try:
+        db.save_history_turn(cid, "model", first_step)
+    except Exception as e:
+        log.warning("save first_step turn failed cid=%s: %s", cid, e)
 
 
 async def handle_returning_choice(
