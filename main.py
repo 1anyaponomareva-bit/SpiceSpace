@@ -3736,7 +3736,12 @@ async def successful_payment_handler(
 def _lava_plan_keyboard(lang: str) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(
-            lava_pay.t(lang, "plan_btn", label=lava_pay.plan_label(p, lang), rub=lava_pay.PLANS[p]["rub"]),
+            lava_pay.t(
+                lang,
+                "plan_btn",
+                label=lava_pay.plan_label(p, lang),
+                rub=lava_pay.format_amount(lava_pay.plan_rub(p), "RUB").replace(" ₽", ""),
+            ),
             callback_data=f"lava:plan:{p}",
         )]
         for p in lava_pay.available_plans()
@@ -3744,17 +3749,24 @@ def _lava_plan_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _lava_method_keyboard(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(lava_pay.t(lang, "method_ru_btn"), callback_data="lava:method:ru")],
-        [InlineKeyboardButton(lava_pay.t(lang, "method_intl_btn"), callback_data="lava:method:intl")],
-        [InlineKeyboardButton(lava_pay.t(lang, "change_btn"), callback_data="lava:start")],
-    ])
+def _lava_method_keyboard(lang: str, plan: str = "") -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(lava_pay.t(lang, "method_ru_btn"), callback_data="lava:method:ru")]]
+    if not plan or lava_pay.plan_has_usd(plan):
+        rows.append([InlineKeyboardButton(lava_pay.t(lang, "method_intl_btn"), callback_data="lava:method:intl")])
+    rows.append([InlineKeyboardButton(lava_pay.t(lang, "change_btn"), callback_data="lava:start")])
+    return InlineKeyboardMarkup(rows)
 
 
 async def _lava_send_start(bot, cid: int, profile: dict) -> None:
     lang = ui_lang(profile)
     if not lava_pay.enabled():
+        await bot.send_message(chat_id=cid, text=lava_pay.t(lang, "unavailable"))
+        return
+    try:
+        await lava_pay.load_offers()
+    except Exception as e:
+        log.warning("lava offers load failed: %s", e)
+    if not lava_pay.available_plans():
         await bot.send_message(chat_id=cid, text=lava_pay.t(lang, "unavailable"))
         return
     prev = lava_pay.checkout.get(cid) or {}
@@ -3858,14 +3870,15 @@ async def handle_lava_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await context.bot.send_message(
             chat_id=cid,
             text=lava_pay.t(lang, "choose_method"),
-            reply_markup=_lava_method_keyboard(lang),
+            reply_markup=_lava_method_keyboard(lang, arg),
         )
         return
     if action == "method" and arg in lava_pay.METHODS:
         co["method"] = arg
         if not co.get("email"):
             known = db_store.lava_latest_for_user(cid) or {}
-            co["email"] = str(known.get("email") or "")
+            tag = lava_pay.parse_profile_tag(prof.get("plan")) or {}
+            co["email"] = str(known.get("email") or tag.get("email") or "")
         if co.get("email"):
             async with typing_while(context.bot, cid):
                 await _lava_show_summary(context.bot, cid, prof)
@@ -3918,6 +3931,35 @@ async def _lava_handle_text(update: Update, cid: int, raw: str, profile) -> bool
     return False
 
 
+async def cmd_lavacheck(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin only: what the bot sees in the lava account (no secrets shown)."""
+    if not update.effective_chat or not update.message:
+        return
+    if str(update.effective_chat.id) != str(ADMIN_TELEGRAM_ID):
+        return
+    lines = [f"Ключ lava: {'есть' if lava_pay.api_key() else 'НЕТ'}"]
+    if lava_pay.api_key():
+        try:
+            found = await lava_pay.load_offers(force=True)
+        except Exception as e:
+            found = {}
+            lines.append(f"Ошибка запроса к lava: {str(e)[:200]}")
+        for plan in lava_pay.PLANS:
+            info = found.get(plan)
+            label = lava_pay.plan_label(plan, "ru")
+            if info:
+                lines.append(
+                    f"{label}: {lava_pay.format_amount(info['rub'], 'RUB')}, "
+                    f"долларовая цена: {'есть' if info['usd'] else 'НЕТ'}, ID {info['id']}"
+                )
+            else:
+                lines.append(f"{label}: подписка не найдена")
+    lines.append(
+        "Секрет вебхука: " + ("задан" if lava_pay.webhook_secret_set() else "не задан (проверка через lava)")
+    )
+    await update.message.reply_text("\n".join(lines))
+
+
 async def cmd_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_chat:
         return
@@ -3934,14 +3976,34 @@ def _lava_end_text(end_iso: str, lang: str) -> str:
     return d.strftime("%d.%m.%Y") if lang.lower().startswith("ru") else d.strftime("%b %d, %Y")
 
 
+def _lava_user_from_profiles(contract_ids: list[str], email: str) -> dict | None:
+    """Find the payer by the lava tag kept in profiles (works without lava_payments)."""
+    ids = {c for c in contract_ids if c}
+    mail = (email or "").lower()
+    by_email = None
+    for key, prof in list(user_profiles.items()):
+        if not isinstance(prof, dict):
+            continue
+        tag = lava_pay.parse_profile_tag(prof.get("plan"))
+        if not tag or not str(key).lstrip("-").isdigit():
+            continue
+        if tag["root"] and tag["root"] in ids:
+            return {"cid": int(key), "plan": tag["plan"]}
+        if mail and tag["email"] == mail and by_email is None:
+            by_email = {"cid": int(key), "plan": tag["plan"]}
+    return by_email
+
+
 async def _lava_apply_event(bot, ev: dict) -> bool:
     """Apply a parsed lava webhook. False when the user could not be found."""
     row = db_store.lava_find_contract(ev["contract_id"]) if ev["contract_id"] else None
     parent = db_store.lava_find_contract(ev["parent_id"]) if ev["parent_id"] else None
+    tagged = _lava_user_from_profiles([ev["contract_id"], ev["parent_id"]], ev["email"])
     tid = (
         (row or {}).get("telegram_id")
         or (parent or {}).get("telegram_id")
         or ev["telegram_id"]
+        or (tagged or {}).get("cid")
         or (db_store.lava_latest_for_email(ev["email"]) or {}).get("telegram_id")
     )
     if not tid:
@@ -3950,7 +4012,12 @@ async def _lava_apply_event(bot, ev: dict) -> bool:
         )
         return False
     cid = int(tid)
-    plan = str((row or {}).get("plan") or (parent or {}).get("plan") or "1m")
+    plan = str(
+        (row or {}).get("plan")
+        or (parent or {}).get("plan")
+        or (tagged or {}).get("plan")
+        or lava_pay.plan_from_amount(ev["amount"], ev["currency"])
+    )
     if plan not in lava_pay.PLANS:
         plan = "1m"
     try:
@@ -3974,8 +4041,14 @@ async def _lava_apply_event(bot, ev: dict) -> bool:
         cur_end = str(prof.get("subscription_end") or "")[:10]
         end = lava_pay.paid_until(plan, ev["timestamp"], cur_end, today)
         repeat = cur_end == end and _profile_truthy(prof.get("is_premium"))
+        root = ev["parent_id"] or ev["contract_id"]
         updated = db_store.update_profile(
-            cid, {"is_premium": True, "subscription_end": end, "plan": f"lava_{plan}"}
+            cid,
+            {
+                "is_premium": True,
+                "subscription_end": end,
+                "plan": lava_pay.profile_tag(plan, root, ev["email"]),
+            },
         )
         if updated is None:
             raise HTTPException(status_code=503, detail="profile write failed")
@@ -8589,6 +8662,7 @@ def _register_telegram_handlers(app_: Application) -> None:
     app_.add_handler(CommandHandler("sendmorning", cmd_sendmorning))
     app_.add_handler(CommandHandler("admin", cmd_admin))
     app_.add_handler(CommandHandler("subscribe", cmd_subscribe))
+    app_.add_handler(CommandHandler("lavacheck", cmd_lavacheck))
     app_.add_handler(MessageHandler(filters.VOICE, on_voice))
     app_.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app_.add_handler(
@@ -9412,9 +9486,17 @@ async def subscribe_endpoint(
 
 @app.post("/api/lava/webhook")
 async def lava_webhook(request: Request) -> dict:
-    """lava.top payment events. Authenticated by the secret set in the lava cabinet."""
-    if not lava_pay.webhook_authorized(dict(request.headers)):
+    """lava.top payment events.
+
+    With LAVA_WEBHOOK_KEY set, the secret in the request must match. Without it,
+    every event is checked against lava's own record of the contract (fetched with
+    our API key), so a forged request cannot open access.
+    """
+    signed = lava_pay.webhook_authorized(dict(request.headers))
+    if lava_pay.webhook_secret_set() and not signed:
         raise HTTPException(status_code=401, detail="unauthorized")
+    if not lava_pay.enabled():
+        raise HTTPException(status_code=503, detail="lava not configured")
     try:
         body = await request.json()
     except Exception:
@@ -9425,6 +9507,15 @@ async def lava_webhook(request: Request) -> dict:
     if ev["kind"] == "other":
         log.info("lava webhook ignored event=%s status=%s", ev["event"], body.get("status"))
         return {"ok": True}
+    if not signed:
+        try:
+            contract = await lava_pay.get_contract(ev["contract_id"])
+        except Exception as e:
+            log.warning("lava webhook check failed contract=%s: %s", ev["contract_id"], e)
+            raise HTTPException(status_code=503, detail="check failed") from e
+        if not lava_pay.contract_confirms(ev, contract):
+            log.warning("lava webhook not confirmed event=%s contract=%s", ev["event"], ev["contract_id"])
+            raise HTTPException(status_code=401, detail="unconfirmed")
     if not telegram_app or not telegram_app.bot:
         raise HTTPException(status_code=503, detail="bot unavailable")
     try:

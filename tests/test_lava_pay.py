@@ -56,14 +56,51 @@ CANCEL = {
 
 
 class LavaPayTests(unittest.TestCase):
-    def test_enabled_needs_key_and_offer(self) -> None:
+    def setUp(self) -> None:
+        lava_pay._found = {}
+
+    def tearDown(self) -> None:
+        lava_pay._found = {}
+
+    def test_enabled_needs_key(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):
             self.assertFalse(lava_pay.enabled())
         with mock.patch.dict("os.environ", {"LAVA_API_KEY": "k"}, clear=True):
-            self.assertFalse(lava_pay.enabled())
-        with mock.patch.dict("os.environ", {"LAVA_API_KEY": "k", "LAVA_OFFER_3M": "x"}, clear=True):
             self.assertTrue(lava_pay.enabled())
+            self.assertEqual(lava_pay.available_plans(), [])
+        with mock.patch.dict("os.environ", {"LAVA_API_KEY": "k", "LAVA_OFFER_3M": "x"}, clear=True):
             self.assertEqual(lava_pay.available_plans(), ["3m"])
+
+    def test_pick_offers_by_period(self) -> None:
+        items = [
+            {"type": "PRODUCT", "data": {"title": "Спейс 1 мес", "offers": [{
+                "id": "aaa", "prices": [
+                    {"amount": 590, "currency": "RUB", "periodicity": "MONTHLY"},
+                    {"amount": 7, "currency": "USD", "periodicity": "MONTHLY"},
+                ]}]}},
+            {"type": "PRODUCT", "data": {"title": "Спейс 3 мес", "offers": [{
+                "id": "bbb", "prices": [{"amount": 1490, "currency": "RUB", "periodicity": "PERIOD_90_DAYS"}]}]}},
+            {"type": "PRODUCT", "data": {"title": "Старая", "offers": [{
+                "id": "old", "prices": [{"amount": 990, "currency": "RUB", "periodicity": "MONTHLY"}]}]}},
+        ]
+        found = lava_pay.pick_offers(items)
+        self.assertEqual(found["1m"]["id"], "aaa")  # 590 wins over 990
+        self.assertTrue(found["1m"]["usd"])
+        self.assertEqual(found["3m"]["id"], "bbb")
+        self.assertFalse(found["3m"]["usd"])
+        lava_pay._found = found
+        with mock.patch.dict("os.environ", {"LAVA_API_KEY": "k"}, clear=True):
+            self.assertEqual(lava_pay.available_plans(), ["1m", "3m"])
+            self.assertEqual(lava_pay.offer_id("3m"), "bbb")
+            self.assertEqual(lava_pay.plan_rub("3m"), 1490)
+            self.assertFalse(lava_pay.plan_has_usd("3m"))
+
+    def test_contract_confirms(self) -> None:
+        paid = lava_pay.parse_event(FIRST)
+        self.assertTrue(lava_pay.contract_confirms(paid, {"status": "COMPLETED"}))
+        self.assertFalse(lava_pay.contract_confirms(paid, {"status": "NEW"}))
+        self.assertFalse(lava_pay.contract_confirms(paid, None))
+        self.assertTrue(lava_pay.contract_confirms(lava_pay.parse_event(CANCEL), {"status": "COMPLETED"}))
 
     def test_invoice_body(self) -> None:
         with mock.patch.dict("os.environ", ENV, clear=True):
@@ -259,7 +296,7 @@ def _apply_ns(store: _Store) -> dict:
         "InlineKeyboardButton": lambda *a, **k: (a, k),
         "log": __import__("logging").getLogger("t"),
     }
-    return _main_functions({"_lava_apply_event", "_lava_end_text"}, ns)
+    return _main_functions({"_lava_apply_event", "_lava_end_text", "_lava_user_from_profiles"}, ns)
 
 
 class LavaApplyTests(unittest.TestCase):
@@ -296,3 +333,24 @@ class LavaApplyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LavaProfileTagTests(unittest.TestCase):
+    def test_tag_roundtrip(self) -> None:
+        tag = lava_pay.profile_tag("3m", "root-1", "a@b.co")
+        self.assertEqual(lava_pay.parse_profile_tag(tag), {"plan": "3m", "root": "root-1", "email": "a@b.co"})
+        self.assertIsNone(lava_pay.parse_profile_tag("subscription_4weeks"))
+
+    def test_plan_from_amount(self) -> None:
+        self.assertEqual(lava_pay.plan_from_amount(590, "RUB"), "1m")
+        self.assertEqual(lava_pay.plan_from_amount(1490, "RUB"), "3m")
+
+    def test_renewal_found_by_profile_tag_without_table(self) -> None:
+        tag = lava_pay.profile_tag("3m", FIRST["contractId"], "anna@mail.ru")
+        store = _Store({"is_premium": True, "subscription_end": "2026-12-14", "plan": tag}, {})
+        ns = _apply_ns(store)
+        ns["user_profiles"]["77"] = dict(store.profile)
+        bot = _Bot()
+        self.assertTrue(asyncio.run(ns["_lava_apply_event"](bot, lava_pay.parse_event(RENEW))))
+        self.assertEqual(store.profile["subscription_end"], "2027-03-14")  # 3 months + grace
+        self.assertTrue(store.profile["plan"].startswith("lava_3m|" + FIRST["contractId"]))

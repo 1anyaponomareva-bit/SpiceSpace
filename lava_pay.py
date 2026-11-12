@@ -63,18 +63,131 @@ def api_key() -> str:
     return os.getenv("LAVA_API_KEY", "").strip()
 
 
+# Offers found in the lava account by period: plan -> {"id", "rub", "usd"}.
+_found: dict[str, dict] = {}
+
+
 def offer_id(plan: str) -> str:
     spec = PLANS.get(plan)
-    return os.getenv(spec["env"], "").strip() if spec else ""
+    if not spec:
+        return ""
+    return os.getenv(spec["env"], "").strip() or str((_found.get(plan) or {}).get("id") or "")
+
+
+def plan_rub(plan: str) -> object:
+    """RUB price shown on the button: the one set in lava when known."""
+    return (_found.get(plan) or {}).get("rub") or PLANS[plan]["rub"]
+
+
+def plan_has_usd(plan: str) -> bool:
+    info = _found.get(plan)
+    return True if info is None else bool(info.get("usd"))
 
 
 def enabled() -> bool:
-    """Checkout is shown only when the key and at least one offer are configured."""
-    return bool(api_key()) and any(offer_id(p) for p in PLANS)
+    """Checkout is on once the API key is set; offers are looked up in the lava account."""
+    return bool(api_key())
 
 
 def available_plans() -> list[str]:
     return [p for p in PLANS if offer_id(p)]
+
+
+_PLAN_BY_PERIOD = {spec["periodicity"]: plan for plan, spec in PLANS.items()}
+
+
+def pick_offers(products: list[dict]) -> dict[str, dict]:
+    """Choose one offer per plan from /api/v2/products items, by subscription period.
+
+    When several offers share a period, the one whose RUB price equals ours wins.
+    """
+    found: dict[str, dict] = {}
+    for item in products or []:
+        data = item.get("data") if isinstance(item, dict) and "data" in item else item
+        if not isinstance(data, dict):
+            continue
+        for offer in data.get("offers") or []:
+            if not isinstance(offer, dict) or not offer.get("id"):
+                continue
+            prices = [p for p in (offer.get("prices") or []) if isinstance(p, dict)]
+            for price in prices:
+                plan = _PLAN_BY_PERIOD.get(str(price.get("periodicity") or ""))
+                if not plan or price.get("currency") != "RUB":
+                    continue
+                usd = any(
+                    p.get("currency") in ("USD", "EUR") and p.get("periodicity") == price.get("periodicity")
+                    for p in prices
+                )
+                cand = {
+                    "id": str(offer["id"]),
+                    "rub": price.get("amount"),
+                    "usd": usd,
+                    "title": str(data.get("title") or ""),
+                    "name": str(offer.get("name") or ""),
+                }
+                prev = found.get(plan)
+                exact = price.get("amount") == PLANS[plan]["rub"]
+                if prev is None or (exact and prev.get("rub") != PLANS[plan]["rub"]):
+                    found[plan] = cand
+    return found
+
+
+async def load_offers(force: bool = False) -> dict[str, dict]:
+    """Fetch subscription offers from the lava account once (or again with force)."""
+    global _found
+    if _found and not force:
+        return _found
+    key = api_key()
+    if not key:
+        return {}
+    items: list[dict] = []
+    url = f"{LAVA_BASE_URL}/api/v2/products"
+    params: dict | None = {"productTypes": "SUBSCRIPTION", "showAllSubscriptionPeriods": "true"}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for _ in range(10):
+            r = await client.get(url, params=params, headers={"X-Api-Key": key, "Accept": "application/json"})
+            if r.status_code >= 400:
+                raise LavaError(r.status_code, r.text[:300])
+            data = r.json()
+            items.extend(data.get("items") or [])
+            nxt = data.get("nextPage")
+            if not nxt:
+                break
+            url, params = str(nxt), None
+    _found = pick_offers(items)
+    log.info("lava offers: %s", {p: (v["id"], v["rub"], v["usd"]) for p, v in _found.items()})
+    return _found
+
+
+async def get_contract(contract_id: str) -> dict | None:
+    """The contract as lava sees it (used to check a webhook is real). None if not found."""
+    key = api_key()
+    if not key or not re.fullmatch(r"[0-9a-fA-F\-]{8,64}", contract_id or ""):
+        return None
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.get(
+            f"{LAVA_BASE_URL}/api/v2/invoices/{contract_id}",
+            headers={"X-Api-Key": key, "Accept": "application/json"},
+        )
+    if r.status_code == 404:
+        return None
+    if r.status_code >= 400:
+        raise LavaError(r.status_code, r.text[:300])
+    data = r.json()
+    return data if isinstance(data, dict) else None
+
+
+def webhook_secret_set() -> bool:
+    return bool(os.getenv("LAVA_WEBHOOK_KEY", "").strip())
+
+
+def contract_confirms(event: dict, contract: dict | None) -> bool:
+    """A webhook without the shared secret is trusted only if lava's own record agrees."""
+    if not contract:
+        return False
+    if event["kind"] in ("paid", "renewed"):
+        return str(contract.get("status") or "").upper() == "COMPLETED"
+    return True
 
 
 def valid_email(text: str) -> bool:
@@ -341,3 +454,37 @@ def paid_until(plan: str, paid_on: str, current_end: str, today: date) -> str:
     if cur and cur > new_end:
         new_end = cur
     return new_end.isoformat()
+
+
+# ---------------------------------------------------------------- profile tag
+# The profile's `plan` column keeps "lava_<plan>|<first contract id>|<email>", so a
+# renewal finds its user and the email is known even without the lava_payments table.
+
+
+def profile_tag(plan: str, root_contract: str, email: str) -> str:
+    return f"lava_{plan}|{root_contract}|{email}"
+
+
+def parse_profile_tag(value: object) -> dict | None:
+    raw = str(value or "")
+    if not raw.startswith("lava_"):
+        return None
+    parts = raw.split("|")
+    plan = parts[0][len("lava_"):]
+    return {
+        "plan": plan if plan in PLANS else "1m",
+        "root": parts[1] if len(parts) > 1 else "",
+        "email": parts[2].lower() if len(parts) > 2 else "",
+    }
+
+
+def plan_from_amount(amount: object, currency: str) -> str:
+    """Best guess of the plan when no stored contract says it (3-month costs far more)."""
+    try:
+        value = float(amount)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "1m"
+    if currency == "RUB":
+        one = float(plan_rub("1m") or PLANS["1m"]["rub"])
+        return "3m" if value > one * 1.5 else "1m"
+    return "1m"
