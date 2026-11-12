@@ -544,7 +544,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "Неизвестный тариф. Выбери план в мини-приложении."
     ),
     "trial_expired_offer": (
-        "{name}, 3 бесплатных дня прошли 🌙\n\n"
+        "{name}, 4 бесплатных дня прошли 🌙\n\n"
         "Утренние и вечерние сообщения на паузе. "
         "Оформи подписку — и продолжим."
     ),
@@ -774,7 +774,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "Unknown plan. Pick a plan in the mini app."
     ),
     "trial_expired_offer": (
-        "{name}, your 3 free days are up 🌙\n\n"
+        "{name}, your 4 free days are up 🌙\n\n"
         "Morning and evening messages are paused. "
         "Subscribe to keep going."
     ),

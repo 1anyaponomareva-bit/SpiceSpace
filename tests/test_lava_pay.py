@@ -88,7 +88,7 @@ class LavaPayTests(unittest.TestCase):
         self.assertEqual(lava_pay.normalize_promo("скидка"), "")
 
     def test_format_amount(self) -> None:
-        self.assertEqual(lava_pay.format_amount(490, "RUB"), "490 ₽")
+        self.assertEqual(lava_pay.format_amount(590, "RUB"), "590 ₽")
         self.assertEqual(lava_pay.format_amount(5.5, "USD"), "$5.50")
 
     def test_parse_events(self) -> None:

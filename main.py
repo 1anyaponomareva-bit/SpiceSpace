@@ -126,7 +126,7 @@ DATA_DIR = Path(__file__).resolve().parent
 WEBAPP_DIR = DATA_DIR / "webapp"
 load_dotenv(DATA_DIR / ".env")
 ADMIN_TELEGRAM_ID = 8412438788
-TRIAL_DAYS = 3
+TRIAL_DAYS = 4
 SUBSCRIPTIONS_ENABLED = False
 
 SUBSCRIPTION_PLANS = {
@@ -3448,7 +3448,7 @@ async def _maybe_send_trial_day3_subscription_message(
         return
     if _profile_is_premium_active(profile, today):
         return
-    if _trial_day(profile, today) != 3:
+    if _trial_day(profile, today) != TRIAL_DAYS:  # evening of the last free day
         return
     start_raw = _trial_start_raw(profile)
     if not start_raw:
@@ -3484,7 +3484,7 @@ async def _run_trial_expiry_offer(
         return
     if _profile_is_premium_active(profile, today):
         return
-    if _trial_day(profile, today) != 4:
+    if _trial_day(profile, today) != TRIAL_DAYS + 1:  # first day after the trial
         return
     start_raw = _trial_start_raw(profile)
     if not start_raw:
