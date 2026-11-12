@@ -27,3 +27,6 @@ claude_usage.jsonl
 
 # Test-bot dialog text log (LOG_DIALOG_TEXT=1). Contains what users write.
 dialog.log
+
+# lava.top payments fallback store (Supabase table lava_payments in prod).
+lava_payments.json

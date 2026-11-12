@@ -1432,3 +1432,95 @@ def save_claude_usage(row: dict) -> None:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception as e:
         log.warning("save_claude_usage failed: %s", e)
+
+
+# ---------------------------------------------------------------- lava.top payments
+# One row per lava contract (first payment and each renewal). Table `lava_payments`
+# (supabase/migrations/20261112_lava_payments.sql); local file without Supabase or
+# when the table is missing, so a payment is never lost silently.
+LAVA_PAYMENTS_PATH = DATA_DIR / "lava_payments.json"
+_LAVA_FIELDS = (
+    "contract_id", "parent_contract_id", "telegram_id", "email", "plan",
+    "currency", "amount", "status", "paid_until",
+)
+
+
+def _lava_local() -> dict:
+    raw = _load_json(LAVA_PAYMENTS_PATH, {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def lava_save_payment(row: dict) -> None:
+    """Insert or update a contract row (merged by contract_id)."""
+    cid = str(row.get("contract_id") or "").strip()
+    if not cid:
+        return
+    record = {k: row.get(k) for k in _LAVA_FIELDS if row.get(k) not in (None, "")}
+    record["contract_id"] = cid
+    if "telegram_id" in record:
+        try:
+            record["telegram_id"] = int(record["telegram_id"])
+        except (TypeError, ValueError):
+            record.pop("telegram_id")
+    record["updated_at"] = datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds")
+    saved = False
+    if _use_supabase:
+        res = _request(
+            "POST",
+            "lava_payments?on_conflict=contract_id",
+            json=record,
+            headers={**_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+        )
+        saved = res is not None
+        if not saved:
+            log.error("lava_save_payment: Supabase write failed contract=%s", cid)
+    if not saved:
+        store = _lava_local()
+        merged = dict(store.get(cid) or {})
+        merged.update(record)
+        store[cid] = merged
+        _save_json(LAVA_PAYMENTS_PATH, store)
+
+
+def _lava_rows(query: str, local_filter) -> list[dict]:
+    rows: list[dict] = []
+    if _use_supabase:
+        got = _request("GET", f"lava_payments?{query}&order=updated_at.desc&limit=20")
+        if got:
+            rows = [r for r in got if isinstance(r, dict)]
+    if not rows:
+        local = [r for r in _lava_local().values() if isinstance(r, dict) and local_filter(r)]
+        rows = sorted(local, key=lambda r: str(r.get("updated_at") or ""), reverse=True)
+    return rows
+
+
+def lava_find_contract(contract_id: str) -> dict | None:
+    cid = str(contract_id or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F\-]{8,64}", cid):
+        return None
+    rows = _lava_rows(f"contract_id=eq.{cid}", lambda r: r.get("contract_id") == cid)
+    return rows[0] if rows else None
+
+
+def lava_latest_for_user(telegram_id: int | str) -> dict | None:
+    key = str(telegram_id)
+    if not key.lstrip("-").isdigit():
+        return None
+    rows = _lava_rows(
+        f"telegram_id=eq.{key}", lambda r: str(r.get("telegram_id")) == key
+    )
+    return rows[0] if rows else None
+
+
+def lava_latest_for_email(email: str) -> dict | None:
+    mail = str(email or "").strip().lower()
+    if not mail or "," in mail or "&" in mail:
+        return None
+    from urllib.parse import quote
+
+    rows = _lava_rows(
+        f"email=eq.{quote(mail, safe='@.')}",
+        lambda r: str(r.get("email") or "").lower() == mail,
+    )
+    rows = [r for r in rows if r.get("telegram_id")]
+    return rows[0] if rows else None

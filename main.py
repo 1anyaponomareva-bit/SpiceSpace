@@ -37,6 +37,7 @@ import anthropic
 import uvicorn
 
 import db as db_store
+import lava_pay
 import onboarding_flow as ob
 import safety
 import memory_context
@@ -3531,6 +3532,10 @@ async def handle_open_subscription_callback(
         await query.edit_message_reply_markup(reply_markup=None)
     except Exception:
         pass
+    if lava_pay.enabled():
+        prof = user_profiles.get(str(cid)) or db_store.get_profile(cid) or {}
+        await _lava_send_start(context.bot, cid, prof if isinstance(prof, dict) else {})
+        return
     if not SUBSCRIPTIONS_ENABLED:
         return
     try:
@@ -3545,6 +3550,12 @@ def _subscription_miniapp_url(cid: int, lang: str) -> str:
 
 
 def _subscription_offer_keyboard(cid: int, lang: str) -> InlineKeyboardMarkup:
+    if lava_pay.enabled():
+        return InlineKeyboardMarkup(
+            [[InlineKeyboardButton(
+                ob.ob_text("subscription_subscribe_btn", lang), callback_data="lava:start"
+            )]]
+        )
     return InlineKeyboardMarkup(
         [
             [
@@ -3719,6 +3730,290 @@ async def successful_payment_handler(
     )
 
 
+# ---------------------------------------------------------------- lava.top checkout
+
+
+def _lava_plan_keyboard(lang: str) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(
+            lava_pay.t(lang, "plan_btn", label=lava_pay.plan_label(p, lang), rub=lava_pay.PLANS[p]["rub"]),
+            callback_data=f"lava:plan:{p}",
+        )]
+        for p in lava_pay.available_plans()
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def _lava_method_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(lava_pay.t(lang, "method_ru_btn"), callback_data="lava:method:ru")],
+        [InlineKeyboardButton(lava_pay.t(lang, "method_intl_btn"), callback_data="lava:method:intl")],
+        [InlineKeyboardButton(lava_pay.t(lang, "change_btn"), callback_data="lava:start")],
+    ])
+
+
+async def _lava_send_start(bot, cid: int, profile: dict) -> None:
+    lang = ui_lang(profile)
+    if not lava_pay.enabled():
+        await bot.send_message(chat_id=cid, text=lava_pay.t(lang, "unavailable"))
+        return
+    prev = lava_pay.checkout.get(cid) or {}
+    lava_pay.checkout[cid] = {"step": "", "email": prev.get("email", "")}
+    await bot.send_message(
+        chat_id=cid,
+        text=lava_pay.t(lang, "choose_plan"),
+        reply_markup=_lava_plan_keyboard(lang),
+    )
+
+
+async def _lava_show_summary(bot, cid: int, profile: dict) -> None:
+    """Create the lava invoice and show the summary with the payment link."""
+    lang = ui_lang(profile)
+    co = lava_pay.checkout.get(cid) or {}
+    plan, method, email = co.get("plan"), co.get("method"), co.get("email")
+    if plan not in lava_pay.PLANS or method not in lava_pay.METHODS or not email:
+        await _lava_send_start(bot, cid, profile)
+        return
+    promo = str(co.get("promo") or "")
+    body = lava_pay.invoice_body(
+        cid=cid, plan=plan, method=method, email=email, lang=lang, promo=promo
+    )
+    try:
+        inv = await lava_pay.create_invoice(body)
+    except lava_pay.LavaError as e:
+        log.warning(
+            "lava invoice failed cid=%s plan=%s method=%s promo=%s: %s",
+            cid, plan, method, bool(promo), e,
+        )
+        if promo and e.status in (400, 404, 409, 422):
+            co["promo"] = ""
+            co["step"] = "promo"
+            await bot.send_message(
+                chat_id=cid,
+                text=lava_pay.t(lang, "bad_promo"),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                    lava_pay.t(lang, "no_promo_btn"), callback_data="lava:nopromo"
+                )]]),
+            )
+            return
+        co["step"] = ""
+        await bot.send_message(chat_id=cid, text=lava_pay.t(lang, "error"))
+        return
+    except Exception as e:
+        log.exception("lava invoice error cid=%s: %s", cid, e)
+        co["step"] = ""
+        await bot.send_message(chat_id=cid, text=lava_pay.t(lang, "error"))
+        return
+
+    db_store.lava_save_payment({
+        "contract_id": inv.contract_id,
+        "telegram_id": cid,
+        "email": email,
+        "plan": plan,
+        "currency": inv.currency,
+        "amount": inv.amount,
+        "status": "new",
+    })
+    co["step"] = ""
+    text = lava_pay.t(
+        lang,
+        "summary",
+        plan=lava_pay.plan_label(plan, lang),
+        method=lava_pay.method_label(method, lang),
+        amount=lava_pay.format_amount(inv.amount, inv.currency),
+        promo_line=lava_pay.t(lang, "promo_line", promo=promo) if promo else "",
+    )
+    rows = [[InlineKeyboardButton(lava_pay.t(lang, "pay_btn"), url=inv.payment_url)]]
+    if not promo:
+        rows.append([InlineKeyboardButton(lava_pay.t(lang, "promo_btn"), callback_data="lava:promo")])
+    rows.append([InlineKeyboardButton(lava_pay.t(lang, "change_btn"), callback_data="lava:start")])
+    await bot.send_message(chat_id=cid, text=text, reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def handle_lava_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data or not query.message:
+        return
+    await query.answer()
+    cid = query.message.chat_id
+    prof = user_profiles.get(str(cid)) or db_store.get_profile(cid) or {}
+    if not isinstance(prof, dict):
+        prof = {}
+    lang = ui_lang(prof)
+    parts = query.data.split(":")
+    action = parts[1] if len(parts) > 1 else ""
+    arg = parts[2] if len(parts) > 2 else ""
+    with suppress(Exception):
+        await query.edit_message_reply_markup(reply_markup=None)
+
+    if action == "start" or not lava_pay.enabled():
+        await _lava_send_start(context.bot, cid, prof)
+        return
+    co = lava_pay.checkout.get(cid)
+    if co is None:
+        await _lava_send_start(context.bot, cid, prof)
+        return
+    if action == "plan" and arg in lava_pay.available_plans():
+        co["plan"] = arg
+        await context.bot.send_message(
+            chat_id=cid,
+            text=lava_pay.t(lang, "choose_method"),
+            reply_markup=_lava_method_keyboard(lang),
+        )
+        return
+    if action == "method" and arg in lava_pay.METHODS:
+        co["method"] = arg
+        if not co.get("email"):
+            known = db_store.lava_latest_for_user(cid) or {}
+            co["email"] = str(known.get("email") or "")
+        if co.get("email"):
+            async with typing_while(context.bot, cid):
+                await _lava_show_summary(context.bot, cid, prof)
+        else:
+            co["step"] = "email"
+            await context.bot.send_message(chat_id=cid, text=lava_pay.t(lang, "ask_email"))
+        return
+    if action == "promo":
+        co["step"] = "promo"
+        await context.bot.send_message(chat_id=cid, text=lava_pay.t(lang, "ask_promo"))
+        return
+    if action == "nopromo":
+        co["promo"] = ""
+        async with typing_while(context.bot, cid):
+            await _lava_show_summary(context.bot, cid, prof)
+        return
+    await _lava_send_start(context.bot, cid, prof)
+
+
+async def _lava_handle_text(update: Update, cid: int, raw: str, profile) -> bool:
+    """Email / promo code typed during checkout. False lets the message go to the chat."""
+    co = lava_pay.checkout.get(cid)
+    if not co or not co.get("step") or not update.message:
+        return False
+    prof = profile if isinstance(profile, dict) else {}
+    lang = ui_lang(prof)
+    text = raw.strip()
+    one_word = len(text.split()) == 1
+    bot = update.get_bot()
+    if co["step"] == "email":
+        if lava_pay.valid_email(text):
+            co["email"] = text.lower()
+            async with typing_while(bot, cid):
+                await _lava_show_summary(bot, cid, prof)
+            return True
+        if one_word and "@" in text:
+            await update.message.reply_text(lava_pay.t(lang, "bad_email"))
+            return True
+        co["step"] = ""
+        return False
+    if co["step"] == "promo":
+        code = lava_pay.normalize_promo(text)
+        if code and one_word:
+            co["promo"] = code
+            async with typing_while(bot, cid):
+                await _lava_show_summary(bot, cid, prof)
+            return True
+        co["step"] = ""
+        return False
+    return False
+
+
+async def cmd_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat:
+        return
+    cid = update.effective_chat.id
+    prof = user_profiles.get(str(cid)) or db_store.get_profile(cid) or {}
+    await _lava_send_start(context.bot, cid, prof if isinstance(prof, dict) else {})
+
+
+def _lava_end_text(end_iso: str, lang: str) -> str:
+    try:
+        d = date.fromisoformat(str(end_iso)[:10])
+    except ValueError:
+        return str(end_iso)
+    return d.strftime("%d.%m.%Y") if lang.lower().startswith("ru") else d.strftime("%b %d, %Y")
+
+
+async def _lava_apply_event(bot, ev: dict) -> bool:
+    """Apply a parsed lava webhook. False when the user could not be found."""
+    row = db_store.lava_find_contract(ev["contract_id"]) if ev["contract_id"] else None
+    parent = db_store.lava_find_contract(ev["parent_id"]) if ev["parent_id"] else None
+    tid = (
+        (row or {}).get("telegram_id")
+        or (parent or {}).get("telegram_id")
+        or ev["telegram_id"]
+        or (db_store.lava_latest_for_email(ev["email"]) or {}).get("telegram_id")
+    )
+    if not tid:
+        log.warning(
+            "lava webhook: user not found event=%s contract=%s", ev["event"], ev["contract_id"]
+        )
+        return False
+    cid = int(tid)
+    plan = str((row or {}).get("plan") or (parent or {}).get("plan") or "1m")
+    if plan not in lava_pay.PLANS:
+        plan = "1m"
+    try:
+        prof = db_store.get_profile(cid) or user_profiles.get(str(cid)) or {}
+    except db_store.ProfileReadError:
+        raise HTTPException(status_code=503, detail="profile read failed")
+    lang = ui_lang(prof)
+    base_row = {
+        "contract_id": ev["contract_id"],
+        "parent_contract_id": ev["parent_id"],
+        "telegram_id": cid,
+        "email": ev["email"],
+        "plan": plan,
+        "currency": ev["currency"],
+        "amount": ev["amount"],
+        "status": ev["event"],
+    }
+    kind = ev["kind"]
+    if kind in ("paid", "renewed"):
+        today = _profile_local_date(prof) if prof else date.today()
+        cur_end = str(prof.get("subscription_end") or "")[:10]
+        end = lava_pay.paid_until(plan, ev["timestamp"], cur_end, today)
+        repeat = cur_end == end and _profile_truthy(prof.get("is_premium"))
+        updated = db_store.update_profile(
+            cid, {"is_premium": True, "subscription_end": end, "plan": f"lava_{plan}"}
+        )
+        if updated is None:
+            raise HTTPException(status_code=503, detail="profile write failed")
+        user_profiles[str(cid)] = updated
+        subscribers.add(cid)
+        db_store.save_subscriber(cid, True)
+        db_store.lava_save_payment({**base_row, "paid_until": end})
+        log.info("lava %s cid=%s plan=%s until=%s", kind, cid, plan, end)
+        if not repeat:
+            await bot.send_message(
+                chat_id=cid,
+                text=lava_pay.t(lang, kind, end=_lava_end_text(end, lang)),
+                reply_markup=_webapp_keyboard(cid, _user_lang(prof)),
+            )
+        return True
+    db_store.lava_save_payment(base_row)
+    end = str(prof.get("subscription_end") or "")[:10]
+    if kind == "failed":
+        await bot.send_message(
+            chat_id=cid,
+            text=lava_pay.t(lang, "failed"),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                lava_pay.t(lang, "retry_btn"), callback_data="lava:start"
+            )]]),
+        )
+    elif kind == "renew_failed" and end:
+        await bot.send_message(
+            chat_id=cid, text=lava_pay.t(lang, "renew_failed", end=_lava_end_text(end, lang))
+        )
+    elif kind == "cancelled":
+        until = (ev["will_expire"] or end)[:10]
+        if until:
+            await bot.send_message(
+                chat_id=cid, text=lava_pay.t(lang, "cancelled", end=_lava_end_text(until, lang))
+            )
+    log.info("lava %s cid=%s contract=%s", ev["event"], cid, ev["contract_id"])
+    return True
+
 async def _run_subscription_maintenance(
     bot,
     cid: int,
@@ -3745,20 +4040,22 @@ async def _run_subscription_maintenance(
                 user_profiles[str(cid)] = profile
                 if not db_store.cycle_flag_sent(profile, f"sub_expired_{end_raw}"):
                     renew_url = _subscription_miniapp_url(cid, lang)
+                    renew_btn = (
+                        InlineKeyboardButton(
+                            ob.ob_text("subscription_renew_btn", lang),
+                            callback_data="lava:start",
+                        )
+                        if lava_pay.enabled()
+                        else InlineKeyboardButton(
+                            ob.ob_text("subscription_renew_btn", lang),
+                            web_app=WebAppInfo(url=renew_url),
+                        )
+                    )
                     try:
                         await bot.send_message(
                             chat_id=cid,
                             text=ob.ob_text("subscription_expired", lang, name=name),
-                            reply_markup=InlineKeyboardMarkup(
-                                [
-                                    [
-                                        InlineKeyboardButton(
-                                            ob.ob_text("subscription_renew_btn", lang),
-                                            web_app=WebAppInfo(url=renew_url),
-                                        )
-                                    ]
-                                ]
-                            ),
+                            reply_markup=InlineKeyboardMarkup([[renew_btn]]),
                         )
                         updated = db_store.mark_cycle_flag(cid, f"sub_expired_{end_raw}")
                         if isinstance(updated, dict):
@@ -6193,6 +6490,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _handle_crisis_message(update, cid, raw, prof_early)
         return
 
+    if await _lava_handle_text(update, cid, raw, prof_early):
+        return
+
     st_ob = onboarding.get(cid)
     if (
         isinstance(prof_early, dict)
@@ -8288,6 +8588,7 @@ def _register_telegram_handlers(app_: Application) -> None:
     app_.add_handler(CommandHandler("weektest", cmd_weektest))
     app_.add_handler(CommandHandler("sendmorning", cmd_sendmorning))
     app_.add_handler(CommandHandler("admin", cmd_admin))
+    app_.add_handler(CommandHandler("subscribe", cmd_subscribe))
     app_.add_handler(MessageHandler(filters.VOICE, on_voice))
     app_.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app_.add_handler(
@@ -8307,6 +8608,9 @@ def _register_telegram_handlers(app_: Application) -> None:
             handle_open_subscription_callback,
             pattern=r"^open_subscription$",
         )
+    )
+    app_.add_handler(
+        CallbackQueryHandler(handle_lava_callback, pattern=r"^lava:")
     )
     app_.add_handler(
         CallbackQueryHandler(
@@ -9083,6 +9387,14 @@ async def subscribe_endpoint(
     body: SubscribePayload | None = Body(default=None),
 ) -> dict:
     tid = _auth_telegram_id(request, telegram_id)
+    if lava_pay.enabled():
+        if not telegram_app or not telegram_app.bot:
+            raise HTTPException(status_code=503, detail="bot unavailable")
+        prof = _resolve_user_profile(tid)
+        await _lava_send_start(
+            telegram_app.bot, int(tid), prof if isinstance(prof, dict) else {}
+        )
+        return {"ok": True, "chat": True}
     if not SUBSCRIPTIONS_ENABLED:
         raise HTTPException(status_code=503, detail="subscriptions disabled")
     plan = (body.plan if body else "4weeks").strip()
@@ -9096,6 +9408,33 @@ async def subscribe_endpoint(
         log.exception("subscribe invoice failed tid=%s plan=%s: %s", tid, plan, e)
         raise HTTPException(status_code=500, detail="invoice failed") from e
     return {"ok": True}
+
+
+@app.post("/api/lava/webhook")
+async def lava_webhook(request: Request) -> dict:
+    """lava.top payment events. Authenticated by the secret set in the lava cabinet."""
+    if not lava_pay.webhook_authorized(dict(request.headers)):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="bad json")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="bad body")
+    ev = lava_pay.parse_event(body)
+    if ev["kind"] == "other":
+        log.info("lava webhook ignored event=%s status=%s", ev["event"], body.get("status"))
+        return {"ok": True}
+    if not telegram_app or not telegram_app.bot:
+        raise HTTPException(status_code=503, detail="bot unavailable")
+    try:
+        found = await _lava_apply_event(telegram_app.bot, ev)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("lava webhook failed event=%s: %s", ev["event"], e)
+        raise HTTPException(status_code=500, detail="failed") from e
+    return {"ok": True, "matched": found}
 
 
 class TimezonePayload(BaseModel):
