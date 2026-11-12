@@ -136,32 +136,26 @@
 
   <div class="screen" id="screen-subscription" hidden>
     <div class="screen-inner subscription-screen">
-      <p class="subscription-payment-title">Оплата через Telegram Stars ⭐️</p>
       <header class="subscription-header">
         <div class="sub-status" id="sub-status">Подписка не активна</div>
         <div class="sub-days" id="sub-days"></div>
       </header>
 
       <div class="plans" id="subscription-plans">
-        <div class="plan-card" data-plan="4weeks" role="button" tabindex="0">
-          <div class="plan-name" data-i18n="sub_plan_4w">4 недели</div>
-          <div class="plan-price">500 ⭐️ Stars</div>
-          <div class="plan-note" data-i18n="sub_plan_4w_note">~$9.99</div>
+        <div class="plan-card">
+          <div class="plan-name" data-i18n="sub_plan_1m">1 месяц</div>
+          <div class="plan-price" id="sub-price-1m">590 ₽</div>
         </div>
-        <div class="plan-card popular" data-plan="12weeks" role="button" tabindex="0">
-          <div class="plan-badge" data-i18n="sub_popular">Популярный</div>
-          <div class="plan-name" data-i18n="sub_plan_12w">12 недель</div>
-          <div class="plan-price">1 200 ⭐️ Stars</div>
-          <div class="plan-note" data-i18n="sub_plan_12w_note">~$23.99</div>
-        </div>
-        <div class="plan-card" data-plan="24weeks" role="button" tabindex="0">
-          <div class="plan-name" data-i18n="sub_plan_24w">24 недели</div>
-          <div class="plan-price">2 000 ⭐️ Stars</div>
-          <div class="plan-note" data-i18n="sub_plan_24w_note">~$39.98</div>
+        <div class="plan-card popular">
+          <div class="plan-badge" data-i18n="sub_popular">Выгоднее</div>
+          <div class="plan-name" data-i18n="sub_plan_3m">3 месяца</div>
+          <div class="plan-price" id="sub-price-3m">1490 ₽</div>
         </div>
       </div>
 
-      <p class="subscription-stars-tip">Stars можно купить прямо в Telegram.<br>100 Stars ≈ $2</p>
+      <button type="button" class="primary-btn" id="sub-subscribe" data-i18n="sub_subscribe_btn">💳 Оформить подписку</button>
+      <p class="sub-note" id="sub-note" data-i18n="sub_note">Оформление продолжится в чате со Спейс. Продлевается автоматически, отменить можно в любой момент.</p>
+      <button type="button" class="settings-btn danger sub-cancel" id="sub-cancel" data-i18n="sub_cancel_btn" hidden>Отменить автопродление</button>
 
       <button type="button" class="back-btn" id="sub-back">← Назад</button>
     </div>

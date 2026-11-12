@@ -1189,3 +1189,27 @@ body.tg-app { background: var(--bg); }
 
 /* Half-filled day: exact halves (the transparent border used to repeat the gradient on the left edge). */
 .day-dot.partial, .legend-dot--partial { background-origin: border-box; background-repeat: no-repeat; }
+
+/* Subscription screen (lava checkout continues in the chat). */
+.primary-btn {
+  width: 100%;
+  background: var(--dark);
+  color: #fff;
+  border: none;
+  border-radius: 16px;
+  padding: 16px;
+  font-family: 'Inter', sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.primary-btn:disabled { opacity: 0.55; cursor: wait; }
+.primary-btn[hidden], .sub-cancel[hidden], .plans[hidden], .sub-note[hidden] { display: none !important; }
+.sub-note {
+  margin: -8px 0 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #888;
+  text-align: center;
+}
+.sub-cancel { text-align: center; }

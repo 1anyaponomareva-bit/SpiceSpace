@@ -4014,7 +4014,16 @@ async def _lava_apply_event(bot, ev: dict) -> bool:
         )
     elif kind == "cancelled":
         until = (ev["will_expire"] or end)[:10]
-        if until:
+        tag = lava_pay.parse_profile_tag(prof.get("plan"))
+        already = bool(tag and tag.get("cancelled"))
+        if tag and not already:
+            updated = db_store.update_profile(
+                cid,
+                {"plan": lava_pay.profile_tag(tag["plan"], tag["root"], tag["email"], cancelled=True)},
+            )
+            if isinstance(updated, dict):
+                user_profiles[str(cid)] = updated
+        if until and not already:
             await bot.send_message(
                 chat_id=cid, text=lava_pay.t(lang, "cancelled", end=_lava_end_text(until, lang))
             )
@@ -8548,6 +8557,35 @@ def _apply_summary_snapshot(p: dict, summaries: list[dict]) -> None:
     p["level"] = _calculate_user_level(completed_count)
 
 
+def _subscription_info(profile: dict) -> dict:
+    """What the Mini App subscription screen shows."""
+    today = _profile_local_date(profile)
+    active = _profile_is_premium_active(profile, today)
+    tag = lava_pay.parse_profile_tag(profile.get("plan"))
+    info: dict = {
+        "available": lava_pay.enabled(),
+        "paywall": SUBSCRIPTIONS_ENABLED,
+        "active": active,
+        "until": str(profile.get("subscription_end") or "")[:10] if active else "",
+        "auto_renew": bool(active and tag and not tag.get("cancelled")),
+        "plan": tag["plan"] if tag else "",
+        "price_1m": lava_pay.format_amount(lava_pay.plan_rub("1m"), "RUB"),
+        "price_3m": lava_pay.format_amount(lava_pay.plan_rub("3m"), "RUB"),
+        "trial": False,
+        "trial_until": "",
+    }
+    if SUBSCRIPTIONS_ENABLED and not active and _profile_in_trial(profile, today):
+        start_raw = _trial_start_raw(profile)
+        if start_raw:
+            try:
+                last = date.fromisoformat(start_raw) + timedelta(days=TRIAL_DAYS - 1)
+                info["trial"] = True
+                info["trial_until"] = last.isoformat()
+            except ValueError:
+                pass
+    return info
+
+
 def _enrich_profile_for_api(
     profile: dict,
     telegram_id: str | None = None,
@@ -8582,6 +8620,10 @@ def _enrich_profile_for_api(
     p.setdefault("subscription_end", p.get("subscription_end") or "")
     p.setdefault("plan", p.get("plan") or "")
     p.setdefault("trial_start_date", p.get("trial_start_date") or "")
+    p["subscription"] = _subscription_info(profile)
+    tag = lava_pay.parse_profile_tag(p.get("plan"))
+    if tag:
+        p["plan"] = f"lava_{tag['plan']}"
 
     tid = telegram_id or str(p.get("telegram_id") or "")
     today = _profile_local_date(p)
@@ -9527,6 +9569,44 @@ async def lava_webhook(request: Request) -> dict:
         log.exception("lava webhook failed event=%s: %s", ev["event"], e)
         raise HTTPException(status_code=500, detail="failed") from e
     return {"ok": True, "matched": found}
+
+
+@app.post("/api/subscription/cancel")
+async def cancel_subscription_endpoint(
+    request: Request,
+    telegram_id: str | None = Query(default=None, min_length=1, max_length=32),
+) -> dict:
+    """Turn off auto-renewal; access stays until the paid end."""
+    tid = _auth_telegram_id(request, telegram_id)
+    profile = _resolve_user_profile(tid)
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=404, detail="profile not found")
+    tag = lava_pay.parse_profile_tag(profile.get("plan"))
+    if not tag or not tag.get("root") or not tag.get("email"):
+        raise HTTPException(status_code=400, detail="no lava subscription")
+    if not tag.get("cancelled"):
+        try:
+            await lava_pay.cancel_subscription(tag["root"], tag["email"])
+        except lava_pay.LavaError as e:
+            log.warning("lava cancel failed tid=%s: %s", tid, e)
+            raise HTTPException(status_code=502, detail="cancel failed") from e
+        updated = db_store.update_profile(
+            int(tid),
+            {"plan": lava_pay.profile_tag(tag["plan"], tag["root"], tag["email"], cancelled=True)},
+        )
+        if isinstance(updated, dict):
+            user_profiles[tid] = updated
+            profile = updated
+        end = str(profile.get("subscription_end") or "")[:10]
+        lang = ui_lang(profile)
+        if telegram_app and telegram_app.bot and end:
+            with suppress(Exception):
+                await telegram_app.bot.send_message(
+                    chat_id=int(tid),
+                    text=lava_pay.t(lang, "cancelled", end=_lava_end_text(end, lang)),
+                )
+        log.info("lava auto-renew cancelled from mini app tid=%s", tid)
+    return {"ok": True, "subscription": _subscription_info(profile)}
 
 
 class TimezonePayload(BaseModel):

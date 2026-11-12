@@ -461,8 +461,9 @@ def paid_until(plan: str, paid_on: str, current_end: str, today: date) -> str:
 # renewal finds its user and the email is known even without the lava_payments table.
 
 
-def profile_tag(plan: str, root_contract: str, email: str) -> str:
-    return f"lava_{plan}|{root_contract}|{email}"
+def profile_tag(plan: str, root_contract: str, email: str, cancelled: bool = False) -> str:
+    tag = f"lava_{plan}|{root_contract}|{email}"
+    return f"{tag}|cancelled" if cancelled else tag
 
 
 def parse_profile_tag(value: object) -> dict | None:
@@ -475,7 +476,25 @@ def parse_profile_tag(value: object) -> dict | None:
         "plan": plan if plan in PLANS else "1m",
         "root": parts[1] if len(parts) > 1 else "",
         "email": parts[2].lower() if len(parts) > 2 else "",
+        "cancelled": len(parts) > 3 and parts[3] == "cancelled",
     }
+
+
+async def cancel_subscription(root_contract: str, email: str) -> None:
+    """Stop auto-renewal in lava. Raises LavaError when lava refuses."""
+    key = api_key()
+    if not key:
+        raise LavaError(0, "LAVA_API_KEY is not set")
+    if not re.fullmatch(r"[0-9a-fA-F\-]{8,64}", root_contract or "") or not valid_email(email):
+        raise LavaError(0, "no subscription to cancel")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.delete(
+            f"{LAVA_BASE_URL}/api/v1/subscriptions",
+            params={"contractId": root_contract, "email": email},
+            headers={"X-Api-Key": key, "Accept": "application/json"},
+        )
+    if r.status_code >= 400:
+        raise LavaError(r.status_code, r.text[:300])
 
 
 def plan_from_amount(amount: object, currency: str) -> str:

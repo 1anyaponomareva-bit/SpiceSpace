@@ -258,7 +258,8 @@
   function applySubscriptionI18n() {
     document.querySelectorAll('#screen-subscription [data-i18n]').forEach((el) => {
       const key = el.getAttribute('data-i18n');
-      if (key) el.textContent = t(key);
+      const val = key ? t(key) : '';
+      if (val && val !== key) el.textContent = val;
     });
     const back = document.getElementById('sub-back');
     if (back) back.textContent = t('sub_back');
@@ -301,23 +302,93 @@
     const statusEl = document.getElementById('sub-status');
     const daysEl = document.getElementById('sub-days');
     const plansEl = document.getElementById('subscription-plans');
+    const subBtn = document.getElementById('sub-subscribe');
+    const noteEl = document.getElementById('sub-note');
+    const cancelBtn = document.getElementById('sub-cancel');
     if (!statusEl || !daysEl) return;
-    if (profilePremiumActive(prof)) {
-      const endLabel = formatSubDate(prof.subscription_end);
-      const end = parseISODate(prof.subscription_end);
+    const sub = prof?.subscription || {};
+    const p1 = document.getElementById('sub-price-1m');
+    const p3 = document.getElementById('sub-price-3m');
+    if (p1 && sub.price_1m) p1.textContent = sub.price_1m;
+    if (p3 && sub.price_3m) p3.textContent = sub.price_3m;
+    const active = sub.active ?? profilePremiumActive(prof);
+    const until = sub.until || prof?.subscription_end || '';
+    if (active && until) {
+      const end = parseISODate(until);
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       end.setHours(0, 0, 0, 0);
       const days = Math.ceil((end - today) / (1000 * 60 * 60 * 24));
-      statusEl.textContent = t('sub_active_until').replace('{date}', endLabel);
+      statusEl.textContent = t('sub_active_until').replace('{date}', formatSubDate(until));
       statusEl.classList.add('sub-status--active');
-      daysEl.textContent = formatSubDaysLeft(days, prof.subscription_end);
+      const renew = sub.auto_renew ? t('sub_renews') : (sub.plan ? t('sub_ends') : '');
+      daysEl.textContent = [formatSubDaysLeft(days, until), renew].filter(Boolean).join(' · ');
+    } else if (sub.trial && sub.trial_until) {
+      statusEl.textContent = t('sub_trial_until').replace('{date}', formatSubDate(sub.trial_until));
+      statusEl.classList.remove('sub-status--active');
+      daysEl.textContent = '';
+    } else if (sub.available && !sub.paywall) {
+      statusEl.textContent = t('sub_free_now');
+      statusEl.classList.remove('sub-status--active');
+      daysEl.textContent = '';
+    } else if (sub.available) {
+      statusEl.textContent = t('sub_inactive');
+      statusEl.classList.remove('sub-status--active');
+      daysEl.textContent = '';
     } else {
-      statusEl.textContent = t('subscription_soon');
+      statusEl.textContent = t('sub_unavailable');
       statusEl.classList.remove('sub-status--active');
       daysEl.textContent = '';
     }
-    if (plansEl) plansEl.hidden = true;
+    // While paid days remain, a second purchase would only waste them.
+    const canBuy = Boolean(sub.available) && !active;
+    if (plansEl) plansEl.hidden = !canBuy;
+    if (subBtn) subBtn.hidden = !canBuy;
+    if (noteEl) noteEl.hidden = !canBuy;
+    if (cancelBtn) cancelBtn.hidden = !(active && sub.auto_renew);
+  }
+
+  async function startSubscriptionCheckout() {
+    const btn = document.getElementById('sub-subscribe');
+    if (btn) btn.disabled = true;
+    try {
+      const resp = await apiFetch('/api/subscribe', { method: 'POST' });
+      if (!resp.ok) {
+        alert(t('sub_invoice_error'));
+        return;
+      }
+      haptic('light');
+      if (tg) tg.close();
+    } catch (e) {
+      console.error('subscribe failed:', e);
+      alert(t('sub_invoice_error'));
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function cancelAutoRenew() {
+    const sub = profile?.subscription || {};
+    const until = sub.until ? formatSubDate(sub.until) : '';
+    if (!confirm(t('sub_cancel_confirm').replace('{date}', until))) return;
+    const btn = document.getElementById('sub-cancel');
+    if (btn) btn.disabled = true;
+    try {
+      const resp = await apiFetch('/api/subscription/cancel', { method: 'POST' });
+      if (!resp.ok) {
+        alert(t('sub_cancel_failed'));
+        return;
+      }
+      const data = await resp.json();
+      if (profile && data?.subscription) profile.subscription = data.subscription;
+      hapticSuccess();
+      renderSubscriptionStatus(profile);
+    } catch (e) {
+      console.error('cancel failed:', e);
+      alert(t('sub_cancel_failed'));
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   async function openSubscriptionScreen() {
@@ -361,6 +432,12 @@
     });
     document.getElementById('sub-back')?.addEventListener('click', () => {
       closeSubscriptionScreen();
+    });
+    document.getElementById('sub-subscribe')?.addEventListener('click', () => {
+      startSubscriptionCheckout();
+    });
+    document.getElementById('sub-cancel')?.addEventListener('click', () => {
+      cancelAutoRenew();
     });
   }
 
@@ -1587,6 +1664,8 @@
     setCanEditTimes(true);
     setCanEditName(true);
     setGoalActionsVisible(profileHasGoals(profile));
+    const subEntry = document.getElementById('btn-subscription');
+    if (subEntry) subEntry.hidden = !profile?.subscription?.available;
     renderTimes(profile);
     paintMainScreenTimes(profileMorningTime(profile), profileEveningTime(profile));
     document.querySelector('.settings-block')?.classList.add('loaded');

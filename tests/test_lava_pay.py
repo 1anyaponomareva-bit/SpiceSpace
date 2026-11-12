@@ -338,7 +338,7 @@ if __name__ == "__main__":
 class LavaProfileTagTests(unittest.TestCase):
     def test_tag_roundtrip(self) -> None:
         tag = lava_pay.profile_tag("3m", "root-1", "a@b.co")
-        self.assertEqual(lava_pay.parse_profile_tag(tag), {"plan": "3m", "root": "root-1", "email": "a@b.co"})
+        self.assertEqual(lava_pay.parse_profile_tag(tag), {"plan": "3m", "root": "root-1", "email": "a@b.co", "cancelled": False})
         self.assertIsNone(lava_pay.parse_profile_tag("subscription_4weeks"))
 
     def test_plan_from_amount(self) -> None:
@@ -354,3 +354,42 @@ class LavaProfileTagTests(unittest.TestCase):
         self.assertTrue(asyncio.run(ns["_lava_apply_event"](bot, lava_pay.parse_event(RENEW))))
         self.assertEqual(store.profile["subscription_end"], "2027-03-14")  # 3 months + grace
         self.assertTrue(store.profile["plan"].startswith("lava_3m|" + FIRST["contractId"]))
+
+
+class SubscriptionInfoTests(unittest.TestCase):
+    def _ns(self, today, enabled=True):
+        from datetime import timedelta as _td
+
+        ns = {
+            "lava_pay": lava_pay,
+            "SUBSCRIPTIONS_ENABLED": enabled,
+            "TRIAL_DAYS": 4,
+            "PAYMENTS_START_DATE": "2026-11-13",
+            "date": date,
+            "timedelta": _td,
+            "_profile_local_date": lambda p: today,
+            "_profile_truthy": lambda v: v is True,
+        }
+        return _main_functions(
+            {"_subscription_info", "_profile_is_premium_active", "_profile_in_trial", "_trial_start_raw"}, ns
+        )
+
+    def test_active_with_auto_renew_then_cancelled(self) -> None:
+        ns = self._ns(date(2026, 11, 20))
+        tag = lava_pay.profile_tag("1m", "root", "a@b.co")
+        prof = {"is_premium": True, "subscription_end": "2026-12-14", "plan": tag}
+        with mock.patch.dict("os.environ", {"LAVA_API_KEY": "k"}):
+            info = ns["_subscription_info"](prof)
+        self.assertTrue(info["active"] and info["auto_renew"] and info["available"])
+        self.assertEqual(info["until"], "2026-12-14")
+        prof["plan"] = lava_pay.profile_tag("1m", "root", "a@b.co", cancelled=True)
+        with mock.patch.dict("os.environ", {"LAVA_API_KEY": "k"}):
+            self.assertFalse(ns["_subscription_info"](prof)["auto_renew"])
+        self.assertTrue(lava_pay.parse_profile_tag(prof["plan"])["cancelled"])
+
+    def test_trial(self) -> None:
+        ns = self._ns(date(2026, 11, 14))
+        info = ns["_subscription_info"]({"trial_start_date": "2026-11-01"})
+        self.assertTrue(info["trial"])
+        self.assertEqual(info["trial_until"], "2026-11-16")
+        self.assertFalse(info["active"])
