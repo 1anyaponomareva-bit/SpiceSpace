@@ -127,7 +127,10 @@ WEBAPP_DIR = DATA_DIR / "webapp"
 load_dotenv(DATA_DIR / ".env")
 ADMIN_TELEGRAM_ID = 8412438788
 TRIAL_DAYS = 4
-SUBSCRIPTIONS_ENABLED = False
+# Paid access starts on this date (YYYY-MM-DD). Everyone who started earlier gets
+# their free days counted from it. Empty = paywall off. Needs lava configured too.
+PAYMENTS_START_DATE = os.getenv("PAYMENTS_START_DATE", "").strip()[:10]
+SUBSCRIPTIONS_ENABLED = bool(PAYMENTS_START_DATE) and bool(os.getenv("LAVA_API_KEY", "").strip())
 
 SUBSCRIPTION_PLANS = {
     "4weeks": {
@@ -3248,9 +3251,7 @@ def _profile_is_premium_active(profile: dict, today: date) -> bool:
 
 
 def _profile_in_trial(profile: dict, today: date) -> bool:
-    start_raw = str(
-        profile.get("trial_start_date") or profile.get("cycle_start_date") or ""
-    ).strip()[:10]
+    start_raw = _trial_start_raw(profile)
     if not start_raw:
         return True
     try:
@@ -3269,9 +3270,13 @@ def _profile_has_daily_access(profile: dict, today: date) -> bool:
 
 
 def _trial_start_raw(profile: dict) -> str:
-    return str(
+    """Start of the free days: the user's own start, but never before paid access began."""
+    own = str(
         profile.get("trial_start_date") or profile.get("cycle_start_date") or ""
     ).strip()[:10]
+    if PAYMENTS_START_DATE and (not own or own < PAYMENTS_START_DATE):
+        return PAYMENTS_START_DATE
+    return own
 
 
 def _days_since_trial_start(profile: dict, today: date) -> int | None:
