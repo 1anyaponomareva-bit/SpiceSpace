@@ -3381,8 +3381,9 @@ async def _maybe_send_payments_announcement(
     if _profile_is_premium_active(profile, today):
         return
     own = str(profile.get("trial_start_date") or profile.get("cycle_start_date") or "").strip()[:10]
-    if own and own >= PAYMENTS_START_DATE:
-        return  # new user: told about the free days at onboarding
+    day_before = (date.fromisoformat(PAYMENTS_START_DATE) - timedelta(days=1)).isoformat()
+    if own and own >= day_before:
+        return  # new user (incl. the day before): told about the free days at onboarding
     day = _trial_day(profile, today)
     if day is None or day < 1 or day > TRIAL_DAYS - 2:
         return

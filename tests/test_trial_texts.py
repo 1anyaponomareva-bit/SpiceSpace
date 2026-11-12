@@ -133,3 +133,12 @@ class TrialTextsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnnouncementDayBeforeTests(unittest.TestCase):
+    def test_user_onboarded_day_before_gets_no_announcement(self) -> None:
+        ns = _ns(date(2026, 11, 13))
+        bot = _Bot()
+        prof = {"name": "Аня", "trial_start_date": "2026-11-12"}
+        asyncio.run(ns["_maybe_send_payments_announcement"](bot, 1, prof, {}))
+        self.assertEqual(bot.sent, [])
