@@ -277,6 +277,10 @@ class _Store:
         self.saved.append(row)
 
 
+async def _noop_notify(bot, text):
+    return None
+
+
 def _apply_ns(store: _Store) -> dict:
     from fastapi import HTTPException
 
@@ -295,6 +299,7 @@ def _apply_ns(store: _Store) -> dict:
         "InlineKeyboardMarkup": lambda rows: rows,
         "InlineKeyboardButton": lambda *a, **k: (a, k),
         "log": __import__("logging").getLogger("t"),
+        "notify_admin": _noop_notify,
     }
     return _main_functions({"_lava_apply_event", "_lava_end_text", "_lava_user_from_profiles"}, ns)
 

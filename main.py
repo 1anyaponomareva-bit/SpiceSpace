@@ -120,6 +120,7 @@ from telegram.ext import (
     Application,
     CallbackQueryHandler,
     CommandHandler,
+    ChatMemberHandler,
     ContextTypes,
     MessageHandler,
     PreCheckoutQueryHandler,
@@ -3992,6 +3993,13 @@ async def _lava_apply_event(bot, ev: dict) -> bool:
         db_store.lava_save_payment({**base_row, "paid_until": end})
         log.info("lava %s cid=%s plan=%s until=%s", kind, cid, plan, end)
         if not repeat:
+            who = str(prof.get("name") or "").strip() or str(cid)
+            amount = lava_pay.format_amount(ev["amount"], ev["currency"]) or ""
+            title = "💳 Оплата" if kind == "paid" else "🔁 Продление"
+            await notify_admin(
+                bot,
+                f"{title}: {who}, {lava_pay.plan_label(plan, 'ru')}, {amount}\nДоступ до {_lava_end_text(end, 'ru')}",
+            )
             await bot.send_message(
                 chat_id=cid,
                 text=lava_pay.t(lang, kind, end=_lava_end_text(end, lang)),
@@ -4027,6 +4035,8 @@ async def _lava_apply_event(bot, ev: dict) -> bool:
             await bot.send_message(
                 chat_id=cid, text=lava_pay.t(lang, "cancelled", end=_lava_end_text(until, lang))
             )
+            who = str(prof.get("name") or "").strip() or str(cid)
+            await notify_admin(bot, f"↩️ Отменила автопродление: {who}, доступ до {_lava_end_text(until, 'ru')}")
     log.info("lava %s cid=%s contract=%s", ev["event"], cid, ev["contract_id"])
     return True
 
@@ -5917,6 +5927,77 @@ async def handle_onboarding_turn(
     )
 
 
+# ---------------------------------------------------------------- owner notifications
+# New people, finished onboarding and payments go to the owner's private channel.
+# The channel id is learned when the owner adds the bot there as admin (logged), and
+# kept here so it survives restarts; ADMIN_NOTIFY_CHAT_ID overrides it.
+ADMIN_NOTIFY_CHAT_ID_DEFAULT = ""
+_admin_notify_chat: dict[str, str] = {}
+
+
+def admin_notify_chat_id() -> str:
+    return (
+        os.getenv("ADMIN_NOTIFY_CHAT_ID", "").strip()
+        or _admin_notify_chat.get("id", "")
+        or ADMIN_NOTIFY_CHAT_ID_DEFAULT
+    )
+
+
+def _who(user) -> str:
+    if user is None:
+        return "—"
+    name = " ".join(x for x in (user.first_name, user.last_name) if x).strip() or "без имени"
+    return f"{name} (@{user.username})" if user.username else name
+
+
+async def notify_admin(bot, text: str) -> None:
+    """Never raises: a failed notice must not break the user's flow."""
+    chat_id = admin_notify_chat_id()
+    if not chat_id or bot is None:
+        return
+    try:
+        await bot.send_message(chat_id=int(chat_id), text=text[:3500])
+    except Exception as e:
+        log.warning("admin notify failed: %s", e)
+
+
+async def handle_bot_added_to_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """The owner adds the bot as admin to her channel: remember it and say so there."""
+    upd = update.my_chat_member
+    if not upd or not upd.chat:
+        return
+    chat = upd.chat
+    by = upd.from_user.id if upd.from_user else 0
+    status = str(getattr(upd.new_chat_member, "status", ""))
+    log.info(
+        "bot chat membership chat_id=%s type=%s title=%s status=%s by=%s",
+        chat.id, chat.type, chat.title, status, by,
+    )
+    if chat.type == "private" or str(by) != str(ADMIN_TELEGRAM_ID):
+        return
+    if status not in ("administrator", "member"):
+        return
+    _admin_notify_chat["id"] = str(chat.id)
+    with suppress(Exception):
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text="✅ Уведомления подключены: сюда будут приходить новые люди, знакомства и оплаты.",
+        )
+
+
+async def handle_channel_post_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Posts in channels where the bot is admin: only log the channel id."""
+    post = update.channel_post
+    if post and post.chat:
+        log.info("channel post chat_id=%s title=%s", post.chat.id, post.chat.title)
+
+
+async def notify_onboarding_done(bot, cid: int, profile: dict) -> None:
+    name = str(profile.get("name") or "").strip() or "—"
+    goal = str(profile.get("main_goal") or "").strip()[:150]
+    await notify_admin(bot, f"✅ Прошла знакомство: {name}\nЦель: {goal}")
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_chat or not update.message:
         return
@@ -5938,6 +6019,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             existing = db_store.get_profile(cid)
         except db_store.ProfileReadError:
             existing = None
+    if not isinstance(existing, dict) or not existing:
+        source = (context.args[0] if context.args else "").strip()[:40]
+        src = f"\nОткуда: {source}" if source else ""
+        await notify_admin(context.bot, f"🆕 Новый человек: {_who(update.effective_user)}{src}")
     saved_lang = str((existing or {}).get("language_code") or "").strip()
     if saved_lang:
         lang = saved_lang
@@ -8702,6 +8787,10 @@ def _register_telegram_handlers(app_: Application) -> None:
     app_.add_handler(CommandHandler("sendmorning", cmd_sendmorning))
     app_.add_handler(CommandHandler("admin", cmd_admin))
     app_.add_handler(CommandHandler("subscribe", cmd_subscribe))
+    app_.add_handler(
+        ChatMemberHandler(handle_bot_added_to_chat, ChatMemberHandler.MY_CHAT_MEMBER)
+    )
+    app_.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, handle_channel_post_id))
     app_.add_handler(CommandHandler("lavacheck", cmd_lavacheck))
     app_.add_handler(MessageHandler(filters.VOICE, on_voice))
     app_.add_handler(MessageHandler(filters.PHOTO, on_photo))
@@ -8781,6 +8870,7 @@ async def _bootstrap_bot() -> None:
     telegram_app.bot_data["claude_model_names"] = model_chain
     telegram_app.bot_data["mini_app_url"] = _mini_app_url()
     telegram_app.bot_data["trial_intro_text"] = trial_intro_text
+    telegram_app.bot_data["notify_onboarding_done"] = notify_onboarding_done
     telegram_app.bot_data["post_weekly_goal_morning"] = _post_weekly_goal_morning
     telegram_app.bot_data["post_today_task_after_weekly"] = _post_today_task_after_weekly
     telegram_app.bot_data["after_weekly_goal_saved"] = _after_weekly_goal_saved
@@ -9360,8 +9450,10 @@ async def admin_stats(request: Request) -> dict:
         last_morning = str(prof.get("last_morning_sent_date") or "")
         last_evening = str(prof.get("last_evening_sent_date") or "")
         last_active = max(last_morning, last_evening) if (last_morning or last_evening) else ""
+        created = str(prof.get("created_at") or "")[:10]
         users.append(
             {
+                "created": created,
                 "user_id": uid_str,
                 "name": prof.get("name") or "—",
                 "main_goal": str(prof.get("main_goal") or "")[:60],
@@ -9388,6 +9480,12 @@ async def admin_stats(request: Request) -> dict:
     active_week = sum(1 for u in users if u.get("active_week"))
     churned = sum(1 for u in users if u.get("churned") and u.get("onboarding_done"))
     streak_3plus = sum(1 for u in users if int(u.get("streak") or 0) >= 3)
+    new_today = sum(1 for u in users if u.get("created") == today)
+    new_week = sum(1 for u in users if (u.get("created") or "") >= week_ago)
+    paying = sum(
+        1 for p in profiles.values()
+        if isinstance(p, dict) and _profile_is_premium_active(p, now.date())
+    )
 
     return {
         "stats": {
@@ -9398,6 +9496,9 @@ async def admin_stats(request: Request) -> dict:
             "active_week": active_week,
             "churned": churned,
             "streak_3plus": streak_3plus,
+            "new_today": new_today,
+            "new_week": new_week,
+            "paying": paying,
         },
         "users": users,
     }

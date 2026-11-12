@@ -130,6 +130,9 @@
 
       function renderStats(stats) {
         const items = [
+          ["Новые сегодня 🆕", stats.new_today || 0],
+          ["Новые за неделю", stats.new_week || 0],
+          ["Платят сейчас 💳", stats.paying || 0],
           ["Total users", stats.total || 0],
           ["Onboarded", stats.onboarded || 0],
           ["Active today", stats.active_today || 0],

@@ -3362,6 +3362,13 @@ async def _complete_onboarding(
         reply_markup=progress_kb,
     )
 
+    done_fn = context.bot_data.get("notify_onboarding_done")
+    if callable(done_fn) and new_trial:
+        try:
+            await done_fn(context.bot, cid, profile)
+        except Exception as e:
+            log.warning("onboarding notify failed cid=%s: %s", cid, e)
+
     intro_fn = context.bot_data.get("trial_intro_text")
     if callable(intro_fn):
         try:
