@@ -8721,6 +8721,17 @@ async def _bootstrap_bot() -> None:
     model_name = select_model_id()
     model_chain = build_model_chain(model_name)
 
+    if lava_pay.enabled():
+        async def _lava_startup_check() -> None:
+            try:
+                found = await lava_pay.load_offers(force=True)
+                if not found:
+                    log.warning("lava startup: no subscription offers found")
+            except Exception as e:
+                log.warning("lava startup: offers request failed: %s", e)
+
+        asyncio.create_task(_lava_startup_check())
+
     tz = _get_timezone()
     scheduler = AsyncIOScheduler(
         timezone=tz,
