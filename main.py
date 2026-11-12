@@ -38,6 +38,7 @@ import uvicorn
 
 import db as db_store
 import lava_pay
+import spend_budget
 import onboarding_flow as ob
 import safety
 import memory_context
@@ -79,6 +80,7 @@ from claude_client import (
     configure as configure_claude,
     generate as claude_generate,
     schedule_model_chain,
+    SCHEDULE_MODEL,
 )
 from claude_client import select_model_id
 from prompts import (
@@ -5084,6 +5086,23 @@ def _with_turn_rules(user_content: str, rules: str, lang: str) -> str:
     return f"{user_content}\n\n{head}\n{rules}"
 
 
+def _budget_models(chat_id: int, model_names: list[str]) -> list[str]:
+    """Past the hidden daily budget the chat answers with the cheaper model."""
+    try:
+        over = spend_budget.over_budget(chat_id)
+    except Exception as e:
+        log.warning("spend budget check failed cid=%s: %s", chat_id, e)
+        return model_names
+    if not over:
+        return model_names
+    cheap = SCHEDULE_MODEL
+    log.info(
+        "chat over daily budget cid=%s spent=%.4f budget=%.2f -> %s",
+        chat_id, spend_budget.spent_today(chat_id), spend_budget.daily_budget_usd(), cheap,
+    )
+    return [cheap] + [m for m in model_names if m != cheap]
+
+
 async def _coach_reply(
     chat_id: int,
     user_text: str,
@@ -5094,6 +5113,8 @@ async def _coach_reply(
     extra_rule: str | None = None,
 ) -> str:
     tid = str(chat_id)
+    requested_models = list(model_names)
+    model_names = await asyncio.to_thread(_budget_models, chat_id, model_names)
     prof = db_store.get_profile(chat_id) or user_profiles.get(tid) or {}
     if isinstance(prof, dict):
         prof = await _refresh_profile_timezone(chat_id, prof)
@@ -5125,6 +5146,7 @@ async def _coach_reply(
     if support_mode:
         turn_parts.append(_support_mode_rule(prof))
         log.info("coach_reply support mode cid=%s", chat_id)
+        model_names = requested_models  # a hard moment always gets the full model
     if extra_rule:
         turn_parts.append(extra_rule)
     topic = specialty_instructions(user_text, lang=lang)
@@ -5275,6 +5297,7 @@ async def _coach_reply_photo(
     reply_context: str | None = None,
 ) -> str:
     tid = str(chat_id)
+    model_names = await asyncio.to_thread(_budget_models, chat_id, model_names)
     prof = db_store.get_profile(chat_id) or user_profiles.get(tid) or {}
     if isinstance(prof, dict):
         prof = await _refresh_profile_timezone(chat_id, prof)

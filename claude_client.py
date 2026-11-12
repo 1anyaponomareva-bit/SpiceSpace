@@ -9,6 +9,8 @@ import threading
 
 import anthropic
 
+import spend_budget
+
 from claude_budget import (
     DYNAMIC_MARKER,
     is_billing_error,
@@ -288,6 +290,7 @@ def generate(
         cache_read_input_tokens=read,
         cache_creation_input_tokens=created,
     )
+    spend_budget.record(user_id, cost)
     persist_usage(
         {
             "user_id": user_id,

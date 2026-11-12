@@ -1524,3 +1524,27 @@ def lava_latest_for_email(email: str) -> dict | None:
     )
     rows = [r for r in rows if r.get("telegram_id")]
     return rows[0] if rows else None
+
+
+def claude_usage_spent_since(user_id: int | str, since_iso: str) -> float | None:
+    """Sum of cost_usd for this user since the given moment; None when it cannot be read."""
+    key = str(user_id)
+    if not key.lstrip("-").isdigit():
+        return None
+    if not _use_supabase:
+        return None
+    from urllib.parse import quote
+
+    rows = _request(
+        "GET",
+        f"claude_usage?user_id=eq.{key}&created_at=gte.{quote(since_iso)}&select=cost_usd&limit=5000",
+    )
+    if rows is None:
+        return None
+    total = 0.0
+    for r in rows:
+        try:
+            total += float((r or {}).get("cost_usd") or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
