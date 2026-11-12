@@ -5931,7 +5931,7 @@ async def handle_onboarding_turn(
 # New people, finished onboarding and payments go to the owner's private channel.
 # The channel id is learned when the owner adds the bot there as admin (logged), and
 # kept here so it survives restarts; ADMIN_NOTIFY_CHAT_ID overrides it.
-ADMIN_NOTIFY_CHAT_ID_DEFAULT = ""
+ADMIN_NOTIFY_CHAT_ID_DEFAULT = "-1004422855731"  # «Spice уведомления»
 _admin_notify_chat: dict[str, str] = {}
 
 
@@ -8844,6 +8844,30 @@ async def _bootstrap_bot() -> None:
     configure_claude()
     model_name = select_model_id()
     model_chain = build_model_chain(model_name)
+
+    async def _notify_channel_hello() -> None:
+        """Once per channel: confirm in the owner's channel that notices will come there."""
+        chat_id = admin_notify_chat_id()
+        if not chat_id or not telegram_app:
+            return
+        flag = f"notify_channel_ok_{chat_id}"
+        try:
+            admin_prof = db_store.get_profile(ADMIN_TELEGRAM_ID) or {}
+        except Exception:
+            return
+        if not admin_prof or db_store.cycle_flag_sent(admin_prof, flag):
+            return
+        await asyncio.sleep(5)
+        try:
+            await telegram_app.bot.send_message(
+                chat_id=int(chat_id),
+                text="✅ Уведомления подключены: сюда будут приходить новые люди, знакомства и оплаты.",
+            )
+            db_store.mark_cycle_flag(ADMIN_TELEGRAM_ID, flag)
+        except Exception as e:
+            log.warning("notify channel hello failed: %s", e)
+
+    asyncio.create_task(_notify_channel_hello())
 
     if lava_pay.enabled():
         async def _lava_startup_check() -> None:
