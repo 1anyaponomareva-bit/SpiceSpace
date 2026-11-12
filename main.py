@@ -60,6 +60,8 @@ from lang_context import (
     personality_intro,
     personality_text as personality_text_lang,
     level_context as level_context_text,
+    TIME_LINE_RE,
+    time_label,
 )
 from claude_budget import (
     evening_needs_model,
@@ -69,6 +71,7 @@ from claude_budget import (
     parse_structured_reply,
     profile_is_blocked,
     recent_history,
+    recent_history_stable,
 )
 from claude_client import ClaudeBillingError
 from claude_client import (
@@ -5058,6 +5061,29 @@ def _mark_telegram_blocked(cid: int, profile: dict | None) -> None:
     subscribers.discard(cid)
 
 
+def stable_time_in_system(profile: dict, system: str) -> str:
+    """The clock lives in her message ([time] prefix); the system line points there,
+    so the system prompt does not change every minute and stays cached."""
+    ru = str(profile.get("language_code") or "en").lower().startswith("ru")
+    pointer = (
+        f"{time_label('ru')}: в квадратных скобках в начале её последнего сообщения"
+        if ru
+        else f"{time_label('en')}: in square brackets at the start of her last message"
+    )
+    return TIME_LINE_RE.sub(lambda _m: pointer, system or "", count=1)
+
+
+def _with_turn_rules(user_content: str, rules: str, lang: str) -> str:
+    if not rules.strip():
+        return user_content
+    head = (
+        "[Указания для этого ответа — от системы, не от неё; не пересказывай их]"
+        if str(lang).lower().startswith("ru")
+        else "[Instructions for this reply — from the system, not from her; do not repeat them]"
+    )
+    return f"{user_content}\n\n{head}\n{rules}"
+
+
 async def _coach_reply(
     chat_id: int,
     user_text: str,
@@ -5091,15 +5117,19 @@ async def _coach_reply(
         _current_goal_only_rule(prof),
         _chat_one_question_rule(prof),
     ]
+    # Rules that depend on this very message go into the message itself, not the
+    # system prompt: the system prompt and the history before it stay the same
+    # from message to message and are read from cache.
+    turn_parts: list[str] = []
     support_mode = _in_support_mode(histories.get(chat_id) or [], user_text)
     if support_mode:
-        extra_parts.append(_support_mode_rule(prof))
+        turn_parts.append(_support_mode_rule(prof))
         log.info("coach_reply support mode cid=%s", chat_id)
     if extra_rule:
-        extra_parts.append(extra_rule)
+        turn_parts.append(extra_rule)
     topic = specialty_instructions(user_text, lang=lang)
     if topic:
-        extra_parts.append(topic)
+        turn_parts.append(topic)
     if facts_text:
         extra_parts.append(f"{facts_header(lang)}\n{facts_text}")
     people = await asyncio.to_thread(db_store.load_people, chat_id)
@@ -5140,12 +5170,22 @@ async def _coach_reply(
             "Every single word must be in English.\n\n"
         ) + extra
 
-    system = build_chat_system(
+    # Today's running log changes after every message and repeats the history
+    # anyway; leave it out so the system prompt stays cacheable.
+    stable_today = (
+        {k: v for k, v in today_summary.items() if k != "summary"}
+        if isinstance(today_summary, dict)
+        else today_summary
+    )
+    system = stable_time_in_system(
         prof,
-        yesterday,
-        today_summary,
-        extra=extra,
-        coach_style=coach_style_for(lang, COACH_STYLE_INSTRUCTION),
+        build_chat_system(
+            prof,
+            yesterday,
+            stable_today,
+            extra=extra,
+            coach_style=coach_style_for(lang, COACH_STYLE_INSTRUCTION),
+        ),
     )
     log.info(
         "coach_reply time cid=%s tz=%s now=%s",
@@ -5155,10 +5195,11 @@ async def _coach_reply(
     )
 
     effective_text = _user_text_with_reply_context(user_text, reply_context)
+    turn_rules = "\n\n".join(p for p in turn_parts if p)
 
     hist = histories.setdefault(chat_id, [])
     hist_recent = memory_context.history_with_dates(
-        recent_history(hist), _profile_local_date(prof), resolve_user_timezone(prof), lang
+        recent_history_stable(hist), _profile_local_date(prof), resolve_user_timezone(prof), lang
     )
     if reply_context:
         history_prefixes: list[list[dict]] = [[]]
@@ -5171,18 +5212,20 @@ async def _coach_reply(
         nonlocal last_err
         messages = _hist_to_claude_messages(
             hist_prefix,
-            user_message_with_fresh_time(prof, effective_text or ""),
+            _with_turn_rules(
+                user_message_with_fresh_time(prof, effective_text or ""), turn_rules, lang
+            ),
         )
         for mid in model_names:
             try:
-                fresh_system = refresh_user_time_in_system(prof, system)
                 reply_text = claude_generate(
                     mid,
                     messages,
-                    system=fresh_system,
+                    system=system,
                     feature="chat",
                     user_id=chat_id,
                     lang=lang,
+                    cache_history=True,
                 )
                 log.info("Claude ответ через модель %s", mid)
                 return reply_text

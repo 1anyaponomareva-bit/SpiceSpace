@@ -166,7 +166,9 @@ def _caller_label() -> str:
     return "unknown"
 
 
-def _system_blocks(system: str, *, cache_core: bool) -> list[dict] | str:
+def _system_blocks(
+    system: str, *, cache_core: bool, cache_dynamic: bool = False
+) -> list[dict] | str:
     if not system:
         return ""
     if not cache_core:
@@ -183,7 +185,10 @@ def _system_blocks(system: str, *, cache_core: bool) -> list[dict] | str:
                 }
             )
         if dynamic.strip():
-            blocks.append({"type": "text", "text": dynamic.strip()})
+            block: dict = {"type": "text", "text": dynamic.strip()}
+            if cache_dynamic:
+                block["cache_control"] = {"type": "ephemeral"}
+            blocks.append(block)
         return blocks or ""
     return [
         {
@@ -192,6 +197,26 @@ def _system_blocks(system: str, *, cache_core: bool) -> list[dict] | str:
             "cache_control": {"type": "ephemeral"},
         }
     ]
+
+
+def with_history_cache(messages: list[dict]) -> list[dict]:
+    """Mark the last turn before the new message as a cache breakpoint."""
+    if len(messages) < 2:
+        return messages
+    out = [dict(m) for m in messages]
+    target = out[-2]
+    content = target.get("content")
+    if isinstance(content, str):
+        if not content:
+            return messages
+        target["content"] = [
+            {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+        ]
+    elif isinstance(content, list) and content and isinstance(content[-1], dict):
+        blocks = [dict(b) for b in content]
+        blocks[-1]["cache_control"] = {"type": "ephemeral"}
+        target["content"] = blocks
+    return out
 
 
 def generate(
@@ -205,7 +230,11 @@ def generate(
     user_id: str | int = "",
     lang: str = "ru",
     strict: bool = False,
+    cache_history: bool = False,
 ) -> str:
+    """cache_history: also cache the per-user part of the system prompt and the
+    conversation up to the new message (chat), so a run of messages reads them
+    from cache instead of paying for them again each time."""
     global _billing_stopped
     if _billing_stopped:
         raise ClaudeBillingError("credit balance too low — further Claude calls are paused")
@@ -213,11 +242,13 @@ def generate(
     kwargs: dict = {
         "model": model_id,
         "max_tokens": max_tokens,
-        "messages": messages,
+        "messages": with_history_cache(messages) if cache_history else messages,
         **model_request_options(model_id),
     }
     if system:
-        kwargs["system"] = _system_blocks(system, cache_core=cache_core)
+        kwargs["system"] = _system_blocks(
+            system, cache_core=cache_core, cache_dynamic=cache_history
+        )
     try:
         response = client.messages.create(**kwargs)
     except Exception as exc:

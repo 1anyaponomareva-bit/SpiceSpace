@@ -151,6 +151,28 @@ def recent_history(hist: list[dict] | None, limit: int = CHAT_HISTORY_LIMIT) -> 
     return list(hist)[-limit:]
 
 
+CHAT_HISTORY_STEP = 8
+
+
+def recent_history_stable(
+    hist: list[dict] | None, limit: int = CHAT_HISTORY_LIMIT, step: int = CHAT_HISTORY_STEP
+) -> list[dict]:
+    """Last `limit`..`limit+step-1` turns, with a start that moves in jumps of `step`.
+
+    A window sliding by one turn changes the start of the history on every message,
+    so the cached prefix never matches. Moving the start in jumps keeps it the same
+    for several messages in a row, and the history is read from cache.
+    """
+    if not hist:
+        return []
+    items = list(hist)
+    n = len(items)
+    if n <= limit:
+        return items
+    start = ((n - limit) // step) * step
+    return items[start:]
+
+
 def claim_day_slot(store: dict[str, str], key: str, today: str) -> bool:
     """In-memory stand-in for an atomic day claim. False if this key already has today."""
     if store.get(key) == today:
