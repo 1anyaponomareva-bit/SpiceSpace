@@ -260,13 +260,19 @@ def _goal_type_label(goal_type: str, lang: str) -> str:
 
 
 def _confirmation_text(goal: str, lang: str = "en") -> str:
-    g = (goal or "").strip()
+    g = (goal or "").strip().rstrip(".")
     return f"{s('wrote_down', lang)} {g}. {s('right', lang)}"
 
 
 def _weekly_confirmation_text(goal: str, lang: str = "en") -> str:
-    g = (goal or "").strip()
+    g = (goal or "").strip().rstrip(".")
     return f"{s('wrote_down', lang)} {g}. {s('right', lang)}"
+
+
+def _weekly_saved_ack(goal: str, lang: str = "en") -> str:
+    """She already said yes in the dialog: confirm without asking again."""
+    g = (goal or "").strip().rstrip(".")
+    return f"{s('wrote_down', lang)} {g}."
 
 
 _EN_SYSTEM_PREFIX = (
@@ -3972,6 +3978,25 @@ async def handle_onboarding_turn(
 
     async def _complete_weekly_tactics_pick(weekly_goal: str) -> None:
         after = next_step_after_weekly(st)
+        goal = str(weekly_goal or "").strip()[:2000]
+        if goal and _is_goal_confirm_yes(raw):
+            # She already agreed to this wording in the dialog — save it, no second "Верно?".
+            st["weekly_goal"] = goal
+            st.pop("goal_confirm", None)
+            await msg.reply_text(_weekly_saved_ack(goal, lang))
+            await _dispatch_goal_confirm_after(
+                update,
+                context,
+                cid,
+                st,
+                onboarding,
+                histories,
+                user_profiles,
+                subscribers,
+                model_names,
+                after,
+            )
+            return
         await _propose_goal_confirm(
             msg,
             st,

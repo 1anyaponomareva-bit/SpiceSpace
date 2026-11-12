@@ -13,7 +13,9 @@ from datetime import datetime
 from pathlib import Path
 
 from telegram import Update
-from telegram.ext import Application, ContextTypes, ExtBot, TypeHandler
+from telegram.ext import Application, ContextTypes, TypeHandler
+
+from bot_pacing import PacedBot
 
 _LOCK = threading.Lock()
 
@@ -34,7 +36,7 @@ def write(chat_id: object, direction: str, text: str) -> None:
             fh.write(line.replace("\r", "") + "\n\n")
 
 
-class DialogLogBot(ExtBot):
+class DialogLogBot(PacedBot):
     async def send_message(self, *args, **kwargs):
         chat_id = kwargs.get("chat_id", args[0] if args else "?")
         text = kwargs.get("text", args[1] if len(args) > 1 else "")
@@ -63,7 +65,7 @@ async def _log_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 def build_application(token: str) -> Application:
     """Application with dialog logging when enabled, the usual one otherwise."""
     if not enabled():
-        return Application.builder().token(token).build()
+        return Application.builder().bot(PacedBot(token)).build()
     app = Application.builder().bot(DialogLogBot(token)).build()
     app.add_handler(TypeHandler(Update, _log_incoming), group=-1)
     return app
