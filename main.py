@@ -3831,6 +3831,14 @@ async def _lava_show_summary(bot, cid: int, profile: dict) -> None:
         "amount": inv.amount,
         "status": "new",
     })
+    if not _profile_truthy(profile.get("is_premium")):
+        # Link the payer to this contract in the profile too: the lava_payments table
+        # may be missing and the local file does not survive a deploy.
+        updated = db_store.update_profile(
+            cid, {"plan": lava_pay.profile_tag(plan, inv.contract_id, email)}
+        )
+        if isinstance(updated, dict):
+            user_profiles[str(cid)] = updated
     co["step"] = ""
     text = lava_pay.t(
         lang,
