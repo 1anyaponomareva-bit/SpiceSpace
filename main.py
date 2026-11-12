@@ -129,7 +129,7 @@ ADMIN_TELEGRAM_ID = 8412438788
 TRIAL_DAYS = 4
 # Paid access starts on this date (YYYY-MM-DD). Everyone who started earlier gets
 # their free days counted from it. Empty = paywall off. Needs lava configured too.
-PAYMENTS_START_DATE = os.getenv("PAYMENTS_START_DATE", "").strip()[:10]
+PAYMENTS_START_DATE = os.getenv("PAYMENTS_START_DATE", "2026-11-13").strip()[:10]
 SUBSCRIPTIONS_ENABLED = bool(PAYMENTS_START_DATE) and bool(os.getenv("LAVA_API_KEY", "").strip())
 
 SUBSCRIPTION_PLANS = {
@@ -3391,7 +3391,7 @@ async def _append_trial_day2_morning_ps(
         return text
     if _profile_is_premium_active(profile, today):
         return text
-    if _trial_day(profile, today) != 2:
+    if _trial_day(profile, today) != TRIAL_DAYS - 1:  # "tomorrow is the last free day"
         return text
     start_raw = _trial_start_raw(profile)
     if not start_raw:
@@ -4152,7 +4152,12 @@ async def _run_subscription_maintenance(
 
             days_left = (end - today).days
             reminder_key = f"sub_reminder_3d_{end_raw}"
-            if days_left == 3 and not db_store.cycle_flag_sent(profile, reminder_key):
+            auto_renew = str(profile.get("plan") or "").startswith("lava_")
+            if (
+                days_left == 3
+                and not auto_renew
+                and not db_store.cycle_flag_sent(profile, reminder_key)
+            ):
                 try:
                     await bot.send_message(
                         chat_id=cid,

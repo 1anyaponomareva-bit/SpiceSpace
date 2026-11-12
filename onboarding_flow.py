@@ -531,7 +531,7 @@ STRINGS: dict[str, dict[str, str]] = {
     ),
     "subscription_expired": (
         "{name}, подписка закончилась 🌙\n\n"
-        "Хочешь продолжить — открой мини апп и выбери тариф."
+        "Хочешь продолжить — оформи её кнопкой ниже."
     ),
     "subscription_expiring": (
         "{name}, подписка заканчивается через 3 дня 🌙 Не забудь продлить."
@@ -550,7 +550,7 @@ STRINGS: dict[str, dict[str, str]] = {
     ),
     "subscription_paywall": (
         "{name}, для общения со мной нужна подписка 🌙\n\n"
-        "Бесплатный период закончился — выбери тариф в мини-апп."
+        "Бесплатный период закончился — оформить подписку можно кнопкой ниже."
     ),
     "subscription_subscribe_btn": "💳 Оформить подписку",
     "subscription_view_btn": "💳 Моя подписка",
@@ -761,7 +761,7 @@ STRINGS: dict[str, dict[str, str]] = {
     ),
     "subscription_expired": (
         "{name}, your subscription ended 🌙\n\n"
-        "To continue — open the mini app and pick a plan."
+        "To continue, subscribe with the button below."
     ),
     "subscription_expiring": (
         "{name}, your subscription ends in 3 days 🌙 Don't forget to renew."
@@ -780,7 +780,7 @@ STRINGS: dict[str, dict[str, str]] = {
     ),
     "subscription_paywall": (
         "{name}, you need a subscription to chat with me 🌙\n\n"
-        "Your free trial has ended — pick a plan in the mini app."
+        "Your free trial has ended — subscribe with the button below."
     ),
     "subscription_subscribe_btn": "💳 Subscribe",
     "subscription_view_btn": "💳 My subscription",
