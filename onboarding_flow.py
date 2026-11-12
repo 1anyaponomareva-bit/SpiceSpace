@@ -544,9 +544,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "Неизвестный тариф. Выбери план в мини-приложении."
     ),
     "trial_expired_offer": (
-        "{name}, 4 бесплатных дня прошли 🌙\n\n"
-        "Утренние и вечерние сообщения на паузе. "
-        "Оформи подписку — и продолжим."
+        "{name}, бесплатный период закончился, и сейчас я на паузе 🌙 "
+        "Оформи подписку кнопкой ниже — и продолжим с того места, где остановились."
     ),
     "subscription_paywall": (
         "{name}, для общения со мной нужна подписка 🌙\n\n"
@@ -774,9 +773,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "Unknown plan. Pick a plan in the mini app."
     ),
     "trial_expired_offer": (
-        "{name}, your 4 free days are up 🌙\n\n"
-        "Morning and evening messages are paused. "
-        "Subscribe to keep going."
+        "{name}, your free period is over, and I'm on pause for now 🌙 "
+        "Subscribe with the button below, and we'll pick up where we left off."
     ),
     "subscription_paywall": (
         "{name}, you need a subscription to chat with me 🌙\n\n"
@@ -3304,7 +3302,8 @@ async def _complete_onboarding(
         tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     today_iso = datetime.now(tz).date().isoformat()
     cycle = new_cycle_fields(profile, today_iso)
-    if not profile.get("trial_start_date"):
+    new_trial = not profile.get("trial_start_date")
+    if new_trial:
         cycle["trial_start_date"] = today_iso
     cycle.update(quiet_slots_after_onboarding(profile, datetime.now(tz)))
     profile.update(cycle)
@@ -3353,6 +3352,16 @@ async def _complete_onboarding(
         ),
         reply_markup=progress_kb,
     )
+
+    intro_fn = context.bot_data.get("trial_intro_text")
+    if callable(intro_fn):
+        try:
+            intro = intro_fn(profile, lang, new_trial)
+        except Exception as e:
+            log.warning("trial intro text failed cid=%s: %s", cid, e)
+            intro = ""
+        if intro:
+            await msg.reply_text(intro)
 
     await asyncio.sleep(1)
     webapp_base = os.getenv(

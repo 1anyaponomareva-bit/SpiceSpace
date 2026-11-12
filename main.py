@@ -3302,228 +3302,143 @@ def _trial_day(profile: dict, today: date | None = None) -> int | None:
     return (ref - trial_start).days + 1
 
 
-_TRIAL_SUBSCRIPTION_SYSTEM_RU = (
-    "Ты Спейс. Напиши короткое персональное сообщение пользователю "
-    "про подписку. Используй её имя и цель.\n\n"
-    "Не говори про деньги напрямую. Говори про то что ты помнишь её цель, "
-    "ты рядом, без тебя будет сложнее держать фокус. "
-    "Намекни что скоро может не быть рядом.\n\n"
-    "2-3 предложения. Тепло, как подруга. Никакого коуч-языка."
-)
-
-_TRIAL_SUBSCRIPTION_SYSTEM_EN = (
-    "You are Space. Write a short personal message about subscribing. "
-    "Use her name and goals.\n\n"
-    "Do not mention money directly. Say you remember her goal, you're here, "
-    "and without you it's harder to stay focused. "
-    "Hint that you may not be around much longer.\n\n"
-    "2-3 sentences. Warm, like a friend. No coach-speak."
-)
-
-
-async def _generate_trial_subscription_text(
-    profile: dict,
-    model_names: list[str],
-    *,
-    extra_hint: str = "",
-) -> str:
-    lang = ui_lang(profile)
-    ru = lang.lower().startswith("ru")
-    name = str(profile.get("name") or "").strip() or ("подруга" if ru else "friend")
-    main_goal = str(
-        profile.get("main_goal") or profile.get("final_goal") or ""
-    ).strip() or ("не указана" if ru else "not set")
-    weekly_goal = str(profile.get("weekly_goal") or "").strip() or main_goal
-    system = _TRIAL_SUBSCRIPTION_SYSTEM_RU if ru else _TRIAL_SUBSCRIPTION_SYSTEM_EN
-    if ru:
-        user = (
-            f"Имя: {name}\n"
-            f"Цель на 12 недель: {main_goal}\n"
-            f"Цель на неделю: {weekly_goal}"
-        )
-    else:
-        user = (
-            f"Name: {name}\n"
-            f"12-week goal: {main_goal}\n"
-            f"Weekly goal: {weekly_goal}"
-        )
-    if extra_hint:
-        user += f"\n\n{extra_hint}"
-
-    def call() -> str:
-        for mid in model_names:
-            try:
-                text = sanitize_bot_reply(
-                    claude_generate(
-                        mid,
-                        [{"role": "user", "content": user}],
-                        system=system,
-                        max_tokens=220,
-                        feature="trial_subscription",
-                    )
-                ).strip()
-                if text:
-                    return text
-            except Exception as e:
-                log.warning("trial subscription text %s: %s", mid, e)
-        if ru:
-            return (
-                f"{name}, я помню твою цель и рядом с тобой. "
-                f"Без меня держать фокус будет сложнее."
-            )
-        return (
-            f"{name}, I remember your goal and I'm here with you. "
-            f"Staying focused without me will be harder."
-        )
-
-    return await asyncio.to_thread(call)
+# Fixed texts about the free days (approved by the owner). Space speaks of herself
+# in the feminine.
+_TRIAL_TEXTS = {
+    "ru": {
+        "intro": (
+            "Первые 4 дня со мной — бесплатно: утренние и вечерние сообщения, чат "
+            "и мини-приложение. Дальше — по подписке. Я заранее напомню 💚"
+        ),
+        "announce": (
+            "{name}, небольшая новость 💚 Спейс переходит на подписку. "
+            "У тебя 4 бесплатных дня — до {date} включительно. "
+            "Всё работает как прежде, а ближе к концу я напомню."
+        ),
+        "day3": (
+            "{name}, завтра последний бесплатный день 🌙 Чтобы утренние и вечерние "
+            "сообщения не прервались, оформи подписку: {p1} в месяц или {p3} за 3 месяца."
+        ),
+        "day4": (
+            "{name}, бесплатные 4 дня закончились 🌙 Спасибо за эти дни вместе. "
+            "{goal_line}Оформи подписку, и завтра утром я напишу как обычно."
+        ),
+        "goal_line": "Я помню твою цель — «{goal}» — и хочу идти к ней с тобой дальше. ",
+    },
+    "en": {
+        "intro": (
+            "Your first 4 days with me are free: morning and evening messages, chat "
+            "and the mini app. After that it's a subscription. I'll remind you in advance 💚"
+        ),
+        "announce": (
+            "{name}, a little news 💚 Space is moving to a subscription. "
+            "You have 4 free days — through {date}. "
+            "Everything works as before, and I'll remind you near the end."
+        ),
+        "day3": (
+            "{name}, tomorrow is your last free day 🌙 So your morning and evening "
+            "messages don't stop, subscribe: {p1} a month or {p3} for 3 months."
+        ),
+        "day4": (
+            "{name}, your 4 free days are over 🌙 Thank you for these days together. "
+            "{goal_line}Subscribe, and tomorrow morning I'll write as usual."
+        ),
+        "goal_line": "I remember your goal — «{goal}» — and I want to keep going toward it with you. ",
+    },
+}
 
 
-async def _append_trial_day2_morning_ps(
-    cid: int,
-    profile: dict,
-    text: str,
-    model_names: list[str],
-    user_profiles: dict[str, dict],
-) -> str:
+def _trial_text(lang: str, key: str, **kw) -> str:
+    table = _TRIAL_TEXTS["ru"] if str(lang or "").lower().startswith("ru") else _TRIAL_TEXTS["en"]
+    return table[key].format(**kw)
+
+
+def trial_intro_text(profile: dict, lang: str, new_trial: bool) -> str:
+    """Line after onboarding about the free days; empty when it does not apply."""
+    if not SUBSCRIPTIONS_ENABLED or not new_trial:
+        return ""
+    if _profile_is_premium_active(profile, _profile_local_date(profile)):
+        return ""
+    return _trial_text(lang, "intro")
+
+
+def _trial_prices(lang: str) -> dict:
+    return {
+        "p1": lava_pay.format_amount(lava_pay.plan_rub("1m"), "RUB"),
+        "p3": lava_pay.format_amount(lava_pay.plan_rub("3m"), "RUB"),
+    }
+
+
+async def _maybe_send_payments_announcement(
+    bot, cid: int, profile: dict, user_profiles: dict[str, dict]
+) -> None:
+    """Once, to people who started before paid access: they get 4 free days from now."""
+    if not SUBSCRIPTIONS_ENABLED or not PAYMENTS_START_DATE:
+        return
     today = _profile_local_date(profile)
-    if not SUBSCRIPTIONS_ENABLED:
-        return text
+    if today.isoformat() < PAYMENTS_START_DATE:
+        return
     if _profile_is_premium_active(profile, today):
-        return text
-    if _trial_day(profile, today) != TRIAL_DAYS - 1:  # "tomorrow is the last free day"
-        return text
-    start_raw = _trial_start_raw(profile)
-    if not start_raw:
-        return text
-    flag_key = f"trial_sub_ps2_{start_raw}"
+        return
+    own = str(profile.get("trial_start_date") or profile.get("cycle_start_date") or "").strip()[:10]
+    if own and own >= PAYMENTS_START_DATE:
+        return  # new user: told about the free days at onboarding
+    day = _trial_day(profile, today)
+    if day is None or day < 1 or day > TRIAL_DAYS - 2:
+        return
+    flag_key = f"payments_announce_{PAYMENTS_START_DATE}"
     if db_store.cycle_flag_sent(profile, flag_key):
-        return text
+        return
     lang = ui_lang(profile)
-    ru = lang.lower().startswith("ru")
-    hint = (
-        "Это P.S. к утреннему сообщению. Скажи что завтра последний день "
-        "бесплатного доступа. Одно-два предложения. Не пиши «P.S.» — его добавят отдельно."
-        if ru
-        else (
-            "This is a P.S. to the morning message. Say tomorrow is the last day "
-            "of free access. One or two sentences. Do not write «P.S.» — it will be added separately."
-        )
-    )
-    ps = await _generate_trial_subscription_text(
-        profile, model_names, extra_hint=hint
-    )
-    updated = db_store.mark_cycle_flag(cid, flag_key)
-    if isinstance(updated, dict):
-        user_profiles[str(cid)] = updated
-    return f"{text}\n\nP.S. {ps}"
-
-
-def _trial_subscription_continue_keyboard(lang: str) -> InlineKeyboardMarkup:
-    label = (
-        "Продолжить со Спейс ⭐️"
-        if lang.lower().startswith("ru")
-        else "Continue with Space ⭐️"
-    )
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(label, callback_data="open_subscription")]]
-    )
-
-
-def _trial_subscription_return_keyboard(lang: str) -> InlineKeyboardMarkup:
-    label = (
-        "Вернуть Спейс ⭐️"
-        if lang.lower().startswith("ru")
-        else "Bring Space back ⭐️"
-    )
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(label, callback_data="open_subscription")]]
-    )
-
-
-async def _maybe_send_trial_day3_subscription_message(
-    bot,
-    cid: int,
-    profile: dict,
-    model_names: list[str],
-    today: date,
-    user_profiles: dict[str, dict],
-) -> None:
-    if not SUBSCRIPTIONS_ENABLED:
-        return
-    if _profile_is_premium_active(profile, today):
-        return
-    if _trial_day(profile, today) != TRIAL_DAYS:  # evening of the last free day
-        return
-    start_raw = _trial_start_raw(profile)
-    if not start_raw:
-        return
-    flag_key = f"trial_sub_msg3_{start_raw}"
-    if db_store.cycle_flag_sent(profile, flag_key):
-        return
+    name = str(profile.get("name") or "").strip() or ob._friend_word(lang)
+    last_day = date.fromisoformat(_trial_start_raw(profile)) + timedelta(days=TRIAL_DAYS - 1)
     try:
-        text = await _generate_trial_subscription_text(profile, model_names)
-        lang = ui_lang(profile)
         await bot.send_message(
             chat_id=cid,
-            text=sanitize_bot_reply(text),
-            reply_markup=_trial_subscription_continue_keyboard(lang),
+            text=_trial_text(lang, "announce", name=name, date=_lava_end_text(last_day.isoformat(), lang)),
         )
         updated = db_store.mark_cycle_flag(cid, flag_key)
         if isinstance(updated, dict):
             user_profiles[str(cid)] = updated
-        log.info("trial_day3_subscription sent cid=%s start=%s", cid, start_raw)
+        log.info("payments announcement sent cid=%s", cid)
     except Exception as e:
-        log.warning("trial_day3_subscription failed cid=%s: %s", cid, e)
+        log.warning("payments announcement failed cid=%s: %s", cid, e)
 
 
-async def _run_trial_expiry_offer(
-    bot,
-    cid: int,
-    profile: dict,
-    today: date,
-    user_profiles: dict[str, dict],
-    model_names: list[str],
+async def _maybe_send_trial_evening_message(
+    bot, cid: int, profile: dict, today: date, user_profiles: dict[str, dict]
 ) -> None:
+    """After the evening message: day 3 — tomorrow is the last free day; day 4 — free days are over."""
     if not SUBSCRIPTIONS_ENABLED:
         return
     if _profile_is_premium_active(profile, today):
         return
-    if _trial_day(profile, today) != TRIAL_DAYS + 1:  # first day after the trial
+    day = _trial_day(profile, today)
+    if day == TRIAL_DAYS - 1:
+        key = "day3"
+    elif day == TRIAL_DAYS:
+        key = "day4"
+    else:
         return
     start_raw = _trial_start_raw(profile)
-    if not start_raw:
-        return
-    flag_key = f"trial_sub_msg4_{start_raw}"
-    if db_store.cycle_flag_sent(profile, flag_key):
+    flag_key = f"trial_{key}_{start_raw}"
+    if not start_raw or db_store.cycle_flag_sent(profile, flag_key):
         return
     lang = ui_lang(profile)
-    ru = lang.lower().startswith("ru")
-    hint = (
-        "Скажи что замолкаешь. Что помнишь её цель. "
-        "Что она может сама — но с тобой легче не сливаться."
-        if ru
-        else (
-            "Say you're going quiet. That you remember her goal. "
-            "She can do it alone — but with you it's easier not to drift off."
-        )
-    )
+    name = str(profile.get("name") or "").strip() or ob._friend_word(lang)
+    goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
+    goal_line = _trial_text(lang, "goal_line", goal=goal[:200]) if goal else ""
+    text = _trial_text(lang, key, name=name, goal_line=goal_line, **_trial_prices(lang))
     try:
-        text = await _generate_trial_subscription_text(
-            profile, model_names, extra_hint=hint
-        )
         await bot.send_message(
-            chat_id=cid,
-            text=sanitize_bot_reply(text),
-            reply_markup=_trial_subscription_return_keyboard(lang),
+            chat_id=cid, text=text, reply_markup=_subscription_offer_keyboard(cid, lang)
         )
         updated = db_store.mark_cycle_flag(cid, flag_key)
         if isinstance(updated, dict):
             user_profiles[str(cid)] = updated
-        log.info("trial_day4_subscription sent cid=%s start=%s", cid, start_raw)
+        log.info("trial %s message sent cid=%s start=%s", key, cid, start_raw)
     except Exception as e:
-        log.warning("trial_day4_subscription failed cid=%s: %s", cid, e)
-
+        log.warning("trial %s message failed cid=%s: %s", key, cid, e)
 
 async def handle_open_subscription_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -6350,9 +6265,6 @@ async def _deliver_scheduled_morning(
         await _restore_history_from_db(cid, "morning message")
         async with typing_while(bot, cid):
             text = await _morning_message_text(cid, profile, model_chain)
-            text = await _append_trial_day2_morning_ps(
-                cid, profile, text, model_chain, user_profiles
-            )
         histories.setdefault(cid, []).append({"role": "model", "parts": [text]})
         await bot.send_message(
             chat_id=cid,
@@ -6364,6 +6276,7 @@ async def _deliver_scheduled_morning(
             "text": text,
             "awaiting_reminder": False,
         }
+        await _maybe_send_payments_announcement(bot, cid, profile, user_profiles)
         asyncio.create_task(_check_and_send_milestone(bot, cid, profile, model_chain))
         return True
     except Exception as e:
@@ -8758,6 +8671,7 @@ async def _bootstrap_bot() -> None:
         log.warning("LOG_DIALOG_TEXT=1: dialog text is written to a file — test bot only")
     telegram_app.bot_data["claude_model_names"] = model_chain
     telegram_app.bot_data["mini_app_url"] = _mini_app_url()
+    telegram_app.bot_data["trial_intro_text"] = trial_intro_text
     telegram_app.bot_data["post_weekly_goal_morning"] = _post_weekly_goal_morning
     telegram_app.bot_data["post_today_task_after_weekly"] = _post_today_task_after_weekly
     telegram_app.bot_data["after_weekly_goal_saved"] = _after_weekly_goal_saved
@@ -8842,10 +8756,6 @@ async def _bootstrap_bot() -> None:
                 today_date = now_local.date()
                 await _run_subscription_maintenance(
                     bot, cid, profile, today_date, user_profiles
-                )
-                profile = user_profiles.get(key) or profile
-                await _run_trial_expiry_offer(
-                    bot, cid, profile, today_date, user_profiles, model_chain
                 )
                 profile = user_profiles.get(key) or profile
 
@@ -9063,13 +8973,8 @@ async def _bootstrap_bot() -> None:
                                     text=sanitize_bot_reply(evening_text),
                                     reply_markup=keyboard,
                                 )
-                                await _maybe_send_trial_day3_subscription_message(
-                                    bot,
-                                    cid,
-                                    profile,
-                                    model_chain,
-                                    today_date,
-                                    user_profiles,
+                                await _maybe_send_trial_evening_message(
+                                    bot, cid, profile, today_date, user_profiles
                                 )
                             except Exception as e:
                                 log.warning(
