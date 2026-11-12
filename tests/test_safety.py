@@ -202,6 +202,7 @@ class PaywallSafetyTests(unittest.TestCase):
         update.message = Msg()
         prof = {"language_code": "ru", "name": "Аня", "trial_start_date": "2020-01-01"}
         with mock.patch.object(main, "SUBSCRIPTIONS_ENABLED", True), \
+             mock.patch.object(main, "PAYMENTS_START_DATE", "2020-01-01"), \
              mock.patch.object(main, "_bot_reply", new=mock.AsyncMock()) as br, \
              mock.patch.object(main, "_subscription_offer_keyboard", return_value=None):
             res = asyncio.run(main._reply_subscription_paywall_if_needed(update, cid, prof, text))
