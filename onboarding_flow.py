@@ -222,6 +222,91 @@ def age_reply_text(kind: str, lang: str = "en") -> str:
     }[kind]
 
 
+# «Откуда ты узнала?» — only for new users whose /start came without a label
+# (TikTok has no profile link, so those starts arrive bare). The answer is stored
+# as the same src_<label> flag a ?start= link gives, with an _ask suffix.
+SOURCE_ASK_RU = "И ещё короткий вопрос: откуда ты узнала про Спейс?"
+SOURCE_ASK_EN = "One quick question: where did you hear about Space?"
+SOURCE_OPTIONS = (
+    ("tt", "TikTok", "TikTok"),
+    ("rl", "Instagram", "Instagram"),
+    ("th", "Threads", "Threads"),
+    ("tg", "Telegram-канал", "Telegram channel"),
+    ("fr", "Подруга посоветовала", "A friend told me"),
+    ("other", "Другое", "Other"),
+)
+SOURCE_CODES = tuple(code for code, _, _ in SOURCE_OPTIONS)
+SOURCE_SKIP_RU = "Пропустить"
+SOURCE_SKIP_EN = "Skip"
+_SOURCE_WORDS = (
+    ("other", ("друго", "other")),
+    ("tt", ("tiktok", "tik tok", "тикток", "тик ток", "тт")),
+    ("rl", ("instagram", "insta", "инст", "рилс", "reels", "ig")),
+    ("th", ("threads", "тредс", "тред")),
+    ("tg", ("telegram", "телеграм", "телег", "канал", "tg", "тг")),
+    ("fr", ("подруг", "друг", "friend", "посоветовал", "сестр", "коллег")),
+)
+
+
+def source_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    ru = _is_ru(lang)
+    btns = [
+        InlineKeyboardButton(label_ru if ru else label_en, callback_data=f"ob_src:{code}")
+        for code, label_ru, label_en in SOURCE_OPTIONS
+    ]
+    rows = [btns[i:i + 2] for i in range(0, len(btns), 2)]
+    rows.append([
+        InlineKeyboardButton(SOURCE_SKIP_RU if ru else SOURCE_SKIP_EN, callback_data="ob_src:skip")
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def source_question(lang: str = "en") -> str:
+    return SOURCE_ASK_RU if _is_ru(lang) else SOURCE_ASK_EN
+
+
+def source_label(code: str) -> str:
+    """Button code -> label stored after src_: 'tt' -> 'tt_ask'; skip/unknown -> ''."""
+    code = str(code or "").strip().lower()
+    return f"{code}_ask" if code in SOURCE_CODES else ""
+
+
+def source_code_from_text(raw: str) -> str:
+    """Typed answer instead of a button: 'из тиктока' -> 'tt', anything else -> 'other'."""
+    t = f" {str(raw or '').lower()} "
+    for code, words in _SOURCE_WORDS:
+        for w in words:
+            if len(w) <= 3:
+                if re.search(rf"(?<![a-zа-яё]){re.escape(w)}(?![a-zа-яё])", t):
+                    return code
+            elif w in t:
+                return code
+    return "other"
+
+
+def source_pending(st: dict | None) -> bool:
+    return isinstance(st, dict) and bool(st.get("src_ask"))
+
+
+def save_source_answer(cid: int, code: str) -> str:
+    """Store the answer once, only if the profile has no source label yet. Returns the label."""
+    label = source_label(code)
+    if not label:
+        return ""
+    try:
+        prof = db.get_profile(cid)
+        flags = prof.get("cycle_flags") if isinstance(prof, dict) else None
+        if isinstance(flags, dict) and any(
+            v and str(k).startswith("src_") for k, v in flags.items()
+        ):
+            return ""
+        db.mark_cycle_flag(cid, "src_" + label)
+    except Exception as e:
+        log.warning("source answer not saved cid=%s: %s", cid, e)
+        return ""
+    return label
+
+
 def age_pending(st: dict | None) -> bool:
     """New onboarding waits for the 18+ button (states from before this check have no key)."""
     return isinstance(st, dict) and st.get("age_ok") is False
@@ -3515,6 +3600,12 @@ async def handle_onboarding_turn(
             await msg.reply_text(age_reply_text("under", lang))
         else:
             await msg.reply_text(age_reply_text("press", lang), reply_markup=age_keyboard(lang))
+        return
+    if step == OB_NAME and source_pending(st):
+        # typed instead of a button: take it as the answer and go on to the name
+        st["src_ask"] = False
+        save_source_answer(cid, source_code_from_text(raw))
+        await msg.reply_text(age_reply_text("ask_name", lang))
         return
     _note_kids_from_answer(st, raw)
     model_names = context.bot_data.get("claude_model_names") or []

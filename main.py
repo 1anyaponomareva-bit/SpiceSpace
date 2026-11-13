@@ -6083,8 +6083,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not saved_lang:
         fields["language_code"] = lang
     prof = db_store.update_profile(cid, fields)
+    start_label = spice_stats.clean_label(context.args[0] if context.args else "")
     if is_new_user and isinstance(prof, dict):
-        label = spice_stats.clean_label(context.args[0] if context.args else "")
+        label = start_label
         if label:
             with suppress(Exception):
                 prof = db_store.mark_cycle_flag(cid, spice_stats.SRC_PREFIX + label) or prof
@@ -6190,6 +6191,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if ob.just_greeted(onboarding.get(cid)):
         return  # greeting is already on screen — don't send it twice
     ob.start_new_onboarding(onboarding, cid, lang)
+    if is_new_user and not start_label:
+        # came without a ?start= label (e.g. TikTok, no profile link): ask after the 18+ button
+        onboarding[cid]["src_ask"] = True
     await _bot_reply(
         update.message,
         ob.get_greeting_new(lang),
@@ -6645,10 +6649,50 @@ async def handle_age_callback(
         return  # stale button: onboarding already moved on
     if query.data == "ob_age:yes":
         onboarding[cid] = {**st, "age_ok": True, "age_blocked": False}
+        if ob.source_pending(st):
+            await context.bot.send_message(
+                chat_id=cid,
+                text=ob.source_question(lang),
+                reply_markup=ob.source_keyboard(lang),
+            )
+            return
         await context.bot.send_message(chat_id=cid, text=ob.age_reply_text("ask_name", lang))
     else:
-        onboarding[cid] = {**st, "age_blocked": True}
+        onboarding[cid] = {**st, "age_blocked": True, "src_ask": False}
         await context.bot.send_message(chat_id=cid, text=ob.age_reply_text("under", lang))
+
+
+async def handle_source_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """«Откуда ты узнала?» buttons: save the answer as a src_*_ask label, then ask the name."""
+    query = update.callback_query
+    if not query or not query.data or not query.message:
+        return
+    await query.answer()
+    cid = query.message.chat_id
+    _restore_cid_flow(cid)
+    lang = (query.from_user.language_code if query.from_user else None) or "en"
+    st = onboarding.get(cid)
+    if isinstance(st, dict):
+        lang = str(st.get("lang") or lang)
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception as e:
+        log.warning("source edit_markup failed cid=%s: %s", cid, e)
+    code = query.data.split(":", 1)[1]
+    label = ob.save_source_answer(cid, code)
+    if label:
+        log.info("source answer saved cid=%s label=%s", cid, label)
+        cached = user_profiles.get(str(cid))
+        if isinstance(cached, dict):
+            flags = dict(cached.get("cycle_flags") or {})
+            flags[spice_stats.SRC_PREFIX + label] = True
+            cached["cycle_flags"] = flags
+    if not ob.source_pending(st) or int(st.get("step") or 0) != ob.OB_NAME:
+        return  # stale button: the name question is already behind
+    onboarding[cid] = {**st, "src_ask": False}
+    await context.bot.send_message(chat_id=cid, text=ob.age_reply_text("ask_name", lang))
 
 
 async def handle_safety_callback(
@@ -8883,6 +8927,12 @@ def _register_telegram_handlers(app_: Application) -> None:
     )
     app_.add_handler(
         CallbackQueryHandler(handle_age_callback, pattern=r"^ob_age:(yes|no)$")
+    )
+    app_.add_handler(
+        CallbackQueryHandler(
+            handle_source_callback,
+            pattern=r"^ob_src:(tt|rl|th|tg|fr|other|skip)$",
+        )
     )
     app_.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
     app_.add_handler(
