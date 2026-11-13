@@ -117,6 +117,15 @@ class FakeMeta:
             if params["metric"] == "followers_count":
                 return {"data": [{"name": "followers_count", "total_value": {"value": 55}}]}
             return {"data": [{"name": "views", "values": [{"value": 10}, {"value": 20}]}]}
+        if url.endswith("/me/accounts"):
+            return {"data": [{"name": "Page"}, {"name": "Spice", "instagram_business_account": {"id": "1784"}}]}
+        if url.endswith("/1784"):
+            assert "user_id" not in params["fields"]
+            return {"username": "anya", "followers_count": 301, "media_count": 4}
+        if url.endswith("/1784/insights"):
+            return {"data": [{"name": params["metric"], "total_value": {"value": 9}}]}
+        if url.endswith("/1784/media"):
+            return self.__call__(url.replace("/1784/media", "/me/media"), params)
         if url.endswith("/me"):
             return {"username": "anya", "followers_count": 300, "media_count": 4}
         if url.endswith("/me/insights"):
@@ -170,6 +179,21 @@ class MetaCollection(unittest.TestCase):
             tok, info = meta_stats.current_token("threads", "THREADS_ACCESS_TOKEN", "u/refresh_access_token",
                                                  "th_refresh_token", store.get, setter, FakeMeta())
             self.assertEqual(tok, "NEW_B")
+
+    def test_instagram_via_facebook_login(self):
+        fake = FakeMeta()
+        env = {"THREADS_ACCESS_TOKEN": "", "INSTAGRAM_ACCESS_TOKEN": "SUAT_SECRET",
+               "INSTAGRAM_API": "facebook", "INSTAGRAM_BUSINESS_ACCOUNT_ID": ""}
+        with mock.patch.dict(os.environ, env):
+            out = meta_stats.collect_all(lambda k: None, lambda k, v: True, fake)
+        ig = out["instagram"]
+        self.assertEqual(ig["token"]["api"], "facebook")
+        self.assertEqual(ig["token"]["account_id"], "1784")
+        self.assertEqual(ig["account"]["followers"], 301)
+        self.assertEqual([r["id"] for r in ig["reels"]], ["r1"])
+        self.assertTrue(all("graph.facebook.com" in u for u, _ in fake.calls))
+        self.assertFalse(any("refresh" in u for u, _ in fake.calls))
+        self.assertNotIn("SECRET", repr(out))
 
     def test_missing_tokens(self):
         with mock.patch.dict(os.environ, {"THREADS_ACCESS_TOKEN": "", "INSTAGRAM_ACCESS_TOKEN": ""}):

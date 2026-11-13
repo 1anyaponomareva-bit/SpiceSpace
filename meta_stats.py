@@ -22,6 +22,8 @@ THREADS_BASE = "https://graph.threads.net/v1.0"
 THREADS_REFRESH_URL = "https://graph.threads.net/refresh_access_token"
 IG_BASE = "https://graph.instagram.com/v23.0"
 IG_REFRESH_URL = "https://graph.instagram.com/refresh_access_token"
+# Facebook Login for Business / system user token (does not expire, no refresh)
+FB_BASE = "https://graph.facebook.com/v23.0"
 REFRESH_EVERY = timedelta(days=7)
 POST_DAYS = 14
 
@@ -198,12 +200,17 @@ def collect_threads(token: str, http_get: Getter = _http_get) -> dict:
 
 
 # ------------------------------------------------------------------ Instagram
-def collect_instagram(token: str, http_get: Getter = _http_get) -> dict:
+def collect_instagram(
+    token: str,
+    http_get: Getter = _http_get,
+    base: str = IG_BASE,
+    account_id: str = "me",
+) -> dict:
+    """base=IG_BASE, account_id='me' for Instagram Login tokens;
+    base=FB_BASE, account_id=<IG business account id> for Facebook Login tokens."""
     since = _now() - timedelta(days=POST_DAYS)
-    me = http_get(
-        f"{IG_BASE}/me",
-        {"fields": "user_id,username,followers_count,media_count", "access_token": token},
-    ) or {}
+    fields = "username,followers_count,media_count" + (",user_id" if account_id == "me" else "")
+    me = http_get(f"{base}/{account_id}", {"fields": fields, "access_token": token}) or {}
     account: dict[str, Any] = {
         "username": me.get("username"),
         "followers": me.get("followers_count"),
@@ -213,7 +220,7 @@ def collect_instagram(token: str, http_get: Getter = _http_get) -> dict:
     for metric in ("profile_views", "reach", "views"):
         try:
             ins = http_get(
-                f"{IG_BASE}/me/insights",
+                f"{base}/{account_id}/insights",
                 {
                     "metric": metric,
                     "period": "day",
@@ -230,7 +237,7 @@ def collect_instagram(token: str, http_get: Getter = _http_get) -> dict:
             account[f"{metric}_error"] = str(e)[:200]
 
     reels: list[dict] = []
-    url = f"{IG_BASE}/me/media"
+    url = f"{base}/{account_id}/media"
     params: dict | None = {
         "fields": "id,caption,media_type,media_product_type,timestamp,permalink,like_count,comments_count",
         "limit": 50,
@@ -258,7 +265,7 @@ def collect_instagram(token: str, http_get: Getter = _http_get) -> dict:
             }
             try:
                 ins = http_get(
-                    f"{IG_BASE}/{item.get('id')}/insights",
+                    f"{base}/{item.get('id')}/insights",
                     {"metric": ",".join(IG_REEL_METRICS), "access_token": token},
                 )
                 vals = _insight_values(ins)
@@ -291,12 +298,46 @@ def collect_all(kv_get, kv_set, http_get: Getter = _http_get) -> dict:
         out["threads"] = {"token": th_info, **_safe(lambda: collect_threads(th_token, http_get))}
     else:
         out["threads"] = {"error": "THREADS_ACCESS_TOKEN не задан в Railway"}
+    out["instagram"] = _instagram_block(kv_get, kv_set, http_get)
+    return out
+
+
+def find_ig_account_id(token: str, http_get: Getter = _http_get) -> str:
+    """IG business account linked to a Facebook Page the token can see."""
+    data = http_get(
+        f"{FB_BASE}/me/accounts",
+        {"fields": "name,instagram_business_account", "limit": 50, "access_token": token},
+    )
+    for page in (data or {}).get("data") or []:
+        ig = (page or {}).get("instagram_business_account") or {}
+        if ig.get("id"):
+            return str(ig["id"])
+    return ""
+
+
+def _instagram_block(kv_get, kv_set, http_get: Getter = _http_get) -> dict:
+    """INSTAGRAM_API=facebook (or INSTAGRAM_BUSINESS_ACCOUNT_ID set) -> graph.facebook.com
+    with a non-expiring system user token; otherwise Instagram Login + weekly refresh."""
+    token = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
+    if not token:
+        return {"error": "INSTAGRAM_ACCESS_TOKEN не задан в Railway"}
+    account_id = os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID", "").strip()
+    mode = os.getenv("INSTAGRAM_API", "").strip().lower()
+    if account_id or mode == "facebook":
+        info: dict[str, Any] = {"configured": True, "source": "railway", "api": "facebook"}
+        if not account_id:
+            try:
+                account_id = find_ig_account_id(token, http_get)
+            except Exception as e:
+                return {"token": info, "error": f"не нашла аккаунт Instagram: {str(e)[:200]}"}
+            if not account_id:
+                return {"token": info, "error": "токен не видит Facebook-страницу со связанным "
+                        "Instagram; задайте INSTAGRAM_BUSINESS_ACCOUNT_ID"}
+        info["account_id"] = account_id
+        return {"token": info, **_safe(lambda: collect_instagram(token, http_get, FB_BASE, account_id))}
     ig_token, ig_info = current_token(
         "instagram", "INSTAGRAM_ACCESS_TOKEN", IG_REFRESH_URL, "ig_refresh_token",
         kv_get, kv_set, http_get,
     )
-    if ig_token:
-        out["instagram"] = {"token": ig_info, **_safe(lambda: collect_instagram(ig_token, http_get))}
-    else:
-        out["instagram"] = {"error": "INSTAGRAM_ACCESS_TOKEN не задан в Railway"}
-    return out
+    ig_info["api"] = "instagram"
+    return {"token": ig_info, **_safe(lambda: collect_instagram(ig_token, http_get))}
