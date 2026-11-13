@@ -229,14 +229,14 @@ _T = {
         "pay_btn": "💳 Перейти к оплате",
         "promo_btn": "🎟 Ввести промокод",
         "change_btn": "↩️ Изменить",
-        "error": "Не получилось создать оплату. Попробуй ещё раз чуть позже 🙏",
+        "error": "Не получилось создать оплату. Попробуй ещё раз чуть позже 🙏 Если не выйдет, напиши Ане: @panomareva",
         "unavailable": "Оплата пока недоступна. Скоро включим 💚",
         "paid": (
             "Оплата прошла 💚 Подписка на Спейс активна до {end}. "
             "Продлевается автоматически, отменить можно в любой момент."
         ),
         "renewed": "Подписка продлена до {end} 💚",
-        "failed": "Оплата не прошла. Если хочешь, попробуй ещё раз 👇",
+        "failed": "Оплата не прошла. Если хочешь, попробуй ещё раз 👇 Если что-то не так, напиши Ане: @panomareva",
         "retry_btn": "💳 Оформить подписку",
         "renew_failed": (
             "Не получилось списать оплату за продление подписки. "
@@ -268,14 +268,14 @@ _T = {
         "pay_btn": "💳 Go to payment",
         "promo_btn": "🎟 Enter promo code",
         "change_btn": "↩️ Change",
-        "error": "Couldn't create the payment. Please try again a bit later 🙏",
+        "error": "Couldn't create the payment. Please try again a bit later 🙏 If it still fails, message Anya: @panomareva",
         "unavailable": "Payments aren't available yet. Coming soon 💚",
         "paid": (
             "Payment received 💚 Your Space subscription is active until {end}. "
             "It renews automatically; you can cancel anytime."
         ),
         "renewed": "Subscription renewed until {end} 💚",
-        "failed": "The payment didn't go through. You can try again 👇",
+        "failed": "The payment didn't go through. You can try again 👇 If something's wrong, message Anya: @panomareva",
         "retry_btn": "💳 Subscribe",
         "renew_failed": (
             "We couldn't charge the subscription renewal. "

@@ -202,6 +202,7 @@
     setText('#btn-change-weekly', 'change_goal_weekly');
     setText('#btn-reset', 'settings_reset');
     setText('#btn-subscription', 'settings_subscription');
+    setText('#btn-support', 'settings_support');
     setText('#btn-stop', 'settings_stop');
 
     setText('.calendar-title', 'weeks_12');
@@ -427,6 +428,13 @@
   }
 
   function bindSubscription() {
+    document.getElementById('btn-support')?.addEventListener('click', () => {
+      const url = 'https://t.me/panomareva';
+      if (tg?.openTelegramLink) {
+        try { tg.openTelegramLink(url); return; } catch (_) {}
+      }
+      window.open(url, '_blank');
+    });
     document.getElementById('btn-subscription')?.addEventListener('click', () => {
       openSubscriptionScreen();
     });

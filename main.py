@@ -3916,6 +3916,33 @@ async def cmd_lavacheck(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text("\n".join(lines))
 
 
+# ---------------------------------------------------------------- support contact
+SUPPORT_USERNAME = "panomareva"
+
+
+def support_text(lang: str) -> str:
+    if str(lang or "").lower().startswith("ru"):
+        return (
+            "Если что-то не работает, есть вопрос по оплате или идея, как сделать Спейс лучше, "
+            f"пиши Ане, создательнице Спейс, в личку: @{SUPPORT_USERNAME} 🤍\n\n"
+            "Предложения и пожелания тоже очень ждём: она читает всё сама."
+        )
+    return (
+        "If something isn't working, you have a question about payment, or an idea to make Space better, "
+        f"message Anya, Space's creator: @{SUPPORT_USERNAME} 🤍\n\n"
+        "Suggestions and wishes are very welcome too: she reads everything herself."
+    )
+
+
+async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or not update.message:
+        return
+    cid = update.effective_chat.id
+    prof = user_profiles.get(str(cid)) or {}
+    lang = str((prof or {}).get("language_code") or (update.effective_user.language_code if update.effective_user else "") or "ru")
+    await update.message.reply_text(support_text(lang))
+
+
 async def cmd_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_chat:
         return
@@ -8810,6 +8837,7 @@ def _register_telegram_handlers(app_: Application) -> None:
     app_.add_handler(CommandHandler("sendmorning", cmd_sendmorning))
     app_.add_handler(CommandHandler("admin", cmd_admin))
     app_.add_handler(CommandHandler("subscribe", cmd_subscribe))
+    app_.add_handler(CommandHandler(["support", "help"], cmd_support))
     app_.add_handler(
         ChatMemberHandler(handle_bot_added_to_chat, ChatMemberHandler.MY_CHAT_MEMBER)
     )
