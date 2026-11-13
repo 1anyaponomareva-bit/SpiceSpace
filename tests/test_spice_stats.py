@@ -195,6 +195,17 @@ class MetaCollection(unittest.TestCase):
         self.assertFalse(any("refresh" in u for u, _ in fake.calls))
         self.assertNotIn("SECRET", repr(out))
 
+    def test_token_prefix_picks_api(self):
+        env = {"THREADS_ACCESS_TOKEN": "", "INSTAGRAM_ACCESS_TOKEN": "EAAxSECRET",
+               "INSTAGRAM_API": "", "INSTAGRAM_BUSINESS_ACCOUNT_ID": ""}
+        with mock.patch.dict(os.environ, env):
+            out = meta_stats.collect_all(lambda k: None, lambda k, v: True, FakeMeta())
+        self.assertEqual(out["instagram"]["token"]["api"], "facebook")
+        env.update({"INSTAGRAM_ACCESS_TOKEN": "IGAAxSECRET", "INSTAGRAM_API": "facebook"})
+        with mock.patch.dict(os.environ, env):
+            out = meta_stats.collect_all(lambda k: None, lambda k, v: True, FakeMeta())
+        self.assertEqual(out["instagram"]["token"]["api"], "instagram")
+
     def test_missing_tokens(self):
         with mock.patch.dict(os.environ, {"THREADS_ACCESS_TOKEN": "", "INSTAGRAM_ACCESS_TOKEN": ""}):
             out = meta_stats.collect_all(lambda k: None, lambda k, v: True, FakeMeta())

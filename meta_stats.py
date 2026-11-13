@@ -323,7 +323,12 @@ def _instagram_block(kv_get, kv_set, http_get: Getter = _http_get) -> dict:
         return {"error": "INSTAGRAM_ACCESS_TOKEN не задан в Railway"}
     account_id = os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID", "").strip()
     mode = os.getenv("INSTAGRAM_API", "").strip().lower()
-    if account_id or mode == "facebook":
+    # the token itself says which API it is for: IG... = Instagram Login, EAA... = Facebook
+    if token.startswith("IG"):
+        mode = "instagram"
+    elif token.startswith("EAA"):
+        mode = "facebook"
+    if mode != "instagram" and (account_id or mode == "facebook"):
         info: dict[str, Any] = {"configured": True, "source": "railway", "api": "facebook"}
         if not account_id:
             try:
