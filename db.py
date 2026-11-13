@@ -1439,6 +1439,7 @@ def save_claude_usage(row: dict) -> None:
 # (supabase/migrations/20261112_lava_payments.sql); local file without Supabase or
 # when the table is missing, so a payment is never lost silently.
 LAVA_PAYMENTS_PATH = DATA_DIR / "lava_payments.json"
+APP_KV_PATH = DATA_DIR / "app_kv.json"
 _LAVA_FIELDS = (
     "contract_id", "parent_contract_id", "telegram_id", "email", "plan",
     "currency", "amount", "status", "paid_until",
@@ -1548,3 +1549,79 @@ def claude_usage_spent_since(user_id: int | str, since_iso: str) -> float | None
         except (TypeError, ValueError):
             continue
     return total
+
+
+# ---------------------------------------------------------------- owner dashboard stats
+def _paged(path: str, page: int = 1000, max_rows: int = 50000) -> list[dict] | None:
+    """GET all rows of a PostgREST query page by page. None if the table is unreachable."""
+    if not _use_supabase:
+        return None
+    out: list[dict] = []
+    offset = 0
+    while offset < max_rows:
+        sep = "&" if "?" in path else "?"
+        rows = _request("GET", f"{path}{sep}limit={page}&offset={offset}")
+        if rows is None:
+            return None if offset == 0 else out
+        out.extend(r for r in rows if isinstance(r, dict))
+        if len(rows) < page:
+            break
+        offset += page
+    return out
+
+
+def user_message_times_since(since_iso: str) -> list[dict]:
+    """[{user_id, created_at}] of user messages since since_iso (UTC ISO)."""
+    from urllib.parse import quote
+
+    rows = _paged(
+        "conversation_history?role=eq.user"
+        f"&created_at=gte.{quote(since_iso)}&select=user_id,created_at&order=created_at.asc"
+    )
+    return rows or []
+
+
+def lava_payments_all() -> list[dict] | None:
+    """All lava payment rows, or None when the lava_payments table is not there."""
+    if _use_supabase:
+        rows = _paged("lava_payments?select=*&order=created_at.asc")
+        if rows is not None:
+            return rows
+    local = [r for r in _lava_local().values() if isinstance(r, dict)]
+    return local or None
+
+
+def kv_get(key: str) -> dict | None:
+    """Small app settings store (table app_kv). None when missing or unreachable."""
+    from urllib.parse import quote
+
+    if not _use_supabase:
+        data = _load_json(APP_KV_PATH, {})
+        val = data.get(key) if isinstance(data, dict) else None
+        return val if isinstance(val, dict) else None
+    rows = _request("GET", f"app_kv?key=eq.{quote(key)}&select=value&limit=1")
+    if rows:
+        val = rows[0].get("value")
+        return val if isinstance(val, dict) else None
+    return None
+
+
+def kv_set(key: str, value: dict) -> bool:
+    if not _use_supabase:
+        data = _load_json(APP_KV_PATH, {})
+        if not isinstance(data, dict):
+            data = {}
+        data[key] = value
+        _save_json(APP_KV_PATH, data)
+        return True
+    res = _request(
+        "POST",
+        "app_kv?on_conflict=key",
+        json={
+            "key": key,
+            "value": value,
+            "updated_at": datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds"),
+        },
+        headers={**_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+    )
+    return res is not None

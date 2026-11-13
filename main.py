@@ -39,6 +39,8 @@ import uvicorn
 import db as db_store
 import lava_pay
 import spend_budget
+import spice_stats
+import meta_stats
 import onboarding_flow as ob
 import safety
 import memory_context
@@ -6069,7 +6071,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             existing = db_store.get_profile(cid)
         except db_store.ProfileReadError:
             existing = None
-    if not isinstance(existing, dict) or not existing:
+    is_new_user = not isinstance(existing, dict) or not existing
+    if is_new_user:
         source = (context.args[0] if context.args else "").strip()[:40]
         src = f"\nОткуда: {source}" if source else ""
         await notify_admin(context.bot, f"🆕 Новый человек: {_who(update.effective_user)}{src}")
@@ -6080,6 +6083,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not saved_lang:
         fields["language_code"] = lang
     prof = db_store.update_profile(cid, fields)
+    if is_new_user and isinstance(prof, dict):
+        label = spice_stats.clean_label(context.args[0] if context.args else "")
+        if label:
+            with suppress(Exception):
+                prof = db_store.mark_cycle_flag(cid, spice_stats.SRC_PREFIX + label) or prof
+            log.info("start label saved cid=%s label=%s", cid, label)
     if not isinstance(prof, dict):
         cached = user_profiles.get(tid)
         prof = cached if isinstance(cached, dict) else {}
@@ -9577,6 +9586,58 @@ async def admin_stats(request: Request) -> dict:
         },
         "users": users,
     }
+
+
+def _stats_key_ok(request: Request) -> bool:
+    expected = os.getenv("STATS_EXPORT_KEY", "").strip()
+    given = request.headers.get("X-Stats-Key", "").strip()
+    if expected and given and hmac.compare_digest(given.encode(), expected.encode()):
+        return True
+    return _is_admin_request(request)
+
+
+def _message_days_by_user(rows: list[dict]) -> dict[str, set]:
+    out: dict[str, set] = {}
+    for r in rows:
+        uid = str(r.get("user_id") or "")
+        d = spice_stats.local_day(r.get("created_at"))
+        if uid and d:
+            out.setdefault(uid, set()).add(d)
+    return out
+
+
+@app.get("/api/stats/daily")
+async def stats_daily(request: Request) -> dict:
+    """Numbers for the owner's content dashboard. No tokens or personal data inside:
+    only counts by ?start= label, plus Threads/Instagram post numbers."""
+    if not _stats_key_ok(request):
+        raise HTTPException(status_code=403, detail="forbidden")
+    raw_day = str(request.query_params.get("date") or "").strip()
+    try:
+        report_day = date.fromisoformat(raw_day) if raw_day else spice_stats.owner_yesterday()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    want_meta = str(request.query_params.get("meta") or "1") != "0"
+
+    since = datetime.combine(
+        report_day - timedelta(days=spice_stats.COHORT_DAYS + 5), datetime.min.time(), tzinfo=timezone.utc
+    ).isoformat(timespec="seconds")
+    profiles = await asyncio.to_thread(db_store.load_all_profiles)
+    msg_rows = await asyncio.to_thread(db_store.user_message_times_since, since)
+    payments = await asyncio.to_thread(db_store.lava_payments_all)
+    spice = spice_stats.build_spice_stats(
+        profiles, _message_days_by_user(msg_rows), payments, report_day
+    )
+    out: dict = {
+        "date": report_day.isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "spice": spice,
+    }
+    if want_meta:
+        out.update(
+            await asyncio.to_thread(meta_stats.collect_all, db_store.kv_get, db_store.kv_set)
+        )
+    return out
 
 
 @app.get("/api/profile")
