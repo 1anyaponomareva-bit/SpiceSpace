@@ -315,6 +315,20 @@ def find_ig_account_id(token: str, http_get: Getter = _http_get) -> str:
     return ""
 
 
+def ig_id_from_token(token: str, http_get: Getter = _http_get) -> str:
+    """System user tokens for an Instagram asset: the account id is in the token's
+    granular scopes (instagram_basic / instagram_manage_insights target_ids)."""
+    data = http_get(
+        f"{FB_BASE}/debug_token", {"input_token": token, "access_token": token}
+    )
+    scopes = ((data or {}).get("data") or {}).get("granular_scopes") or []
+    for wanted in ("instagram_manage_insights", "instagram_basic"):
+        for sc in scopes:
+            if (sc or {}).get("scope") == wanted and (sc.get("target_ids") or []):
+                return str(sc["target_ids"][0])
+    return ""
+
+
 def _instagram_block(kv_get, kv_set, http_get: Getter = _http_get) -> dict:
     """INSTAGRAM_API=facebook (or INSTAGRAM_BUSINESS_ACCOUNT_ID set) -> graph.facebook.com
     with a non-expiring system user token; otherwise Instagram Login + weekly refresh."""
@@ -331,10 +345,17 @@ def _instagram_block(kv_get, kv_set, http_get: Getter = _http_get) -> dict:
     if mode != "instagram" and (account_id or mode == "facebook"):
         info: dict[str, Any] = {"configured": True, "source": "railway", "api": "facebook"}
         if not account_id:
-            try:
-                account_id = find_ig_account_id(token, http_get)
-            except Exception as e:
-                return {"token": info, "error": f"не нашла аккаунт Instagram: {str(e)[:200]}"}
+            tried: list[str] = []
+            for finder in (ig_id_from_token, find_ig_account_id):
+                try:
+                    account_id = finder(token, http_get)
+                except Exception as e:
+                    tried.append(f"{finder.__name__}: {str(e)[:150]}")
+                    account_id = ""
+                if account_id:
+                    break
+            if tried and not account_id:
+                info["lookup_errors"] = tried
             if not account_id:
                 return {"token": info, "error": "токен не видит Facebook-страницу со связанным "
                         "Instagram; задайте INSTAGRAM_BUSINESS_ACCOUNT_ID"}

@@ -97,7 +97,8 @@ class DailyNumbers(unittest.TestCase):
 
 
 class FakeMeta:
-    def __init__(self):
+    def __init__(self, scopes=None):
+        self.scopes = scopes
         self.calls = []
         now = datetime.now(timezone.utc)
         self.recent = now.strftime("%Y-%m-%dT%H:%M:%S+0000")
@@ -117,6 +118,10 @@ class FakeMeta:
             if params["metric"] == "followers_count":
                 return {"data": [{"name": "followers_count", "total_value": {"value": 55}}]}
             return {"data": [{"name": "views", "values": [{"value": 10}, {"value": 20}]}]}
+        if url.endswith("/debug_token"):
+            if self.scopes is None:
+                raise RuntimeError("HTTP 400: no debug")
+            return {"data": {"granular_scopes": self.scopes}}
         if url.endswith("/me/accounts"):
             return {"data": [{"name": "Page"}, {"name": "Spice", "instagram_business_account": {"id": "1784"}}]}
         if url.endswith("/1784"):
@@ -193,6 +198,16 @@ class MetaCollection(unittest.TestCase):
         self.assertEqual([r["id"] for r in ig["reels"]], ["r1"])
         self.assertTrue(all("graph.facebook.com" in u for u, _ in fake.calls))
         self.assertFalse(any("refresh" in u for u, _ in fake.calls))
+        self.assertNotIn("SECRET", repr(out))
+
+    def test_ig_id_from_token_scopes(self):
+        fake = FakeMeta(scopes=[{"scope": "instagram_basic", "target_ids": ["1784"]}])
+        env = {"THREADS_ACCESS_TOKEN": "", "INSTAGRAM_ACCESS_TOKEN": "EAAxSECRET",
+               "INSTAGRAM_API": "", "INSTAGRAM_BUSINESS_ACCOUNT_ID": ""}
+        with mock.patch.dict(os.environ, env):
+            out = meta_stats.collect_all(lambda k: None, lambda k, v: True, fake)
+        self.assertEqual(out["instagram"]["token"]["account_id"], "1784")
+        self.assertFalse(any(u.endswith("/me/accounts") for u, _ in fake.calls))
         self.assertNotIn("SECRET", repr(out))
 
     def test_token_prefix_picks_api(self):
