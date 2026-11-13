@@ -2470,6 +2470,25 @@ def _carried_task_question(task: str, ru: bool) -> str:
     return f"Yesterday we planned: «{task}». Still on — shall we take it for today?"
 
 
+def _morning_only_agreed_task_rule(ru: bool) -> str:
+    """Spice's own suggestion she never confirmed is not a plan for the morning."""
+    if ru:
+        return (
+            "Задача на сегодня — только то, что пользователь сам назвал или явно подтвердил "
+            "(«да», «ок», «беру», «сделаю»). Если в разговоре ты (Спейс) что-то предлагала, "
+            "а она не согласилась прямо — это не договорённость: не пиши «у нас есть задача», "
+            "«ты делаешь…», «ты зовёшь…», не выдавай своё предложение за её план. "
+            "Можно коротко напомнить идею как вариант и спросить, что она выберет на сегодня."
+        )
+    return (
+        "Today's task is only what the user named or clearly confirmed herself "
+        "(\"yes\", \"ok\", \"I'll do it\"). If you (Spice) suggested something and she did not "
+        "agree outright, it is not a plan: do not write \"we have a task\" or \"you're doing…\", "
+        "do not present your suggestion as her plan. You may mention the idea as an option "
+        "and ask what she picks for today."
+    )
+
+
 async def _morning_message_text(
     chat_id: int,
     profile: dict,
@@ -2511,7 +2530,8 @@ async def _morning_message_text_base(
             f"{_current_goal_only_rule(profile)}\n\n"
             f"Это утреннее сообщение. Вот последний разговор с пользователем: {last_messages}\n"
             "Учитывай этот контекст — не начинай с нуля.\n"
-            "Если вчера обсуждали что-то конкретное — продолжи оттуда.\n\n"
+            "Если вчера обсуждали что-то конкретное — продолжи оттуда.\n"
+            f"{_morning_only_agreed_task_rule(True)}\n\n"
             + (
                 f"Вчера была намечена задача «{carried}», и она не закрыта. "
                 "В конце спроси, всё ли в силе и берём ли её на сегодня, назвав задачу. "
@@ -2529,7 +2549,8 @@ async def _morning_message_text_base(
             "This is the morning message. Here is the latest conversation "
             f"with the user: {last_messages}\n"
             "Use this context — don't start from scratch.\n"
-            "If you discussed something specific yesterday — continue from there.\n\n"
+            "If you discussed something specific yesterday — continue from there.\n"
+            f"{_morning_only_agreed_task_rule(False)}\n\n"
             + (
                 f"Yesterday's task «{carried}» is still open. "
                 "At the end ask whether it is still on and she takes it for today, naming the task. "
@@ -4252,6 +4273,8 @@ async def _capture_tomorrow_task_from_dialog(
     prompt = (
         "В ПОСЛЕДНЕЙ реплике пользователя есть договорённость о задаче именно на завтра? "
         "Рассказ про сегодня, еду, спорт, настроение или уже прошедший день — это не задача на завтра. "
+        "Задачу должен назвать или прямо подтвердить сам пользователь; предложение бота, "
+        "на которое пользователь не ответил согласием, — это не договорённость. "
         "Если не уверен — верни {\"task\": null}. "
         'Если да — верни JSON: {"task": "короткая задача"}. '
         'Если нет — верни {"task": null}.\n\n'
