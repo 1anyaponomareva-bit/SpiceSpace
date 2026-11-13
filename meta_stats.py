@@ -298,7 +298,86 @@ def collect_all(kv_get, kv_set, http_get: Getter = _http_get) -> dict:
         out["threads"] = {"token": th_info, **_safe(lambda: collect_threads(th_token, http_get))}
     else:
         out["threads"] = {"error": "THREADS_ACCESS_TOKEN не задан в Railway"}
+    if th_token:
+        out["threads_niche"] = _safe(lambda: search_threads_niche(th_token, http_get))
     out["instagram"] = _instagram_block(kv_get, kv_set, http_get)
+    return out
+
+
+# ------------------------------------------------------------------ niche search (Threads)
+# Mostly US self-improvement / body / habits, ~10% Russian. Override with
+# THREADS_SEARCH_TERMS="term one; term two; ..." in Railway.
+DEFAULT_SEARCH_TERMS = (
+    "day 1 of", "self improvement", "glow up", "start over monday", "lose weight mom",
+    "new year goals", "accountability", "discipline", "healthy habits", "be kind to yourself",
+    "начну с понедельника", "саморазвитие",
+)
+SEARCH_DAYS = 7
+SEARCH_PER_TERM = 10
+
+
+def search_terms() -> list[str]:
+    raw = os.getenv("THREADS_SEARCH_TERMS", "").strip()
+    if raw:
+        return [t.strip() for t in raw.split(";") if t.strip()][:30]
+    return list(DEFAULT_SEARCH_TERMS)
+
+
+def search_threads_niche(token: str, http_get: Getter = _http_get) -> dict:
+    """Top public Threads posts for niche keywords (needs threads_keyword_search).
+    Until Meta approves that permission, the API returns only the owner's own posts,
+    which are dropped here, so the list stays empty instead of misleading."""
+    since = int((_now() - timedelta(days=SEARCH_DAYS)).timestamp())
+    try:
+        me = http_get(f"{THREADS_BASE}/me", {"fields": "username", "access_token": token}) or {}
+        own = str(me.get("username") or "").lower()
+    except Exception:
+        own = ""
+    posts: list[dict] = []
+    errors: list[str] = []
+    seen: set[str] = set()
+    own_only = 0
+    for term in search_terms():
+        try:
+            data = http_get(
+                f"{THREADS_BASE}/keyword_search",
+                {
+                    "q": term,
+                    "search_type": "TOP",
+                    "since": since,
+                    "limit": SEARCH_PER_TERM,
+                    "fields": "id,text,media_type,permalink,timestamp,username,has_replies,is_quote_post,is_reply",
+                    "access_token": token,
+                },
+            )
+        except Exception as e:
+            errors.append(f"{term}: {str(e)[:150]}")
+            continue
+        for rank, item in enumerate((data or {}).get("data") or [], start=1):
+            pid = str(item.get("id") or "")
+            if not pid or pid in seen or item.get("is_reply"):
+                continue
+            if own and str(item.get("username") or "").lower() == own:
+                own_only += 1
+                continue
+            seen.add(pid)
+            posts.append({
+                "term": term,
+                "rank": rank,
+                "username": item.get("username"),
+                "text": item.get("text") or "",
+                "date": item.get("timestamp"),
+                "permalink": item.get("permalink"),
+                "media_type": item.get("media_type"),
+            })
+    out: dict[str, Any] = {"terms": search_terms(), "posts": posts}
+    if errors:
+        out["errors"] = errors[:10]
+        if len(errors) == len(search_terms()):
+            out["error"] = "поиск не работает: нужно разрешение threads_keyword_search"
+    if not posts and own_only and not errors:
+        out["note"] = ("Meta пока отдаёт только свои посты: разрешение threads_keyword_search "
+                       "ещё не одобрено (нужна проверка приложения Meta)")
     return out
 
 

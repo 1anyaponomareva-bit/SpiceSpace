@@ -114,6 +114,16 @@ class FakeMeta:
         if url.endswith("/t1/insights"):
             return {"data": [{"name": "views", "values": [{"value": 120}]},
                              {"name": "likes", "values": [{"value": 7}]}]}
+        if url.endswith("/keyword_search"):
+            if params["q"] == "boom":
+                raise RuntimeError("HTTP 400: permission")
+            return {"data": [
+                {"id": "k1", "text": "day 1 of my glow up", "username": "us_girl", "timestamp": self.recent},
+                {"id": "k2", "text": "mine", "username": "anya", "timestamp": self.recent},
+                {"id": "k3", "text": "reply", "username": "x", "is_reply": True},
+            ]}
+        if url.endswith("/me") and "graph.threads.net" in url:
+            return {"username": "anya"}
         if url.endswith("/me/threads_insights"):
             if params["metric"] == "followers_count":
                 return {"data": [{"name": "followers_count", "total_value": {"value": 55}}]}
@@ -220,6 +230,15 @@ class MetaCollection(unittest.TestCase):
         with mock.patch.dict(os.environ, env):
             out = meta_stats.collect_all(lambda k: None, lambda k, v: True, FakeMeta())
         self.assertEqual(out["instagram"]["token"]["api"], "instagram")
+
+    def test_threads_niche_search(self):
+        with mock.patch.dict(os.environ, {"THREADS_SEARCH_TERMS": "day 1 of; glow up"}):
+            out = meta_stats.search_threads_niche("T", FakeMeta())
+        self.assertEqual([p["id"] if "id" in p else p["username"] for p in out["posts"]], ["us_girl"])
+        self.assertEqual(out["posts"][0]["term"], "day 1 of")
+        with mock.patch.dict(os.environ, {"THREADS_SEARCH_TERMS": "boom"}):
+            out = meta_stats.search_threads_niche("T", FakeMeta())
+        self.assertIn("error", out)
 
     def test_missing_tokens(self):
         with mock.patch.dict(os.environ, {"THREADS_ACCESS_TOKEN": "", "INSTAGRAM_ACCESS_TOKEN": ""}):
