@@ -9093,6 +9093,12 @@ async def _bootstrap_bot() -> None:
                 profile = user_profiles.get(key) or profile
 
                 if not _profile_has_daily_access(profile, today_date):
+                    if in_morning or in_evening:
+                        log.info(
+                            "daily_check skipped cid=%s: no access (trial over, no paid days) now=%s",
+                            cid,
+                            now_hm,
+                        )
                     continue
 
                 days_silent = _days_since_user_message(profile, today_date)
@@ -9261,7 +9267,17 @@ async def _bootstrap_bot() -> None:
                             if sent:
                                 send_regular_evening = False
                         elif db_store.cycle_flag_sent(profile, weekly_sent_key):
-                            send_regular_evening = False
+                            # The recap stands in for the evening only on the day it went out;
+                            # a flag left from an earlier cycle must not swallow tonight's evening.
+                            recap_day = str(profile.get("last_weekly_recap_date") or "")[:10]
+                            send_regular_evening = recap_day != today
+                            log.info(
+                                "daily_check evening cid=%s week-end day=%s recap_day=%s regular=%s",
+                                cid,
+                                days_since_start,
+                                recap_day or "-",
+                                send_regular_evening,
+                            )
 
                     if send_regular_evening:
                         claimed = db_store.claim_send_slot(

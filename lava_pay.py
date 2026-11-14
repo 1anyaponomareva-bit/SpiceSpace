@@ -236,7 +236,10 @@ _T = {
             "Продлевается автоматически, отменить можно в любой момент."
         ),
         "renewed": "Подписка продлена до {end} 💚",
-        "failed": "Оплата не прошла. Если хочешь, попробуй ещё раз 👇 Если что-то не так, напиши Ане: @panomareva",
+        "failed": (
+            "Похоже, оплата не завершилась, деньги не списаны. Если передумала, ничего делать не нужно. "
+            "Если хочешь оформить подписку, нажми кнопку ниже 👇 Если что-то пошло не так, напиши Ане: @panomareva"
+        ),
         "retry_btn": "💳 Оформить подписку",
         "renew_failed": (
             "Не получилось списать оплату за продление подписки. "
@@ -275,7 +278,10 @@ _T = {
             "It renews automatically; you can cancel anytime."
         ),
         "renewed": "Subscription renewed until {end} 💚",
-        "failed": "The payment didn't go through. You can try again 👇 If something's wrong, message Anya: @panomareva",
+        "failed": (
+            "Looks like the payment wasn't completed, and you weren't charged. If you changed your mind, there's nothing to do. "
+            "To subscribe, tap the button below 👇 If something went wrong, message Anya: @panomareva"
+        ),
         "retry_btn": "💳 Subscribe",
         "renew_failed": (
             "We couldn't charge the subscription renewal. "
