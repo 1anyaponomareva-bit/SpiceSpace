@@ -48,18 +48,20 @@ EARLY = datetime(2026, 11, 18, 3, 0, tzinfo=timezone.utc)  # 6:00 MSK
 
 
 class ScheduleTests(unittest.TestCase):
-    def test_thirty_picks_fill_three_pools_msk(self):
-        out = tp.schedule(DAY, items(30), now=EARLY)
+    def test_fifteen_picks_fill_three_pools_msk(self):
+        out = tp.schedule(DAY, items(15), now=EARLY)
         pools = [x["pool"] for x in out]
-        self.assertEqual(pools.count("morning"), 10)
-        self.assertEqual(pools.count("day"), 10)
-        self.assertEqual(pools.count("evening"), 10)
+        self.assertEqual(pools.count("morning"), 5)
+        self.assertEqual(pools.count("day"), 5)
+        self.assertEqual(pools.count("evening"), 5)
         first = {p: min(x["at"] for x in out if x["pool"] == p) for p in tp.POOL_ORDER}
         self.assertEqual(first["morning"], "2026-11-18T06:00:00+00:00")  # 9:00 MSK
         self.assertEqual(first["day"], "2026-11-18T10:00:00+00:00")      # 13:00 MSK
         self.assertEqual(first["evening"], "2026-11-18T16:00:00+00:00")  # 19:00 MSK
-        last_morning = max(x["at"] for x in out if x["pool"] == "morning")
-        self.assertEqual(last_morning, "2026-11-18T07:48:00+00:00")  # 10:48 MSK, 12 min apart
+        morning = sorted(datetime.fromisoformat(x["at"]) for x in out if x["pool"] == "morning")
+        gaps = {(b - a).total_seconds() / 60 for a, b in zip(morning, morning[1:])}
+        self.assertTrue(all(15 <= g <= 25 for g in gaps), gaps)  # random step, not an even beat
+        self.assertLessEqual(morning[-1], datetime(2026, 11, 18, 8, 0, tzinfo=timezone.utc))  # done by 11:00 MSK
 
     def test_explicit_pool_is_kept(self):
         out = tp.schedule(DAY, [{"tid": "a", "text": "x", "pool": "evening"}] + items(2), now=EARLY)
@@ -76,7 +78,7 @@ class RunTests(unittest.TestCase):
         s = Store()
         tp.put_day(s.get_, s.set_, DAY, items(3), now=EARLY)
         fake = FakeThreads()
-        at = datetime(2026, 11, 18, 6, 30, tzinfo=timezone.utc)  # 3 morning threads due
+        at = datetime(2026, 11, 18, 7, 30, tzinfo=timezone.utc)  # 3 morning threads due
         tp.run_once(s.get_, s.set_, "TOK", now=at, post=fake.post, get=fake.get)
         q = tp.load(s.get_)
         self.assertEqual([x["status"] for x in q], ["posted", "queued", "queued"])

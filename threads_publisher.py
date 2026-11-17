@@ -4,7 +4,8 @@ The queue lives in app_kv under QUEUE_KEY. Claude (on her word) sends the day's 
 to POST /api/threads/queue; a scheduler job calls run_once() every minute.
 
 Pools, Moscow time (her audience): morning 9-11, day 13-15, evening 19-21. Inside a
-pool threads go out one by one, SPACING apart. Each thread may carry a two-message
+pool threads go out one by one, a random SPACING_MIN..SPACING_MAX apart (an even
+12-minute beat looked robotic; Anya, 18.11.2026: 15 a day, 5 per pool). Each thread may carry a two-message
 chain: `reply` (no link) under the thread, then `reply2` (with the link) under `reply`.
 The chain goes out once the thread has CHAIN_MIN_REPLIES comments, or CHAIN_AFTER
 after posting, whichever comes first.
@@ -15,6 +16,7 @@ Nothing here logs or returns the token.
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -29,8 +31,8 @@ THREADS_BASE = "https://graph.threads.net/v1.0"
 MSK = timezone(timedelta(hours=3))
 POOLS = {"morning": (9, 0), "day": (13, 0), "evening": (19, 0)}
 POOL_ORDER = ("morning", "day", "evening")
-POOL_SIZE = 10
-SPACING = timedelta(minutes=12)
+POOL_SIZE = 5
+SPACING_MIN, SPACING_MAX = 15, 25  # minutes between threads in a pool
 CHAIN_MIN_REPLIES = 15
 CHAIN_AFTER = timedelta(hours=2)
 CHAIN_CHECK_AFTER = timedelta(minutes=20)
@@ -84,10 +86,12 @@ def http_get(url: str, params: dict) -> Any:
 
 
 # ------------------------------------------------------------------ schedule
-def schedule(day: date, items: list[dict], now: datetime | None = None) -> list[dict]:
+def schedule(day: date, items: list[dict], now: datetime | None = None,
+             rng: random.Random | None = None) -> list[dict]:
     """Give each picked thread a pool and a time. Items may carry pool
     (morning/day/evening); the rest fill pools in order, POOL_SIZE each."""
     now = now or _now()
+    rng = rng or random.Random()
     by_pool: dict[str, list[dict]] = {p: [] for p in POOL_ORDER}
     loose: list[dict] = []
     for it in items:
@@ -104,7 +108,8 @@ def schedule(day: date, items: list[dict], now: datetime | None = None) -> list[
         if start < now:
             # picks came in late: start this pool right away
             start = now + timedelta(minutes=2)
-        for i, it in enumerate(by_pool[pool]):
+        at = start
+        for it in by_pool[pool]:
             text = str(it.get("text") or "").strip()
             if not text:
                 continue
@@ -112,13 +117,14 @@ def schedule(day: date, items: list[dict], now: datetime | None = None) -> list[
                 "day": day.isoformat(),
                 "tid": str(it.get("tid") or it.get("id") or ""),
                 "pool": pool,
-                "at": _iso(start + SPACING * i),
+                "at": _iso(at),
                 "text": text[:MAX_TEXT],
                 "reply": str(it.get("reply") or "").strip()[:MAX_TEXT],
                 "reply2": str(it.get("reply2") or "").strip()[:MAX_TEXT],
                 "status": "queued",
                 "attempts": 0,
             })
+            at += timedelta(minutes=rng.randint(SPACING_MIN, SPACING_MAX))
     return out
 
 
