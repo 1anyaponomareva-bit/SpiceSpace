@@ -140,8 +140,9 @@ def put_day(kv_get, kv_set, day: date, picked: list[dict], now: datetime | None 
     with _lock:
         items = load(kv_get)
         d = day.isoformat()
-        done = {x.get("tid") for x in items if x.get("day") == d and x.get("status") != "queued"}
-        keep = [x for x in items if x.get("day") != d or x.get("status") != "queued"]
+        # resending the day re-queues what failed or was cancelled; posted stays posted
+        done = {x.get("tid") for x in items if x.get("day") == d and x.get("status") == "posted"}
+        keep = [x for x in items if x.get("day") != d or x.get("status") == "posted"]
         fresh = [x for x in schedule(day, picked, now) if x["tid"] not in done]
         items = _prune(keep + fresh, now)
         if not kv_set(QUEUE_KEY, {"items": items}):
