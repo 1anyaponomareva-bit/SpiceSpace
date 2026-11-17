@@ -30,7 +30,7 @@ class DailyCheckGateTests(unittest.TestCase):
         import main
         src = inspect.getsource(main)
         i = src.index("async def daily_check_job")
-        self.assertIn("profile_onboarding_complete(profile)", src[i:i + 3000])
+        self.assertIn("profile_onboarding_complete(profile)", src[i:i + 6000])
 
 
 if __name__ == "__main__":

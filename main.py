@@ -9042,10 +9042,6 @@ async def _bootstrap_bot() -> None:
                     profile = fresh
                     user_profiles[key] = fresh
 
-                if profile_is_blocked(profile) or not _profile_daily_enabled(profile):
-                    continue
-                if not ob.profile_onboarding_complete(profile):
-                    continue  # no morning/evening before she has finished getting to know us
                 tz_name = _profile_timezone_name(profile)
                 try:
                     user_tz = ZoneInfo(tz_name)
@@ -9080,6 +9076,34 @@ async def _bootstrap_bot() -> None:
                     now_hm,
                     already_sent_today=evening_sent,
                 )
+
+                # Say why a slot is skipped, once, at the slot minute — silent skips
+                # made «вечер не пришёл» impossible to explain from the logs.
+                at_slot = now_hm in (morning_time, evening_time)
+                skip_reason = ""
+                if profile_is_blocked(profile):
+                    skip_reason = "bot blocked by user"
+                elif not _profile_daily_enabled(profile):
+                    skip_reason = "daily messages turned off"
+                elif not ob.profile_onboarding_complete(profile):
+                    skip_reason = "onboarding not finished"
+                if skip_reason:
+                    if at_slot:
+                        log.info(
+                            "daily_check skipped cid=%s: %s now=%s morning=%s evening=%s",
+                            cid, skip_reason, now_hm, morning_time, evening_time,
+                        )
+                    continue
+                if now_hm == morning_time and morning_sent:
+                    log.info(
+                        "daily_check skipped morning cid=%s: already marked sent today (%s)",
+                        cid, profile.get("last_morning_sent_date"),
+                    )
+                if now_hm == evening_time and evening_sent:
+                    log.info(
+                        "daily_check skipped evening cid=%s: already marked sent today (%s)",
+                        cid, profile.get("last_evening_sent_date"),
+                    )
 
                 profile = _ensure_cycle_start_date(
                     cid, profile, now_local.date()
