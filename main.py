@@ -9459,11 +9459,17 @@ async def _bootstrap_bot() -> None:
 
     scheduler.add_job(
         threads_publish_job,
-        IntervalTrigger(minutes=1, timezone=tz),
+        IntervalTrigger(
+            minutes=1,
+            timezone=tz,
+            start_date=datetime.now(tz).replace(second=45, microsecond=0),
+        ),
         id="threads_publish",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
+        # the loop is often a few seconds late; the default 1 s grace skipped every run
+        misfire_grace_time=50,
     )
     scheduler.start()
     log.info(
