@@ -295,7 +295,23 @@ def collect_all(kv_get, kv_set, http_get: Getter = _http_get) -> dict:
         kv_get, kv_set, http_get,
     )
     if th_token:
-        out["threads"] = {"token": th_info, **_safe(lambda: collect_threads(th_token, http_get))}
+        res = _safe(lambda: collect_threads(th_token, http_get))
+        env_token = os.getenv("THREADS_ACCESS_TOKEN", "").strip()
+        if (
+            "Invalid OAuth" in str(res.get("error") or "")
+            and th_info.get("source") == "refreshed"
+            and env_token
+            and env_token != th_token
+        ):
+            # The stored refreshed copy went bad while the Railway token may be fine:
+            # forget the copy (next run refreshes from Railway again) and retry.
+            log.warning("meta threads: stored token invalid, falling back to Railway token")
+            kv_set("meta_token_threads", {"env_hash": _hash(env_token)})
+            th_token = env_token
+            th_info = {"source": "railway", "refreshed_at": None, "expires_at": None,
+                       "configured": True, "fallback": "stored token was invalid"}
+            res = _safe(lambda: collect_threads(th_token, http_get))
+        out["threads"] = {"token": th_info, **res}
     else:
         out["threads"] = {"error": "THREADS_ACCESS_TOKEN не задан в Railway"}
     if th_token:

@@ -195,6 +195,26 @@ class MetaCollection(unittest.TestCase):
                                                  "th_refresh_token", store.get, setter, FakeMeta())
             self.assertEqual(tok, "NEW_B")
 
+    def test_bad_stored_token_falls_back_to_railway(self):
+        store = {"meta_token_threads": {"env_hash": meta_stats._hash("GOOD"), "token": "STALE",
+                                        "refreshed_at": datetime.now(timezone.utc).isoformat()}}
+        setter = lambda k, v: store.__setitem__(k, v) or True  # noqa: E731
+        base = FakeMeta()
+
+        def fake(url, params):
+            if params.get("access_token") == "STALE" and "refresh" not in url:
+                raise RuntimeError("HTTP 400: Invalid OAuth 2.0 Access Token")
+            return base(url, params)
+
+        with mock.patch.dict(os.environ, {"THREADS_ACCESS_TOKEN": "GOOD", "INSTAGRAM_ACCESS_TOKEN": ""}):
+            out = meta_stats.collect_all(store.get, setter, fake)
+        th = out["threads"]
+        self.assertNotIn("error", th)
+        self.assertEqual([p["id"] for p in th["posts"]], ["t1"])
+        self.assertEqual(th["token"]["source"], "railway")
+        self.assertNotIn("token", store["meta_token_threads"])
+        self.assertNotIn("GOOD", repr(out))
+
     def test_instagram_via_facebook_login(self):
         fake = FakeMeta()
         env = {"THREADS_ACCESS_TOKEN": "", "INSTAGRAM_ACCESS_TOKEN": "SUAT_SECRET",
