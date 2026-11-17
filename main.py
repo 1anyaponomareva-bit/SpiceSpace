@@ -41,6 +41,7 @@ import lava_pay
 import spend_budget
 import spice_stats
 import meta_stats
+import threads_publisher
 import onboarding_flow as ob
 import safety
 import memory_context
@@ -9439,6 +9440,31 @@ async def _bootstrap_bot() -> None:
         id="onboarding_reminder_job",
         replace_existing=True,
     )
+
+    async def threads_publish_job() -> None:
+        try:
+            def _tick() -> list[str]:
+                if not threads_publisher.load(db_store.kv_get):
+                    return []
+                token, _info = meta_stats.current_token(
+                    "threads", "THREADS_ACCESS_TOKEN", meta_stats.THREADS_REFRESH_URL,
+                    "th_refresh_token", db_store.kv_get, db_store.kv_set,
+                )
+                return threads_publisher.run_once(db_store.kv_get, db_store.kv_set, token)
+
+            for note in await asyncio.to_thread(_tick):
+                await notify_admin(bot, note)
+        except Exception as e:
+            log.warning("threads_publish_job failed: %s", str(e)[:200])
+
+    scheduler.add_job(
+        threads_publish_job,
+        IntervalTrigger(minutes=1, timezone=tz),
+        id="threads_publish",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
     log.info(
         "Scheduler started: daily_check (:00), task_reminders (:30), onboarding_reminder (15m) (%s)",
@@ -9694,6 +9720,41 @@ def _message_days_by_user(rows: list[dict]) -> dict[str, set]:
         if uid and d:
             out.setdefault(uid, set()).add(d)
     return out
+
+
+@app.get("/api/threads/queue")
+async def threads_queue_get(request: Request) -> dict:
+    """Owner-only: what is queued / posted in Threads (no tokens)."""
+    if not _stats_key_ok(request):
+        raise HTTPException(status_code=403, detail="forbidden")
+    items = await asyncio.to_thread(threads_publisher.load, db_store.kv_get)
+    return {"items": threads_publisher.summary(items)}
+
+
+@app.post("/api/threads/queue")
+async def threads_queue_put(request: Request) -> dict:
+    """Owner-only: the day's picked threads → scheduled into 3 pools.
+    Body: {"date": "YYYY-MM-DD", "items": [{tid, pool?, text, reply?, reply2?}], "cancel": false}"""
+    if not _stats_key_ok(request):
+        raise HTTPException(status_code=403, detail="forbidden")
+    try:
+        body = await request.json()
+        day = date.fromisoformat(str(body.get("date") or ""))
+    except Exception:
+        raise HTTPException(status_code=400, detail="need date YYYY-MM-DD and items")
+    if body.get("cancel"):
+        n = await asyncio.to_thread(threads_publisher.cancel_day, db_store.kv_get, db_store.kv_set, day)
+        return {"cancelled": n}
+    items = body.get("items")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=400, detail="items must be a non-empty list")
+    try:
+        queued = await asyncio.to_thread(
+            threads_publisher.put_day, db_store.kv_get, db_store.kv_set, day, items
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)[:200])
+    return {"items": threads_publisher.summary(queued)}
 
 
 @app.get("/api/stats/daily")
