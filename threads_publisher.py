@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -162,15 +163,36 @@ def cancel_day(kv_get, kv_set, day: date) -> int:
 
 
 # ------------------------------------------------------------------ Threads API
-def _publish_text(token: str, text: str, reply_to: str = "", post: Poster = http_post) -> str:
+def _publish_text(token: str, text: str, reply_to: str = "", post: Poster = http_post,
+                  get: Getter = http_get, sleep: Callable[[float], None] | None = None) -> str:
     params = {"media_type": "TEXT", "text": text, "access_token": token}
     if reply_to:
         params["reply_to_id"] = reply_to
-    container = post(f"{THREADS_BASE}/me/threads", params) or {}
+    try:
+        container = post(f"{THREADS_BASE}/me/threads", params) or {}
+    except RuntimeError as e:
+        raise RuntimeError(f"create: {e}") from None
     cid = str(container.get("id") or "")
     if not cid:
         raise RuntimeError("no container id")
-    res = post(f"{THREADS_BASE}/me/threads_publish", {"creation_id": cid, "access_token": token}) or {}
+    # Publishing a container that is not ready yet fails with
+    # "The requested resource does not exist" — wait until it is FINISHED.
+    sleep = sleep or time.sleep
+    for _ in range(10):
+        sleep(3)
+        try:
+            st = get(f"{THREADS_BASE}/{cid}", {"fields": "status,error_message", "access_token": token}) or {}
+        except Exception:
+            continue
+        status = str(st.get("status") or "")
+        if status == "FINISHED":
+            break
+        if status in ("ERROR", "EXPIRED"):
+            raise RuntimeError(f"container {status}: {str(st.get('error_message') or '')[:120]}")
+    try:
+        res = post(f"{THREADS_BASE}/me/threads_publish", {"creation_id": cid, "access_token": token}) or {}
+    except RuntimeError as e:
+        raise RuntimeError(f"publish: {e}") from None
     pid = str(res.get("id") or "")
     if not pid:
         raise RuntimeError("no post id")
@@ -193,7 +215,8 @@ def _reply_count(token: str, post_id: str, get: Getter = http_get) -> int:
 
 
 def run_once(kv_get, kv_set, token: str, now: datetime | None = None,
-             post: Poster = http_post, get: Getter = http_get) -> list[str]:
+             post: Poster = http_post, get: Getter = http_get,
+             sleep: Callable[[float], None] | None = None) -> list[str]:
     """One tick: post at most one due thread, then any chains that are due.
     Returns short human notes for the owner (no secrets)."""
     now = now or _now()
@@ -210,7 +233,7 @@ def run_once(kv_get, kv_set, token: str, now: datetime | None = None,
             it = due[0]
             it["attempts"] = int(it.get("attempts") or 0) + 1
             try:
-                it["post_id"] = _publish_text(token, it["text"], post=post)
+                it["post_id"] = _publish_text(token, it["text"], post=post, get=get, sleep=sleep)
                 it["status"] = "posted"
                 it["posted_at"] = _iso(now)
                 it.pop("error", None)
@@ -243,10 +266,10 @@ def run_once(kv_get, kv_set, token: str, now: datetime | None = None,
             if replies < CHAIN_MIN_REPLIES and now - posted < CHAIN_AFTER:
                 continue
             try:
-                r1 = _publish_text(token, it["reply"], reply_to=it["post_id"], post=post)
+                r1 = _publish_text(token, it["reply"], reply_to=it["post_id"], post=post, get=get, sleep=sleep)
                 it["reply_id"] = r1
                 if it.get("reply2"):
-                    it["reply2_id"] = _publish_text(token, it["reply2"], reply_to=r1, post=post)
+                    it["reply2_id"] = _publish_text(token, it["reply2"], reply_to=r1, post=post, get=get, sleep=sleep)
                 it["chain"] = "posted"
                 it["chain_at"] = _iso(now)
                 log.info("threads chain posted tid=%s replies=%s", it.get("tid"), replies)

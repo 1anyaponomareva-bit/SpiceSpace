@@ -5,6 +5,8 @@ from datetime import date, datetime, timedelta, timezone
 
 import threads_publisher as tp
 
+tp.time.sleep = lambda s: None  # no real waiting in tests
+
 
 class Store(dict):
     def get_(self, k):
@@ -32,6 +34,8 @@ class FakeThreads:
         raise AssertionError(url)
 
     def get(self, url, params):
+        if "status" in str(params.get("fields")):
+            return {"status": "FINISHED"}
         return {"data": [{"name": "replies", "values": [{"value": self.replies}]}]}
 
 
