@@ -195,6 +195,27 @@ class MetaCollection(unittest.TestCase):
                                                  "th_refresh_token", store.get, setter, FakeMeta())
             self.assertEqual(tok, "NEW_B")
 
+    def test_threads_paging_uses_cursor_not_next_link(self):
+        recent = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+0000")
+        seen = []
+
+        def fake(url, params):
+            if url.endswith("/insights"):
+                return {"data": [{"name": "views", "values": [{"value": 5}]}]}
+            if url.endswith("/threads_insights"):
+                return {"data": []}
+            assert url.endswith("/me/threads"), url  # never the paging.next link
+            seen.append(params.get("after"))
+            if not params.get("after"):
+                return {"data": [{"id": "a", "timestamp": recent}],
+                        "paging": {"cursors": {"after": "C1"}, "next": "https://bad/123/threads?access_token=x"}}
+            return {"data": [{"id": "b", "timestamp": recent}], "paging": {"cursors": {"after": "C2"}}}
+
+        out = meta_stats.collect_threads("TOK", fake)
+        self.assertEqual([p["id"] for p in out["posts"]], ["a", "b"])
+        self.assertEqual(seen, [None, "C1"])
+        self.assertEqual(out["posts"][1]["views"], 5)
+
     def test_bad_stored_token_falls_back_to_railway(self):
         store = {"meta_token_threads": {"env_hash": meta_stats._hash("GOOD"), "token": "STALE",
                                         "refreshed_at": datetime.now(timezone.utc).isoformat()}}

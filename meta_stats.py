@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -25,7 +26,7 @@ IG_REFRESH_URL = "https://graph.instagram.com/refresh_access_token"
 # Facebook Login for Business / system user token (does not expire, no refresh)
 FB_BASE = "https://graph.facebook.com/v23.0"
 REFRESH_EVERY = timedelta(days=7)
-POST_DAYS = 14
+POST_DAYS = 7
 
 THREADS_POST_METRICS = ("views", "likes", "replies", "reposts", "quotes")
 IG_REEL_METRICS = ("views", "reach", "likes", "comments", "saved", "shares")
@@ -155,26 +156,40 @@ def collect_threads(token: str, http_get: Getter = _http_get) -> dict:
             ts = _parse(item.get("timestamp") or "")
             if ts and ts < since:
                 continue
-            post = {
+            posts.append({
                 "id": item.get("id"),
                 "text": item.get("text") or "",
                 "date": item.get("timestamp"),
                 "permalink": item.get("permalink"),
                 "media_type": item.get("media_type"),
-            }
-            try:
-                ins = http_get(
-                    f"{THREADS_BASE}/{item.get('id')}/insights",
-                    {"metric": ",".join(THREADS_POST_METRICS), "access_token": token},
-                )
-                vals = _insight_values(ins)
-                for m in THREADS_POST_METRICS:
-                    post[m] = vals.get(m)
-            except Exception as e:
-                post["insights_error"] = str(e)[:200]
-            posts.append(post)
-        nxt = ((data or {}).get("paging") or {}).get("next")
-        url, params = (nxt, {}) if nxt else ("", None)
+            })
+        # Follow the "after" cursor with our own URL and token: the ready-made
+        # paging.next link points at another user id and Meta rejects it with
+        # "Invalid OAuth 2.0 Access Token" (stats broke once she had 50+ posts).
+        paging = (data or {}).get("paging") or {}
+        after = (paging.get("cursors") or {}).get("after")
+        if paging.get("next") and after and params:
+            params = {**params, "after": after}
+        else:
+            url = ""
+
+    # ~30 posts a day: one insights call each, in parallel so the nightly
+    # export stays well under its 5-minute timeout.
+    def _fill(post: dict) -> None:
+        try:
+            ins = http_get(
+                f"{THREADS_BASE}/{post['id']}/insights",
+                {"metric": ",".join(THREADS_POST_METRICS), "access_token": token},
+            )
+            vals = _insight_values(ins)
+            for m in THREADS_POST_METRICS:
+                post[m] = vals.get(m)
+        except Exception as e:
+            post["insights_error"] = str(e)[:200]
+
+    if posts:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(_fill, posts))
 
     account: dict[str, Any] = {}
     until = _now()
