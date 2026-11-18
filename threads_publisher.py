@@ -221,6 +221,13 @@ def _publish_text(token: str, text: str, reply_to: str = "", post: Poster = http
     return pid
 
 
+def permalink(token: str, post_id: str, get: Getter = http_get) -> str:
+    try:
+        return str((get(f"{THREADS_BASE}/{post_id}", {"fields": "permalink", "access_token": token}) or {}).get("permalink") or "")
+    except Exception:
+        return ""
+
+
 def _reply_count(token: str, post_id: str, get: Getter = http_get) -> int:
     data = get(f"{THREADS_BASE}/{post_id}/insights", {"metric": "replies", "access_token": token}) or {}
     for row in data.get("data") or []:

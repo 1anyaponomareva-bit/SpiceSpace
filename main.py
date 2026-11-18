@@ -9734,7 +9734,24 @@ async def threads_queue_get(request: Request) -> dict:
     if not _stats_key_ok(request):
         raise HTTPException(status_code=403, detail="forbidden")
     items = await asyncio.to_thread(threads_publisher.load, db_store.kv_get)
-    return {"items": threads_publisher.summary(items)}
+    out = threads_publisher.summary(items)
+    links_day = str(request.query_params.get("links") or "").strip()
+    if links_day:
+        # ?links=YYYY-MM-DD: public links to that day's threads and replies, so the
+        # owner can open them (permalinks only, never the token)
+        def _links() -> None:
+            token, _info = meta_stats.current_token(
+                "threads", "THREADS_ACCESS_TOKEN", meta_stats.THREADS_REFRESH_URL,
+                "th_refresh_token", db_store.kv_get, db_store.kv_set,
+            )
+            for x in out:
+                if x.get("day") != links_day:
+                    continue
+                for k in ("post_id", "reply_id", "reply2_id"):
+                    if x.get(k):
+                        x[k.replace("_id", "_link")] = threads_publisher.permalink(token, x[k])
+        await asyncio.to_thread(_links)
+    return {"items": out}
 
 
 @app.post("/api/threads/queue")
