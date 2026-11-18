@@ -313,6 +313,7 @@ def run_once(kv_get, kv_set, token: str, now: datetime | None = None,
 
 def summary(items: list[dict]) -> list[dict]:
     """What the owner may see: no tokens, short texts."""
-    keys = ("day", "tid", "pool", "at", "status", "posted_at", "post_id", "chain", "chain_at", "error", "chain_error")
+    keys = ("day", "tid", "pool", "at", "status", "posted_at", "post_id", "chain", "chain_at",
+            "reply_id", "reply2_id", "chain_not_before", "error", "chain_error")
     return [{k: x.get(k) for k in keys if x.get(k) is not None} | {"text": str(x.get("text") or "")[:80]}
             for x in items]
