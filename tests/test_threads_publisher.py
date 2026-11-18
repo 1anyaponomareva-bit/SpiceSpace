@@ -128,6 +128,24 @@ class RunTests(unittest.TestCase):
         self.assertEqual(sorted(x["tid"] for x in q), ["t01", "t02"])
         self.assertEqual([x["status"] for x in q if x["tid"] == "t01"], ["posted"])
 
+    def test_resend_adds_chain_to_posted_thread(self):
+        s = Store()
+        tp.put_day(s.get_, s.set_, DAY, items(2), now=EARLY)  # no chains
+        fake = FakeThreads()
+        t = datetime(2026, 11, 18, 7, 0, tzinfo=timezone.utc)
+        tp.run_once(s.get_, s.set_, "TOK", now=t, post=fake.post, get=fake.get)
+        tp.run_once(s.get_, s.set_, "TOK", now=t + timedelta(minutes=1), post=fake.post, get=fake.get)
+        later = t + timedelta(hours=5)
+        tp.put_day(s.get_, s.set_, DAY, items(2, reply="r", reply2="r2"), now=later)
+        self.assertEqual(len(tp.load(s.get_)), 2)  # nothing posted twice
+        tp.run_once(s.get_, s.set_, "TOK", now=later, post=fake.post, get=fake.get)
+        self.assertEqual(len(fake.posts), 4)  # one chain now
+        tp.run_once(s.get_, s.set_, "TOK", now=later + timedelta(minutes=1), post=fake.post, get=fake.get)
+        self.assertEqual(len(fake.posts), 4)  # second waits its slot
+        tp.run_once(s.get_, s.set_, "TOK", now=later + timedelta(minutes=7), post=fake.post, get=fake.get)
+        self.assertEqual(len(fake.posts), 6)
+        self.assertEqual({x.get("chain") for x in tp.load(s.get_)}, {"posted"})
+
     def test_failure_retries_then_reports(self):
         s = Store()
         tp.put_day(s.get_, s.set_, DAY, items(1), now=EARLY)

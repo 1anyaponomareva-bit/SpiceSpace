@@ -36,6 +36,7 @@ SPACING_MIN, SPACING_MAX = 15, 25  # minutes between threads in a pool
 CHAIN_MIN_REPLIES = 15
 CHAIN_AFTER = timedelta(hours=2)
 CHAIN_CHECK_AFTER = timedelta(minutes=20)
+CHAIN_BACKFILL_GAP = timedelta(minutes=6)
 MAX_ATTEMPTS = 3
 KEEP_DAYS = 4
 MAX_TEXT = 500
@@ -149,7 +150,21 @@ def put_day(kv_get, kv_set, day: date, picked: list[dict], now: datetime | None 
         # resending the day re-queues what failed or was cancelled; posted stays posted
         done = {x.get("tid") for x in items if x.get("day") == d and x.get("status") == "posted"}
         keep = [x for x in items if x.get("day") != d or x.get("status") == "posted"]
-        fresh = [x for x in schedule(day, picked, now) if x["tid"] not in done]
+        planned = schedule(day, picked, now)
+        # a thread that went out without a chain gets one if the resend carries it
+        # (Anya, 18.11.2026: under every thread - thread + reply + reply2);
+        # spread them out so links don't land all in one burst
+        by_tid = {x["tid"]: x for x in planned}
+        slot = now
+        for x in keep:
+            if x.get("day") != d or x.get("reply") or x.get("chain"):
+                continue
+            new = by_tid.get(x.get("tid"))
+            if new and new.get("reply"):
+                x["reply"], x["reply2"] = new["reply"], new.get("reply2", "")
+                x["chain_not_before"] = _iso(slot)
+                slot += CHAIN_BACKFILL_GAP
+        fresh = [x for x in planned if x["tid"] not in done]
         items = _prune(keep + fresh, now)
         if not kv_set(QUEUE_KEY, {"items": items}):
             raise RuntimeError("queue not saved (app_kv)")
@@ -260,6 +275,9 @@ def run_once(kv_get, kv_set, token: str, now: datetime | None = None,
                 continue
             posted = _parse(it.get("posted_at"))
             if not posted or now - posted < CHAIN_CHECK_AFTER:
+                continue
+            not_before = _parse(it.get("chain_not_before"))
+            if not_before and now < not_before:
                 continue
             last_check = _parse(it.get("chain_checked_at"))
             if last_check and now - last_check < timedelta(minutes=10) and now - posted < CHAIN_AFTER:
