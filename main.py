@@ -9613,12 +9613,24 @@ async def _shutdown_bot() -> None:
     log.info("Bot polling and scheduler stopped.")
 
 
+BOOTSTRAP_ATTEMPTS = 4
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    try:
-        await _bootstrap_bot()
-    except Exception:
-        log.exception("Bootstrap failed; FastAPI продолжит обслуживать /health")
+    # 20.11.2026: a Telegram timeout during startup left the bot silent for an hour
+    # while /health said ok. Retry a few times, then exit so Railway restarts us.
+    for attempt in range(1, BOOTSTRAP_ATTEMPTS + 1):
+        try:
+            await _bootstrap_bot()
+            break
+        except Exception:
+            log.exception("Bootstrap failed (attempt %s/%s)", attempt, BOOTSTRAP_ATTEMPTS)
+            await _shutdown_bot()
+            if attempt == BOOTSTRAP_ATTEMPTS:
+                log.error("Bot could not start; exiting so Railway restarts the service")
+                os._exit(1)
+            await asyncio.sleep(10 * attempt)
     try:
         yield
     finally:
