@@ -10031,10 +10031,14 @@ async def admin_stats(request: Request) -> dict:
     streak_3plus = sum(1 for u in users if int(u.get("streak") or 0) >= 3)
     new_today = sum(1 for u in users if u.get("created") == today)
     new_week = sum(1 for u in users if (u.get("created") or "") >= week_ago)
-    paying = sum(
-        1 for p in profiles.values()
+    # Paid = an active lava.top plan. Premium without it is free access given by hand
+    # (the focus group from May-June, until 31.12): it used to be counted as paying.
+    premium = [
+        p for p in profiles.values()
         if isinstance(p, dict) and _profile_is_premium_active(p, now.date())
-    )
+    ]
+    paying = sum(1 for p in premium if str(p.get("plan") or "").startswith("lava_"))
+    free_access = len(premium) - paying
 
     return {
         "stats": {
@@ -10048,6 +10052,7 @@ async def admin_stats(request: Request) -> dict:
             "new_today": new_today,
             "new_week": new_week,
             "paying": paying,
+            "free_access": free_access,
         },
         "users": users,
     }
