@@ -6141,7 +6141,7 @@ def _winback_plan(now: datetime, *, check_hour: bool = True) -> list[dict]:
         st = state.get(str(cid)) if isinstance(state.get(str(cid)), dict) else {}
         if not winback.due(kind, st, anchor, today):
             continue
-        n = int(st.get("n") or 0) if st.get("anchor") == anchor.isoformat() else 0
+        n = winback.step(kind, st, anchor, today)
         out.append({"cid": cid, "kind": kind, "n": n, "anchor": anchor, "today": today,
                     "lang": lang, "profile": prof})
     return out
@@ -9663,7 +9663,7 @@ async def _bootstrap_bot() -> None:
             for item in plan[:WINBACK_PER_RUN]:
                 if await _winback_send(bot, item, model_chain):
                     st = state.get(str(item["cid"])) if isinstance(state.get(str(item["cid"])), dict) else {}
-                    state[str(item["cid"])] = winback.after_send(st, item["anchor"], item["today"])
+                    state[str(item["cid"])] = winback.after_send(st, item["anchor"], item["today"], item["kind"])
                     await asyncio.to_thread(db_store.kv_set, winback.KV_KEY, state)
         except ClaudeBillingError as e:
             log.error("winback stopped: Claude billing error: %s", e)

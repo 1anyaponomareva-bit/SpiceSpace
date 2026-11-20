@@ -110,25 +110,43 @@ def anchor_day(profile: dict) -> date | None:
     return max(days) if days else None
 
 
+def _due_days(kind: str) -> list[int]:
+    """Days after the anchor for each numbered message, before the monthly ones."""
+    if kind == "onb":
+        return list(ONB_DAYS)
+    start = 15 if kind == "silent" else 0
+    return [start + 7 * (i + 1) for i in range(WEEKLY_TIMES)]
+
+
+def step(kind: str, state: dict, anchor: date, today: date) -> int:
+    """Number of the next message. Someone who went quiet long ago (or before this
+    started) gets only the message that fits today, not every one she missed."""
+    n = int(state.get("n") or 0) if state.get("anchor") == anchor.isoformat() else 0
+    days = (today - anchor).days
+    passed = sum(1 for d in _due_days(kind) if d <= days)
+    return max(n, passed - 1, 0)
+
+
 def due(kind: str, state: dict, anchor: date, today: date) -> bool:
     """Is the next message for this group due today? state is reset when anchor moves."""
-    n = int(state.get("n") or 0) if state.get("anchor") == anchor.isoformat() else 0
-    last = _d(state.get("last")) if n else None
+    same = state.get("anchor") == anchor.isoformat()
+    last = _d(state.get("last")) if same else None
     if last == today:
         return False
     days = (today - anchor).days
-    if kind == "onb":
-        if n < len(ONB_DAYS):
-            return days >= ONB_DAYS[n]
-        return last is None or (today - last).days >= MONTHLY
-    start = 15 if kind == "silent" else 0
-    if n < WEEKLY_TIMES:
-        return days >= start + 7 * (n + 1)
+    plan = _due_days(kind)
+    n = step(kind, state, anchor, today)
+    if n < len(plan):
+        if days < plan[n]:
+            return False
+        # never two in a row: at least the planned gap since the previous one
+        gap = plan[n] - plan[n - 1] if n else 0
+        return last is None or (today - last).days >= gap
     return last is None or (today - last).days >= MONTHLY
 
 
-def after_send(state: dict, anchor: date, today: date) -> dict:
-    n = int(state.get("n") or 0) if state.get("anchor") == anchor.isoformat() else 0
+def after_send(state: dict, anchor: date, today: date, kind: str = "onb") -> dict:
+    n = step(kind, state, anchor, today)
     return {"anchor": anchor.isoformat(), "n": n + 1, "last": today.isoformat()}
 
 

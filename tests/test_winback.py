@@ -22,7 +22,7 @@ class Schedule(unittest.TestCase):
         for d in range(0, last_day + 1):
             if winback.due(kind, st, A, day(d)):
                 sent.append(d)
-                st = winback.after_send(st, A, day(d))
+                st = winback.after_send(st, A, day(d), kind)
         return sent
 
     def test_onboarding_1_3_7_14_then_monthly(self):
@@ -39,6 +39,20 @@ class Schedule(unittest.TestCase):
         new_anchor = day(5)
         self.assertFalse(winback.due("onb", st, new_anchor, day(5)))
         self.assertTrue(winback.due("onb", st, new_anchor, day(6)))  # day 1 again
+
+    def test_quiet_long_ago_gets_one_fitting_message(self):
+        anchor = day(0)
+        today = day(40)
+        self.assertEqual(winback.step("onb", {}, anchor, today), 3)
+        self.assertTrue(winback.due("onb", {}, anchor, today))
+        st = winback.after_send({}, anchor, today, "onb")
+        for d in range(41, 70):
+            self.assertFalse(winback.due("onb", st, anchor, day(d)), d)
+        self.assertTrue(winback.due("onb", st, anchor, day(70)))
+        # lapsed 3 weeks ago: one message now, the next a week later, not tomorrow
+        st = winback.after_send({}, anchor, day(21), "lapsed")
+        self.assertFalse(winback.due("lapsed", st, anchor, day(22)))
+        self.assertTrue(winback.due("lapsed", st, anchor, day(28)))
 
     def test_not_twice_a_day(self):
         st = winback.after_send({}, A, day(7))
@@ -89,6 +103,6 @@ class Plan(unittest.TestCase):
         with mock.patch.object(main.db_store, "kv_get", return_value={}), \
              mock.patch.object(main.db_store, "load_all_profiles", return_value=profiles):
             plan = main._winback_plan(now)
-            self.assertEqual([(p["cid"], p["kind"], p["n"]) for p in plan], [(1, "onb", 0)])
+            self.assertEqual([(p["cid"], p["kind"], p["n"]) for p in plan], [(1, "onb", 1)])  # 3 days quiet: the day-3 message
             night = main._winback_plan(datetime(2026, 11, 21, 21, 0, tzinfo=timezone.utc))
             self.assertEqual(night, [])
