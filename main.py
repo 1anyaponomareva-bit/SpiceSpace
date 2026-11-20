@@ -9062,11 +9062,18 @@ async def _bootstrap_bot() -> None:
         if not chat_id or not telegram_app:
             return
         flag = f"notify_channel_ok_{chat_id}"
+        # Kept in app_kv, not in the owner's profile: her /reset full wiped the
+        # profile flag and the hello came again (21.11.2026).
         try:
+            sent = db_store.kv_get("notify_channel_hello") or {}
             admin_prof = db_store.get_profile(ADMIN_TELEGRAM_ID) or {}
         except Exception:
             return
-        if not admin_prof or db_store.cycle_flag_sent(admin_prof, flag):
+        if sent.get(str(chat_id)) or (admin_prof and db_store.cycle_flag_sent(admin_prof, flag)):
+            if not sent.get(str(chat_id)):
+                db_store.kv_set("notify_channel_hello", {**sent, str(chat_id): True})
+            return
+        if not admin_prof:
             return
         await asyncio.sleep(5)
         try:
@@ -9074,6 +9081,7 @@ async def _bootstrap_bot() -> None:
                 chat_id=int(chat_id),
                 text="✅ Уведомления подключены: сюда будут приходить новые люди, знакомства и оплаты.",
             )
+            db_store.kv_set("notify_channel_hello", {**sent, str(chat_id): True})
             db_store.mark_cycle_flag(ADMIN_TELEGRAM_ID, flag)
         except Exception as e:
             log.warning("notify channel hello failed: %s", e)
