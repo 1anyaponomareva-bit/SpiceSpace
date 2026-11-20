@@ -12,6 +12,8 @@ import time
 
 from telegram.ext import ExtBot
 
+from text_case import capitalize_sentences
+
 GAP_SECONDS = 1.5
 
 _next_slot: dict[object, float] = {}
@@ -37,9 +39,23 @@ async def wait_turn(chat_id: object, gap: float = GAP_SECONDS) -> None:
         _next_slot[chat_id] = now + gap
 
 
+def _cap_text(args: tuple, kwargs: dict, pos: int) -> tuple:
+    """Capitalize the text argument wherever it was passed (keyword or position)."""
+    if isinstance(kwargs.get("text"), str):
+        kwargs["text"] = capitalize_sentences(kwargs["text"])
+    elif len(args) > pos and isinstance(args[pos], str):
+        args = args[:pos] + (capitalize_sentences(args[pos]),) + args[pos + 1:]
+    return args
+
+
 class PacedBot(ExtBot):
     async def send_message(self, *args, **kwargs):
         chat_id = kwargs.get("chat_id", args[0] if args else None)
         if chat_id is not None:
             await wait_turn(chat_id)
+        args = _cap_text(args, kwargs, 1)
         return await super().send_message(*args, **kwargs)
+
+    async def edit_message_text(self, *args, **kwargs):
+        args = _cap_text(args, kwargs, 0)
+        return await super().edit_message_text(*args, **kwargs)

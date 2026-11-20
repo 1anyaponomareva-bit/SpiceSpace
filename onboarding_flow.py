@@ -175,32 +175,32 @@ OB_ASK_NAME = OB_NAME
 OB_ASK_MORNING_TIME = OB_MORNING_TIME
 OB_ASK_EVENING_TIME = OB_EVENING_TIME
 
-# Anya, 21.11.2026: the text is exactly this, no 18+ buttons under it; the 18+ and
-# "not a therapist" note comes after onboarding (AGE_NOTE_*).
+# Anya, 21.11.2026: this text, no 18+ buttons under it; the 18+ and "not a therapist"
+# note comes after onboarding (AGE_NOTE_*). Sentences start with a capital letter.
 GREETING_NEW_RU = (
-    "привет 👋 рада, что заглянула!\n"
-    "я Спейс, ИИ в тг. берём одну твою цель и идём к ней по маленькому шагу в день. "
-    "я сама пишу первой и напоминаю, тебе ничего не надо держать в голове.\n"
-    "первый шаг дам уже сегодня. как тебя зовут? 🤍"
+    "Привет 👋 рада, что заглянула!\n"
+    "Я Спейс, ИИ в тг. Берём одну твою цель и идём к ней по маленькому шагу в день. "
+    "Я сама пишу первой и напоминаю, тебе ничего не надо держать в голове.\n"
+    "Первый шаг дам уже сегодня. Как тебя зовут? 🤍"
 )
 GREETING_NEW_EN = (
-    "hi 👋 so glad you stopped by!\n"
-    "I'm Space, an AI in Telegram. we take one goal of yours and move toward it one small step a day. "
+    "Hi 👋 so glad you stopped by!\n"
+    "I'm Space, an AI in Telegram. We take one goal of yours and move toward it one small step a day. "
     "I message you first and remind you, so you don't have to keep anything in your head.\n"
-    "you'll get your first step today. what's your name? 🤍"
+    "You'll get your first step today. What's your name? 🤍"
 )
 AGE_NOTE_RU = (
-    "и ещё коротко, чтобы было честно 🤍 я ИИ, не психолог и не врач: со здоровьем и тяжёлыми "
+    "И ещё коротко, чтобы было честно 🤍 Я ИИ, не психолог и не врач: со здоровьем и тяжёлыми "
     "состояниями - к специалисту, а я рядом с целью и маленькими шагами. "
-    "и Спейс - для тех, кому уже есть 18. если тебе меньше, напиши мне об этом, ладно?"
+    "И Спейс - для тех, кому уже есть 18. Если тебе меньше, напиши мне об этом, ладно?"
 )
 AGE_NOTE_EN = (
-    "one more quick thing, to be honest with you 🤍 I'm an AI, not a therapist or a doctor: for health "
+    "One more quick thing, to be honest with you 🤍 I'm an AI, not a therapist or a doctor: for health "
     "or anything heavy, please see a specialist, and I'm here for your goal and the small steps. "
-    "and Space is for people who are 18+. if you're younger, just tell me, okay?"
+    "And Space is for people who are 18+. If you're younger, just tell me, okay?"
 )
-SOURCE_THANKS_RU = "спасибо 🤍"
-SOURCE_THANKS_EN = "thank you 🤍"
+SOURCE_THANKS_RU = "Спасибо 🤍"
+SOURCE_THANKS_EN = "Thank you 🤍"
 GREETING_NEW = GREETING_NEW_EN
 
 
