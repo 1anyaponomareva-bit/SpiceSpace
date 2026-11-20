@@ -6248,12 +6248,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return  # greeting is already on screen — don't send it twice
     ob.start_new_onboarding(onboarding, cid, lang)
     if is_new_user and not start_label:
-        # came without a ?start= label (e.g. TikTok, no profile link): ask after the 18+ button
-        onboarding[cid]["src_ask"] = True
+        # came without a ?start= label (e.g. TikTok, no profile link): ask after onboarding
+        onboarding[cid]["src_ask_end"] = True
     await _bot_reply(
         update.message,
         ob.get_greeting_new(lang),
-        reply_markup=ob.age_keyboard(lang),
     )
 
 
@@ -6321,7 +6320,6 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _bot_reply(
             update.message,
             ob.get_greeting_new(lang),
-            reply_markup=ob.age_keyboard(lang),
         )
         return
 
@@ -6746,7 +6744,10 @@ async def handle_source_callback(
             flags[spice_stats.SRC_PREFIX + label] = True
             cached["cycle_flags"] = flags
     if not ob.source_pending(st) or int(st.get("step") or 0) != ob.OB_NAME:
-        return  # stale button: the name question is already behind
+        # asked after onboarding (or a stale button): just thank her
+        if not isinstance(st, dict) or int(st.get("step") or 0) != ob.OB_NAME:
+            await context.bot.send_message(chat_id=cid, text=ob.age_reply_text("source_thanks", lang))
+        return
     onboarding[cid] = {**st, "src_ask": False}
     await context.bot.send_message(chat_id=cid, text=ob.age_reply_text("ask_name", lang))
 
@@ -6793,6 +6794,49 @@ async def handle_safety_callback(
     await context.bot.send_message(chat_id=cid, text=safety.keep_text(lang))
 
 
+def _age_blocked(prof: dict | None) -> bool:
+    flags = prof.get("cycle_flags") if isinstance(prof, dict) else None
+    return bool(isinstance(flags, dict) and flags.get("ob_age_no"))
+
+
+async def _handle_under_18(update: Update, cid: int, raw: str, prof: dict | None) -> bool:
+    """No 18+ buttons since 21.11.2026: someone who says she is under 18 gets the polite
+    stop (as the old "under 18" button did) and no more morning/evening messages.
+    "мне есть 18" afterwards lifts it, in case we misread."""
+    blocked = _age_blocked(prof)
+    if blocked and safety.detect_adult(raw):
+        flags = dict((prof or {}).get("cycle_flags") or {})
+        flags.pop("ob_age_no", None)
+        await asyncio.to_thread(
+            db_store.update_profile, cid, {"cycle_flags": flags, "daily_enabled": True}
+        )
+        if isinstance(prof, dict):
+            prof["cycle_flags"] = flags
+            prof["daily_enabled"] = True
+        _funnel_marked.get(cid, set()).discard("ob_age_no")
+        return False
+    if not blocked and not safety.detect_minor(raw):
+        return False
+    lang = _user_lang(prof if isinstance(prof, dict) else None, update)
+    if not blocked:
+        log.info("under 18 said cid=%s", cid)
+        st = onboarding.get(cid)
+        if isinstance(st, dict):
+            onboarding[cid] = {**st, "age_ok": False, "age_blocked": True, "src_ask": False}
+        try:
+            await asyncio.to_thread(db_store.mark_cycle_flag, cid, "ob_age_no")
+            await asyncio.to_thread(db_store.update_profile, cid, {"daily_enabled": False})
+        except Exception as e:
+            log.warning("under 18 flag not saved cid=%s: %s", cid, e)
+        if isinstance(prof, dict):
+            cf = dict(prof.get("cycle_flags") or {})
+            cf["ob_age_no"] = True
+            prof["cycle_flags"] = cf
+            prof["daily_enabled"] = False
+    await _bot_reply(update.message, ob.age_reply_text("under", lang))
+    return True
+
+
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_chat or not update.message or not update.message.text:
         return
@@ -6812,6 +6856,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if safety.detect_crisis(raw):
         # Before onboarding and chat: a crisis message gets vetted text, not a model reply.
         await _handle_crisis_message(update, cid, raw, prof_early)
+        return
+
+    if await _handle_under_18(update, cid, raw, prof_early):
         return
 
     if await _lava_handle_text(update, cid, raw, prof_early):
@@ -6925,7 +6972,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _bot_reply(
             update.message,
             ob.get_greeting_new(lang),
-            reply_markup=ob.age_keyboard(lang),
         )
         return
 
@@ -7277,7 +7323,6 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await _bot_reply(
                 msg,
                 ob.get_greeting_new(lang),
-                reply_markup=ob.age_keyboard(lang),
             )
             return
 

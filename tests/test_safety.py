@@ -100,19 +100,16 @@ class PromptTests(unittest.TestCase):
 
 
 class AgeStepTests(unittest.TestCase):
-    def test_new_onboarding_waits_for_age(self):
-        flows: dict = {}
-        ob.start_new_onboarding(flows, 7, "ru")
-        self.assertTrue(ob.age_pending(flows[7]))
-        self.assertFalse(ob.age_pending({"step": ob.OB_NAME}))  # older states keep going
-        self.assertIn("18", ob.get_greeting_new("ru"))
-        self.assertIn("не психолог", ob.get_greeting_new("ru"))
+    def test_old_state_waits_for_age_button(self):
+        # states started before 21.11.2026 still wait for the button they were shown
+        old = {"step": ob.OB_NAME, "age_ok": False}
+        self.assertTrue(ob.age_pending(old))
+        self.assertFalse(ob.age_pending({"step": ob.OB_NAME}))
         data = [b.callback_data for row in ob.age_keyboard("ru").inline_keyboard for b in row]
         self.assertEqual(data, ["ob_age:yes", "ob_age:no"])
 
     def test_text_before_age_button_reasks(self):
-        flows: dict = {}
-        ob.start_new_onboarding(flows, 8, "ru")
+        flows: dict = {8: {"step": ob.OB_NAME, "lang": "ru", "language_code": "ru", "age_ok": False}}
         sent = []
 
         class Msg:

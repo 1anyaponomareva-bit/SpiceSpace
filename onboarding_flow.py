@@ -175,18 +175,32 @@ OB_ASK_NAME = OB_NAME
 OB_ASK_MORNING_TIME = OB_MORNING_TIME
 OB_ASK_EVENING_TIME = OB_EVENING_TIME
 
+# Anya, 21.11.2026: the text is exactly this, no 18+ buttons under it; the 18+ and
+# "not a therapist" note comes after onboarding (AGE_NOTE_*).
 GREETING_NEW_RU = (
-    "Привет! 👋 Меня зовут Спейс. Я ИИ-помощница: помогаю поставить цель на 12 недель "
-    "и идти к ней по шагам.\n\n"
-    "Пара важных моментов: я не психолог и не врач, а пользоваться Спейс можно с 18 лет. "
-    "Подтверди, пожалуйста, возраст кнопкой ниже."
+    "привет 👋 рада, что заглянула!\n"
+    "я Спейс, ИИ в тг. берём одну твою цель и идём к ней по маленькому шагу в день. "
+    "я сама пишу первой и напоминаю, тебе ничего не надо держать в голове.\n"
+    "первый шаг дам уже сегодня. как тебя зовут? 🤍"
 )
 GREETING_NEW_EN = (
-    "Hey! 👋 I'm Space, an AI assistant: I help you set a 12-week goal "
-    "and move toward it step by step.\n\n"
-    "A couple of things: I'm not a therapist or a doctor, and Space is available from age 18. "
-    "Please confirm your age with a button below."
+    "hi 👋 so glad you stopped by!\n"
+    "I'm Space, an AI in Telegram. we take one goal of yours and move toward it one small step a day. "
+    "I message you first and remind you, so you don't have to keep anything in your head.\n"
+    "you'll get your first step today. what's your name? 🤍"
 )
+AGE_NOTE_RU = (
+    "и ещё коротко, чтобы было честно 🤍 я ИИ, не психолог и не врач: со здоровьем и тяжёлыми "
+    "состояниями - к специалисту, а я рядом с целью и маленькими шагами. "
+    "и Спейс - для тех, кому уже есть 18. если тебе меньше, напиши мне об этом, ладно?"
+)
+AGE_NOTE_EN = (
+    "one more quick thing, to be honest with you 🤍 I'm an AI, not a therapist or a doctor: for health "
+    "or anything heavy, please see a specialist, and I'm here for your goal and the small steps. "
+    "and Space is for people who are 18+. if you're younger, just tell me, okay?"
+)
+SOURCE_THANKS_RU = "спасибо 🤍"
+SOURCE_THANKS_EN = "thank you 🤍"
 GREETING_NEW = GREETING_NEW_EN
 
 
@@ -219,6 +233,8 @@ def age_reply_text(kind: str, lang: str = "en") -> str:
         "ask_name": AGE_ASK_NAME_RU if ru else AGE_ASK_NAME_EN,
         "under": AGE_UNDER_RU if ru else AGE_UNDER_EN,
         "press": AGE_PRESS_RU if ru else AGE_PRESS_EN,
+        "note": AGE_NOTE_RU if ru else AGE_NOTE_EN,
+        "source_thanks": SOURCE_THANKS_RU if ru else SOURCE_THANKS_EN,
     }[kind]
 
 
@@ -3282,7 +3298,9 @@ def start_new_onboarding(
         "language_code": lc,
         "last_activity_at": datetime.now(),
         "reminder_sent": False,
-        "age_ok": False,
+        # no 18+ buttons since 21.11.2026: the age note comes after onboarding
+        "age_ok": True,
+        "age_note": True,
     }
 
 
@@ -3446,6 +3464,14 @@ async def _complete_onboarding(
         ),
         reply_markup=progress_kb,
     )
+
+    if st.get("age_note"):
+        await asyncio.sleep(1)
+        await msg.reply_text(age_reply_text("note", lang))
+    if st.get("src_ask_end"):
+        # came without a ?start= label: where did she hear about us (was before the name)
+        await asyncio.sleep(1)
+        await msg.reply_text(source_question(lang), reply_markup=source_keyboard(lang))
 
     done_fn = context.bot_data.get("notify_onboarding_done")
     if callable(done_fn) and new_trial:

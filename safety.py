@@ -76,6 +76,36 @@ def detect_crisis(text: str) -> bool:
     return bool(_RU_RE.search(t) or _EN_RE.search(t))
 
 
+# Under 18 said in a message (no 18+ buttons since 21.11.2026). Only first person,
+# so "дочке 15" or "сын в 9 классе" do not count.
+_UNITS = r"(?!\s*(?:минут|мин\b|кг|кило|раз|час|дн|недел|месяц|тыс|к\b|%|руб|\$|шаг|страниц|km|km\b))"
+_MINOR_PATTERNS = [
+    re.compile(r"\bмне\s+(?:всего\s+|только\s+|уже\s+)?(?:1[0-7]|[5-9])\b" + _UNITS),
+    re.compile(r"\bмне\s+(?:ещё\s+|еще\s+|пока\s+)?(?:нет|меньше)\s+18"),
+    re.compile(r"\bя\s+(?:ещё\s+|еще\s+)?(?:школьниц|школьник|несовершеннолетн)"),
+    re.compile(r"\b(?:я|учусь)\s+в\s+(?:[1-9]|1[01])\s*-?(?:м|ом)?\s*класс"),
+    re.compile(r"\bi'?\s*a?m\s+(?:only\s+|just\s+)?(?:1[0-7])\b(?!\s*(?:min|kg|lb|hour|day|week|month|%|k\b))"),
+    re.compile(r"\bi'?\s*a?m\s+(?:under|not)\s+18"),
+    re.compile(r"\bi'?\s*a?m\s+in\s+(?:[6-9]|1[0-2])(?:th)?\s+grade"),
+]
+_ADULT_PATTERNS = [
+    re.compile(r"\bмне\s+(?:уже\s+)?(?:есть\s+)?(?:1[89]|[2-9]\d)\b"),
+    re.compile(r"\bмне\s+есть\s+18"),
+    re.compile(r"\bi'?\s*a?m\s+(?:over\s+)?(?:1[89]|[2-9]\d)\b"),
+    re.compile(r"\b18\s*\+"),
+]
+
+
+def detect_minor(text: str) -> bool:
+    t = _norm(text)
+    return any(p.search(t) for p in _MINOR_PATTERNS)
+
+
+def detect_adult(text: str) -> bool:
+    t = _norm(text)
+    return any(p.search(t) for p in _ADULT_PATTERNS)
+
+
 def _is_ru(lang: str) -> bool:
     return str(lang or "en").lower().startswith("ru")
 
