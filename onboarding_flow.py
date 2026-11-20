@@ -1236,6 +1236,10 @@ VISION_OPTIONS = (
     ("biz", "Своё дело", "My own business"),
     ("other", "Другое ✍️", "Something else ✍️"),
 )
+NAME_AGAIN_RU = "Как мне тебя называть? Напиши просто имя 🤍"
+NAME_AGAIN_EN = "What should I call you? Just your name 🤍"
+_CYRILLIC_RE = re.compile(r"[а-яё]", re.I)
+_NO_NAME_RE = re.compile(r"^none$|no name|not found|unknown|нет имени|имя не|не найден|не указ", re.I)
 VISION_OTHER_RU = "Напиши своими словами, что хочется поменять или запустить 🤍 Можно коротко."
 VISION_OTHER_EN = "Write it in your own words, what you want to change or start 🤍 Short is fine."
 
@@ -2138,15 +2142,17 @@ async def _extract_name(
                     feature="onb_extract_name",
                 ).strip()
                 if text:
-                    name = text.strip().strip('"').strip("'")[:120]
+                    name = text.strip().strip('"').strip("'").strip(".")[:120]
+                    if _NO_NAME_RE.search(name) or len(name.split()) > 3:
+                        return ""  # the model said there is no name (21.11.2026: "No name found")
                     if name:
                         return name
             except Exception as e:
                 log.warning("extract_name %s: %s", mid, e)
         parts = [p for p in raw.split() if p.strip()]
-        if parts:
+        if parts and not raw.rstrip().endswith("?"):
             return parts[-1][:120]
-        return _friend_word(lang)
+        return ""
 
     return await asyncio.to_thread(call)
 
@@ -3654,6 +3660,17 @@ async def handle_onboarding_turn(
         st["lang"] = lc
         st["language_code"] = lc
     lang = _ob_lang(st, user_profiles.get(str(cid)))
+    if not _is_ru(lang) and _CYRILLIC_RE.search(raw or ""):
+        # she writes in Russian: speak Russian from now on (21.11.2026: the owner got
+        # an English greeting and the bot kept English while she wrote in Russian)
+        lang = "ru"
+        prof_lang = user_profiles.get(str(cid))
+        if isinstance(prof_lang, dict) and prof_lang:
+            prof_lang["language_code"] = "ru"
+            try:
+                db.update_profile(cid, {"language_code": "ru"})
+            except Exception as e:
+                log.warning("language switch not saved cid=%s: %s", cid, e)
     st["lang"] = lang
     st["language_code"] = lang
     touch_onboarding_activity(st)
@@ -3859,9 +3876,14 @@ async def handle_onboarding_turn(
 
     if step == OB_NAME:
         async with typing_while(context.bot, cid):
-            name = (
-                await _extract_name(raw, model_names, lang=lang)
-            ).strip()[:120] or _friend_word(lang)
+            name = (await _extract_name(raw, model_names, lang=lang)).strip()[:120]
+        if not name and int(st.get("name_asks") or 0) < 1:
+            # "Что?" or a question instead of a name: ask once more, simply
+            st["name_asks"] = int(st.get("name_asks") or 0) + 1
+            await msg.reply_text(NAME_AGAIN_RU if _is_ru(lang) else NAME_AGAIN_EN)
+            return
+        name = name or _friend_word(lang)
+        async with typing_while(context.bot, cid):
             opening, first_q = await message_vision_async(
                 name,
                 lang,

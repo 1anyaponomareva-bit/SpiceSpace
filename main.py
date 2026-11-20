@@ -1309,6 +1309,10 @@ def _mark_funnel(cid: int, st: dict) -> None:
     """Remember how far onboarding got, so daily stats show where people stop."""
     done = _funnel_marked.setdefault(cid, set())
     cached = user_profiles.get(str(cid))
+    if not isinstance(cached, dict) or not cached:
+        # no profile (right after /reset full): a flag write would create one with
+        # language_code "en" by default and the next greeting would come in English
+        return
     flags = cached.get("cycle_flags") if isinstance(cached, dict) else None
     for key in _funnel_flags(st):
         if key in done or (isinstance(flags, dict) and flags.get(key)):

@@ -247,7 +247,8 @@ NAME_EXTRACT_PROMPT = """Пользователь написал как его �
 "меня зовут катя", "я аня", "меня аня", "anna", "привет я маша", "катерина"
 
 Верни только имя в том виде как написал пользователь, без изменений кроме лишних слов.
-Только имя, без кавычек и пояснений."""
+Только имя, без кавычек и пояснений.
+Если имени в сообщении нет (вопрос, «что?», приветствие без имени) — верни ровно NONE."""
 
 
 GOAL_DIALOG_SYSTEM = """You are Space, a friend in Telegram. She is setting a goal for the next 12 weeks. Reply in her language, plain text, no markdown, no coach-speak. Space is a woman: in Russian use feminine verb forms.
