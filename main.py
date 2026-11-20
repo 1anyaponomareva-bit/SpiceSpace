@@ -9667,6 +9667,44 @@ def _is_admin_request(request: Request) -> bool:
     return False
 
 
+@app.get("/api/admin/claude_balance")
+async def admin_claude_balance(request: Request) -> dict:
+    if not _is_admin_request(request):
+        raise HTTPException(status_code=403, detail="forbidden")
+    import claude_balance
+
+    now = datetime.now(timezone.utc)
+    stored = await asyncio.to_thread(db_store.kv_get, claude_balance.KV_KEY)
+    since = now - timedelta(days=8)
+    at = claude_balance.parse_ts((stored or {}).get("at"))
+    if at is not None and at < since:
+        since = at
+    rows = await asyncio.to_thread(db_store.claude_usage_rows_since, since.isoformat(timespec="seconds"))
+    out = claude_balance.summarize(rows or [], stored, now, spice_stats._tz())
+    out["usage_readable"] = rows is not None
+    return out
+
+
+@app.post("/api/admin/claude_balance")
+async def admin_claude_balance_set(request: Request) -> dict:
+    """The owner types the balance she sees in the Anthropic console."""
+    if not _is_admin_request(request):
+        raise HTTPException(status_code=403, detail="forbidden")
+    import claude_balance
+
+    try:
+        body = await request.json()
+        value = round(float(str(body.get("balance_usd")).replace(",", ".")), 2)
+    except Exception:
+        raise HTTPException(status_code=400, detail="balance_usd")
+    if not (0 <= value <= 100000):
+        raise HTTPException(status_code=400, detail="balance_usd")
+    rec = {"balance_usd": value, "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    if not await asyncio.to_thread(db_store.kv_set, claude_balance.KV_KEY, rec):
+        raise HTTPException(status_code=500, detail="not saved")
+    return {"ok": True, **rec}
+
+
 @app.get("/api/admin/stats")
 async def admin_stats(request: Request) -> dict:
     if not _is_admin_request(request):

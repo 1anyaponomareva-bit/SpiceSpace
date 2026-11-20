@@ -70,6 +70,18 @@
     .ok { color: #9AE66E; }
     .warn { color: #FFD56A; }
     .bad { color: #FF7E7E; }
+    .claude { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 20px; }
+    .claude.alert { border-color: #FF7E7E; }
+    .claude h2 { margin: 0 0 10px; font-size: 15px; color: var(--muted); font-weight: 600; }
+    .claude .row { display: flex; flex-wrap: wrap; gap: 20px; align-items: baseline; }
+    .claude .big { font-size: 34px; font-weight: 800; color: var(--accent); }
+    .claude .big.bad { color: #FF7E7E; }
+    .claude .small { font-size: 13px; color: var(--muted); }
+    .claude .small b { color: var(--text); font-size: 18px; }
+    .claude .warnline { color: #FF7E7E; font-weight: 700; margin-top: 10px; }
+    .claude form { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
+    .claude input { width: 120px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: #1A1A1A; color: var(--text); font: inherit; }
+    .claude button { padding: 8px 12px; border-radius: 8px; border: 0; background: var(--accent); color: #1A1A1A; font: inherit; font-weight: 700; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -77,6 +89,22 @@
   <p class="muted" id="meta">Loading...</p>
   <div id="denied" style="display:none;">Access denied</div>
   <div id="app" style="display:none;">
+    <div class="claude" id="claude">
+      <h2>Claude API: деньги на счёте</h2>
+      <div class="row">
+        <div><div class="big" id="cl-left">—</div><div class="small" id="cl-left-note"></div></div>
+        <div class="small">сегодня<br><b id="cl-today">—</b></div>
+        <div class="small">за 7 дней<br><b id="cl-week">—</b></div>
+        <div class="small">хватит на<br><b id="cl-days">—</b></div>
+      </div>
+      <div class="warnline" id="cl-warn" style="display:none;"></div>
+      <form id="cl-form">
+        <span class="small">Сколько сейчас в консоли Anthropic (Billing), $</span>
+        <input id="cl-input" inputmode="decimal" placeholder="например 25.40" />
+        <button type="submit">Сохранить</button>
+        <span class="small" id="cl-saved"></span>
+      </form>
+    </div>
     <div class="cards" id="cards"></div>
     <div class="table-wrap">
       <table>
@@ -127,6 +155,63 @@
         if (u.active_week) return '<span class="status warn">🟡 this week</span>';
         return '<span class="status bad">🔴 churned</span>';
       }
+
+      function money(v) { return v == null ? "—" : "$" + Number(v).toFixed(2); }
+      function authHeaders() {
+        const h = {};
+        if (adminKey) h["X-Admin-Key"] = adminKey;
+        if (tgInit) h["Authorization"] = `tma ${tgInit}`;
+        return h;
+      }
+      function renderClaude(c) {
+        const left = document.getElementById("cl-left");
+        document.getElementById("cl-today").textContent = money(c.spent_today_usd);
+        document.getElementById("cl-week").textContent = money(c.spent_7d_usd);
+        document.getElementById("cl-days").textContent = c.days_left == null ? "—" : `${c.days_left} дн.`;
+        const note = document.getElementById("cl-left-note");
+        if (c.balance_usd == null) {
+          left.textContent = "?";
+          note.textContent = "впиши остаток из консоли ниже — дальше бот будет вычитать расходы сам";
+        } else {
+          left.textContent = "≈ " + money(c.balance_usd);
+          const d = new Date(c.balance_set_at);
+          note.textContent = `примерно: ${money(c.balance_set_usd)} на ${d.toLocaleDateString()} минус ${money(c.spent_since_set_usd)} расходов бота`;
+        }
+        left.classList.toggle("bad", !!c.warn);
+        document.getElementById("claude").classList.toggle("alert", !!c.warn);
+        const w = document.getElementById("cl-warn");
+        if (c.warn) {
+          w.textContent = c.balance_usd != null && c.balance_usd <= 0
+            ? "Деньги на Claude, похоже, закончились — пополни счёт, иначе бот перестанет отвечать"
+            : `Денег осталось меньше чем на 7 дней (~${money(c.per_day_usd)} в день) — пора пополнить`;
+          w.style.display = "block";
+        } else {
+          w.style.display = "none";
+        }
+      }
+      async function loadClaude() {
+        try {
+          const r = await fetch("/api/admin/claude_balance", { cache: "no-store", headers: authHeaders() });
+          if (r.ok) renderClaude(await r.json());
+        } catch (e) { /* the rest of the panel still works */ }
+      }
+      document.getElementById("cl-form").addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const saved = document.getElementById("cl-saved");
+        const raw = document.getElementById("cl-input").value.trim().replace(",", ".");
+        if (!raw || isNaN(Number(raw))) { saved.textContent = "введи число"; return; }
+        try {
+          const r = await fetch("/api/admin/claude_balance", {
+            method: "POST",
+            headers: { ...authHeaders(), "Content-Type": "application/json" },
+            body: JSON.stringify({ balance_usd: Number(raw) }),
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          saved.textContent = "сохранено";
+          document.getElementById("cl-input").value = "";
+          loadClaude();
+        } catch (e) { saved.textContent = "не сохранилось: " + (e.message || e); }
+      });
 
       function renderStats(stats) {
         const items = [
@@ -181,7 +266,8 @@
       }
 
       loadStats();
-      setInterval(loadStats, 60000);
+      loadClaude();
+      setInterval(() => { loadStats(); loadClaude(); }, 60000);
     })();
   </script>
 </body>

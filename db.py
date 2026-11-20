@@ -1552,6 +1552,30 @@ def claude_usage_spent_since(user_id: int | str, since_iso: str) -> float | None
 
 
 # ---------------------------------------------------------------- owner dashboard stats
+def claude_usage_rows_since(since_iso: str) -> list[dict] | None:
+    """All claude_usage rows (cost_usd, created_at) since the moment; None if unreadable."""
+    from urllib.parse import quote
+
+    if not _use_supabase:
+        out = []
+        try:
+            with CLAUDE_USAGE_PATH.open(encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        r = json.loads(line)
+                    except ValueError:
+                        continue
+                    if str(r.get("created_at") or "") >= since_iso:
+                        out.append(r)
+        except FileNotFoundError:
+            return []
+        return out
+    return _paged(
+        f"claude_usage?created_at=gte.{quote(since_iso)}&select=cost_usd,created_at&order=created_at.asc",
+        max_rows=200000,
+    )
+
+
 def _paged(path: str, page: int = 1000, max_rows: int = 50000) -> list[dict] | None:
     """GET all rows of a PostgREST query page by page. None if the table is unreachable."""
     if not _use_supabase:
