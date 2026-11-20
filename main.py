@@ -1269,6 +1269,60 @@ def _compact_flow_value(value: object) -> object:
     return value
 
 
+_ONBOARDING_STEPS = {
+    ob.OB_NAME, ob.OB_VISION, ob.OB_VISION_DIALOG, ob.OB_GOAL_DIALOG,
+    ob.OB_WEEKLY_TACTICS, ob.OB_MORNING_TIME, ob.OB_EVENING_TIME, ob.OB_DONE,
+}
+_funnel_marked: dict[int, set[str]] = {}
+
+
+def _funnel_flags(st: dict) -> list[str]:
+    """Onboarding steps this state shows as done, as cycle_flags keys (see spice_stats.FUNNEL)."""
+    try:
+        step = int(st.get("step") or 0)
+    except (TypeError, ValueError):
+        return []
+    if step not in _ONBOARDING_STEPS:
+        return []
+    out = []
+    if st.get("age_ok"):
+        out.append("ob_age")
+    if st.get("age_blocked"):
+        out.append("ob_age_no")
+    if str(st.get("name") or "").strip():
+        out.append("ob_name")
+    if step >= ob.OB_VISION_DIALOG:
+        out.append("ob_goal_talk")
+    if str(st.get("main_goal") or "").strip():
+        out.append("ob_main_goal")
+    if str(st.get("weekly_goal") or "").strip() and step >= ob.OB_WEEKLY_TACTICS:
+        out.append("ob_weekly")
+    if step >= ob.OB_EVENING_TIME:
+        out.append("ob_time")
+    return out
+
+
+def _mark_funnel(cid: int, st: dict) -> None:
+    """Remember how far onboarding got, so daily stats show where people stop."""
+    done = _funnel_marked.setdefault(cid, set())
+    cached = user_profiles.get(str(cid))
+    flags = cached.get("cycle_flags") if isinstance(cached, dict) else None
+    for key in _funnel_flags(st):
+        if key in done or (isinstance(flags, dict) and flags.get(key)):
+            done.add(key)
+            continue
+        try:
+            db_store.mark_cycle_flag(cid, key)
+        except Exception as e:
+            log.warning("funnel flag not saved cid=%s %s: %s", cid, key, e)
+            continue
+        done.add(key)
+        if isinstance(cached, dict):
+            cf = dict(cached.get("cycle_flags") or {})
+            cf[key] = True
+            cached["cycle_flags"] = cf
+
+
 def _persist_cid_flow(cid: int) -> None:
     if _flow_save_muted:
         return
@@ -1277,6 +1331,7 @@ def _persist_cid_flow(cid: int) -> None:
         st = onboarding.get(cid)
         if isinstance(st, dict):
             blob["onboarding"] = _compact_flow_value(st)
+            _mark_funnel(cid, st)
         morning = pending_morning.get(cid)
         if isinstance(morning, dict):
             blob["pending_morning"] = _compact_flow_value(morning)

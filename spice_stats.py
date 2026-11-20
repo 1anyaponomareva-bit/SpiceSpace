@@ -79,6 +79,48 @@ def _onboarded(p: dict) -> bool:
     return bool(str(p.get("name") or "").strip() and str(p.get("main_goal") or "").strip())
 
 
+# onboarding funnel, in order. The bot marks each step in cycle_flags as "ob_<step>"
+# (from 21.11.2026); older profiles are read from the fields the step leaves behind.
+FUNNEL = ("start", "age", "name", "goal_talk", "main_goal", "weekly", "time")
+
+
+def _flag(p: dict, key: str) -> bool:
+    flags = p.get("cycle_flags")
+    return bool((isinstance(flags, dict) and flags.get(key)) or p.get(key))
+
+
+def funnel_reached(p: dict) -> str:
+    """The last onboarding step this person got through ("start" .. "time")."""
+    has = {
+        "age": _flag(p, "ob_age"),
+        "name": _flag(p, "ob_name"),
+        "goal_talk": _flag(p, "ob_goal_talk"),
+        "main_goal": _flag(p, "ob_main_goal") or bool(str(p.get("main_goal") or "").strip()),
+        "weekly": _flag(p, "ob_weekly") or bool(str(p.get("weekly_goal") or "").strip()),
+        "time": _flag(p, "ob_time") or bool(str(p.get("cycle_start_date") or "").strip()),
+    }
+    last = "start"
+    for step in FUNNEL[1:]:
+        if has[step]:
+            last = step  # a later step implies the earlier ones
+    return last
+
+
+def _add_funnel(b: dict, p: dict) -> None:
+    last = funnel_reached(p)
+    idx = FUNNEL.index(last)
+    for step in FUNNEL[: idx + 1]:
+        b["f_" + step] += 1
+    if last != "time":
+        b["stuck_" + last] += 1
+    if _flag(p, "ob_age_no"):
+        b["age_under"] += 1
+    if str(p.get("language_code") or "").lower().startswith("ru"):
+        b["lang_ru"] += 1
+    else:
+        b["lang_other"] += 1
+
+
 def _plan_of(row: dict) -> str:
     plan = str(row.get("plan") or "").strip().lower()
     if plan in ("1m", "3m"):
@@ -129,6 +171,11 @@ def _empty_counts() -> dict:
         "renewals": 0,
         "revenue_rub": 0.0,
         "revenue_usd": 0.0,
+        **{"f_" + s: 0 for s in FUNNEL},
+        **{"stuck_" + s: 0 for s in FUNNEL[:-1]},
+        "age_under": 0,
+        "lang_ru": 0,
+        "lang_other": 0,
     }
 
 
@@ -172,6 +219,7 @@ def build_spice_stats(
         if _onboarded(p):
             b["onboarded"] += 1
             b["trial_started"] += 1
+        _add_funnel(b, p)
 
     for uid, days in (message_days or {}).items():
         uid = str(uid)
@@ -215,6 +263,7 @@ def build_spice_stats(
         if _onboarded(p):
             c["onboarded"] += 1
             c["trial_started"] += 1
+        _add_funnel(c, p)
         days = message_days.get(uid) or set()
         if start + timedelta(days=1) in days:
             c["active_d2"] += 1
@@ -281,6 +330,13 @@ def build_spice_stats(
             "cohorts": "люди, пришедшие в start_day, и что с ними стало к сегодня; "
             "null — день ещё не наступил",
             "trial_started": "пробный период начинается по окончании знакомства, поэтому равен onboarded",
+            "funnel": "f_start..f_time - сколько людей дошли до шага знакомства: старт, «мне есть 18», "
+            "имя, начала разговор о цели, главная цель, цель недели, время утра (знакомство закончено). "
+            "stuck_<шаг> - на этом шаге остановились и дальше не пошли. Шаги «18+», имя и разговор о цели "
+            "бот отмечает с 21.11.2026, у пришедших раньше они видны, только если человек прошёл дальше. "
+            "onboarded - старое поле (имя и главная цель), f_time - полностью закончили знакомство",
+            "age_under": "нажали «мне нет 18»",
+            "lang_ru / lang_other": "язык телеграма русский / любой другой или неизвестен (знакомство тогда идёт на английском)",
             "label_none": "люди без метки ?start= (в том числе все, кто пришёл до 13.11.2026)",
         },
     }

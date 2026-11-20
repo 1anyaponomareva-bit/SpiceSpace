@@ -298,3 +298,32 @@ class Wiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Funnel(unittest.TestCase):
+    def test_reached_uses_flags_and_old_fields(self):
+        f = spice_stats.funnel_reached
+        self.assertEqual(f({}), "start")
+        self.assertEqual(f({"cycle_flags": {"ob_age": True}}), "age")
+        self.assertEqual(f({"cycle_flags": {"ob_age": True, "ob_name": True, "ob_goal_talk": True}}), "goal_talk")
+        # old profile without step flags: later fields imply earlier steps
+        self.assertEqual(f({"name": "Аня", "main_goal": "минус 5 кг"}), "main_goal")
+        self.assertEqual(f({"main_goal": "x", "weekly_goal": "y", "cycle_start_date": "2026-11-20"}), "time")
+
+    def test_counts_by_label_and_cohort(self):
+        profiles = {
+            "1": {"created_at": ts(D), "cycle_flags": {"src_th_a": True, "ob_age": True}, "language_code": "ru"},
+            "2": {"created_at": ts(D), "cycle_flags": {"src_th_a": True}, "language_code": "en"},
+            "3": {"created_at": ts(D), "cycle_flags": {"src_th_a": True, "ob_age_no": True}},
+            "4": {"created_at": ts(D), "cycle_flags": {"src_th_a": True}, "language_code": "ru-RU",
+                  "name": "A", "main_goal": "g", "weekly_goal": "w", "cycle_start_date": "2026-11-20"},
+        }
+        out = spice_stats.build_spice_stats(profiles, {}, [], D)
+        b = out["day_by_label"]["th_a"]
+        self.assertEqual((b["starts"], b["onboarded"]), (4, 1))  # old fields unchanged
+        self.assertEqual([b["f_" + s] for s in spice_stats.FUNNEL], [4, 2, 1, 1, 1, 1, 1])
+        self.assertEqual((b["stuck_start"], b["stuck_age"]), (2, 1))
+        self.assertEqual((b["age_under"], b["lang_ru"], b["lang_other"]), (1, 2, 2))
+        self.assertEqual(out["day_totals"]["f_time"], 1)
+        c = out["cohorts"][0]
+        self.assertEqual((c["f_start"], c["f_age"], c["stuck_start"]), (4, 2, 2))
