@@ -140,6 +140,9 @@ TRIAL_DAYS = 4
 # their free days counted from it. Empty = paywall off. Needs lava configured too.
 PAYMENTS_START_DATE = os.getenv("PAYMENTS_START_DATE", "2026-11-13").strip()[:10]
 SUBSCRIPTIONS_ENABLED = bool(PAYMENTS_START_DATE) and bool(os.getenv("LAVA_API_KEY", "").strip())
+# win-back messages (winback.py); WINBACK=0 switches them off without a deploy
+WINBACK_ENABLED = os.getenv("WINBACK", "1").strip() != "0"
+WINBACK_PER_RUN = 25
 
 SUBSCRIPTION_PLANS = {
     "4weeks": {
@@ -6100,6 +6103,83 @@ async def handle_channel_post_id(update: Update, context: ContextTypes.DEFAULT_T
         log.info("channel post chat_id=%s title=%s", post.chat.id, post.chat.title)
 
 
+def _winback_plan(now: datetime, *, check_hour: bool = True) -> list[dict]:
+    """Who gets a win-back message now (see winback.py). Reads profiles, flows and app_kv."""
+    import winback
+
+    state = db_store.kv_get(winback.KV_KEY) or {}
+    out: list[dict] = []
+    for uid, prof in (db_store.load_all_profiles() or {}).items():
+        if not isinstance(prof, dict):
+            continue
+        try:
+            cid = int(uid)
+        except (TypeError, ValueError):
+            continue
+        if profile_is_blocked(prof) or _age_blocked(prof):
+            continue
+        reeng = _parse_reengagement_sent(prof.get("reengagement_sent_date"))
+        done15 = bool(reeng.get("day15"))
+        if prof.get("daily_enabled") is False and not done15:
+            continue  # /stop
+        lang = ui_lang(prof)
+        anchor = winback.anchor_day(prof)
+        if anchor is None:
+            continue
+        local = winback.local_now(prof, lang, now, ob._default_timezone())
+        if check_hour and not (winback.SEND_FROM <= local.hour < winback.SEND_TO):
+            continue
+        today = local.date()
+        if not ob.profile_onboarding_complete(prof):
+            kind = "onb"
+        elif _profile_has_daily_access(prof, today):
+            if not done15:
+                continue  # the day 4/8/15 messages in daily_check still cover her
+            kind = "silent"
+        else:
+            kind = "lapsed"
+        st = state.get(str(cid)) if isinstance(state.get(str(cid)), dict) else {}
+        if not winback.due(kind, st, anchor, today):
+            continue
+        n = int(st.get("n") or 0) if st.get("anchor") == anchor.isoformat() else 0
+        out.append({"cid": cid, "kind": kind, "n": n, "anchor": anchor, "today": today,
+                    "lang": lang, "profile": prof})
+    return out
+
+
+async def _winback_send(bot, item: dict, model_names: list[str]) -> bool:
+    import winback
+
+    cid, kind, n, prof, lang = item["cid"], item["kind"], item["n"], item["profile"], item["lang"]
+    name = str(prof.get("name") or "").strip()
+    goal = str(prof.get("main_goal") or "").strip()
+    markup = None
+    if kind == "onb":
+        flow = await asyncio.to_thread(db_store.load_flow_blob, cid) or {}
+        st = flow.get("onboarding") if isinstance(flow, dict) else None
+        if isinstance(st, dict):
+            name = str(st.get("name") or name).strip()
+            goal = str(st.get("main_goal") or goal).strip()
+        text = winback.onb_text(n, lang, name, goal)
+    elif kind == "lapsed":
+        text = winback.lapsed_text(n, lang, name, goal)
+    else:
+        days = (item["today"] - item["anchor"]).days
+        async with typing_while(bot, cid):
+            text = await _reengagement_message_text(prof, model_names, days_silent=days)
+        markup = _reengagement_keyboard(lang)
+    try:
+        await bot.send_message(chat_id=cid, text=sanitize_bot_reply(text), reply_markup=markup)
+    except Exception as e:
+        log.warning("winback %s failed cid=%s: %s", kind, cid, e)
+        return False
+    histories.setdefault(cid, []).append({"role": "model", "parts": [text]})
+    with suppress(Exception):
+        db_store.save_history_turn(cid, "model", text)
+    log.info("winback sent cid=%s kind=%s n=%s", cid, kind, n)
+    return True
+
+
 REMINDER_QUIET_FROM, REMINDER_QUIET_TO = 22, 9
 
 
@@ -9571,6 +9651,33 @@ async def _bootstrap_bot() -> None:
         replace_existing=True,
     )
 
+    async def winback_job() -> None:
+        """Evening messages to people who went quiet (winback.py)."""
+        import winback
+
+        try:
+            plan = await asyncio.to_thread(_winback_plan, datetime.now(timezone.utc))
+            if not plan:
+                return
+            state = await asyncio.to_thread(db_store.kv_get, winback.KV_KEY) or {}
+            for item in plan[:WINBACK_PER_RUN]:
+                if await _winback_send(bot, item, model_chain):
+                    st = state.get(str(item["cid"])) if isinstance(state.get(str(item["cid"])), dict) else {}
+                    state[str(item["cid"])] = winback.after_send(st, item["anchor"], item["today"])
+                    await asyncio.to_thread(db_store.kv_set, winback.KV_KEY, state)
+        except ClaudeBillingError as e:
+            log.error("winback stopped: Claude billing error: %s", e)
+        except Exception as e:
+            log.exception("winback_job crashed: %s", e)
+
+    if WINBACK_ENABLED:
+        scheduler.add_job(
+            winback_job,
+            IntervalTrigger(minutes=20, timezone=tz),
+            id="winback_job",
+            replace_existing=True,
+        )
+
     async def threads_publish_job() -> None:
         try:
             def _tick() -> list[str]:
@@ -9906,6 +10013,19 @@ def _message_days_by_user(rows: list[dict]) -> dict[str, set]:
         if uid and d:
             out.setdefault(uid, set()).add(d)
     return out
+
+
+@app.get("/api/winback/preview")
+async def winback_preview(request: Request) -> dict:
+    """Owner-only: who would get a win-back message today (no names, no texts sent)."""
+    if not _stats_key_ok(request):
+        raise HTTPException(status_code=403, detail="forbidden")
+    plan = await asyncio.to_thread(_winback_plan, datetime.now(timezone.utc), check_hour=False)
+    counts: dict[str, int] = {}
+    for it in plan:
+        key = f"{it['kind']}_{it['n']}"
+        counts[key] = counts.get(key, 0) + 1
+    return {"enabled": WINBACK_ENABLED, "due_today": len(plan), "by_kind_and_step": counts}
 
 
 @app.get("/api/threads/queue")
