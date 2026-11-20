@@ -6100,6 +6100,26 @@ async def handle_channel_post_id(update: Update, context: ContextTypes.DEFAULT_T
         log.info("channel post chat_id=%s title=%s", post.chat.id, post.chat.title)
 
 
+REMINDER_QUIET_FROM, REMINDER_QUIET_TO = 22, 9
+
+
+def _onboarding_reminder_quiet(st: dict, prof: dict | None, now: datetime) -> bool:
+    """True at night (22:00-09:00) in her time zone. Mid-onboarding the zone is often
+    unknown: Russian speakers are taken as Moscow, the rest as the bot's default."""
+    tz_name = str(st.get("timezone") or (prof or {}).get("timezone") or "").strip()
+    if not tz_name:
+        lang = str(st.get("lang") or st.get("language_code") or "")
+        tz_name = "Europe/Moscow" if lang.lower().startswith("ru") else ob._default_timezone()
+    try:
+        zone = ZoneInfo(tz_name)
+    except Exception:
+        zone = ZoneInfo("Europe/Moscow")
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    hour = now.astimezone(zone).hour
+    return hour >= REMINDER_QUIET_FROM or hour < REMINDER_QUIET_TO
+
+
 async def notify_onboarding_done(bot, cid: int, profile: dict) -> None:
     name = str(profile.get("name") or "").strip() or "—"
     goal = str(profile.get("main_goal") or "").strip()[:150]
@@ -9514,6 +9534,8 @@ async def _bootstrap_bot() -> None:
                 minutes_idle = (now - last_activity).total_seconds() / 60
             if minutes_idle < 120:
                 continue
+            if _onboarding_reminder_quiet(st, prof_rem if isinstance(prof_rem, dict) else None, now):
+                continue  # night where she is: the reminder waits for the morning
             try:
                 lang = str(st.get("lang") or st.get("language_code") or "en")
                 name = str(st.get("name") or "").strip()
