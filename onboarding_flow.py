@@ -60,6 +60,7 @@ If she says she does not know, offer 2-3 concrete options built from what she al
 If she says everything is fine, do not dig for problems: ask what she would like to grow, start or add in her life now.
 Never say or hint that a goal is unrealistic, impossible, won't happen or can't work, and never comment on its size before the card; put in the card the result she can reach by week 12.
 A side question (tool, platform, language): answer it in one line and return; it is not a change of goal.
+A short answer that names a topic ('что приготовить на завтрак', 'похудеть', 'питаться правильно') is what she wants to work on, not a request for tips: no recipes, menus, exercises or other advice before the card; ask about the result she wants or send the card.
 Never use stock questions ("what do you really want", "what is behind it", "what makes you feel fulfilled"). Never retell her words in nicer words. Never explain her to herself.
 If she did not understand, say your wording was off and ask simpler. No new questionnaire.
 If she is annoyed or asks you to just answer, draft nothing: say the question missed, in a few words, then ask one simple open question about what she wants to work on in 12 weeks.
@@ -1222,6 +1223,42 @@ def vision_question_message(lang: str = "en") -> str:
         "Tell me, what do you want to start or change in your life right now? "
         "Maybe work, money, your body, relationships, or something of your own."
     )
+
+
+# Buttons under the goal question (Anya, 21.11.2026): 6 of 10 people who gave a name went
+# quiet on this open question. A button counts as her typed answer; "Другое" asks her to
+# write it in her own words.
+VISION_OPTIONS = (
+    ("lose", "Похудеть", "Lose weight"),
+    ("food", "Питаться правильно", "Eat healthier"),
+    ("sport", "Спорт и тело", "Sport and body"),
+    ("money", "Деньги и работа", "Money and work"),
+    ("biz", "Своё дело", "My own business"),
+    ("other", "Другое ✍️", "Something else ✍️"),
+)
+VISION_OTHER_RU = "Напиши своими словами, что хочется поменять или запустить 🤍 Можно коротко."
+VISION_OTHER_EN = "Write it in your own words, what you want to change or start 🤍 Short is fine."
+
+
+def vision_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    ru = _is_ru(lang)
+    btns = [
+        InlineKeyboardButton(label_ru if ru else label_en, callback_data=f"ob_vis:{code}")
+        for code, label_ru, label_en in VISION_OPTIONS
+    ]
+    return InlineKeyboardMarkup([btns[i:i + 2] for i in range(0, len(btns), 2)])
+
+
+def vision_choice_text(code: str, lang: str = "en") -> str:
+    """Button -> the answer as if she typed it; "" for "other" and unknown codes."""
+    for c, label_ru, label_en in VISION_OPTIONS:
+        if c == code and c != "other":
+            return label_ru if _is_ru(lang) else label_en
+    return ""
+
+
+def vision_other_text(lang: str = "en") -> str:
+    return VISION_OTHER_RU if _is_ru(lang) else VISION_OTHER_EN
 
 
 def message_vision(name: str, lang: str = "en") -> str:
@@ -3843,9 +3880,19 @@ async def handle_onboarding_turn(
         st["step"] = OB_VISION_DIALOG
         st["vision_turns"] = [{"role": "assistant", "content": first_q[:2000]}]
         st["dont_know_streak"] = 0
-        await msg.reply_text(opening)
-        await asyncio.sleep(1)
-        await msg.reply_text(privacy)
+        # greeting and privacy note first, the goal question last with buttons under it,
+        # so the question is what she sees at the bottom
+        greet = opening[: -len(first_q)].strip() if opening.endswith(first_q) else ""
+        if greet:
+            await msg.reply_text(greet)
+            await asyncio.sleep(1)
+            await msg.reply_text(privacy)
+            await asyncio.sleep(1)
+            await msg.reply_text(first_q, reply_markup=vision_keyboard(lang))
+        else:
+            await msg.reply_text(privacy)
+            await asyncio.sleep(1)
+            await msg.reply_text(opening, reply_markup=vision_keyboard(lang))
         return
 
     if step == OB_VISION_DIALOG:

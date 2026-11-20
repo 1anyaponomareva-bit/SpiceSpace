@@ -6816,6 +6816,52 @@ async def handle_age_callback(
         await context.bot.send_message(chat_id=cid, text=ob.age_reply_text("under", lang))
 
 
+async def handle_vision_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Buttons under the goal question: the label goes on as if she typed it."""
+    from types import SimpleNamespace
+
+    query = update.callback_query
+    if not query or not query.data or not query.message:
+        return
+    await query.answer()
+    cid = query.message.chat_id
+    _restore_cid_flow(cid)
+    st = onboarding.get(cid)
+    lang = (query.from_user.language_code if query.from_user else None) or "en"
+    if isinstance(st, dict):
+        lang = str(st.get("lang") or lang)
+    code = query.data.split(":", 1)[1]
+    text = ob.vision_choice_text(code, lang)
+    try:
+        if text and query.message.text:
+            # show her choice under the question, the buttons go away
+            await query.edit_message_text(query.message.text + "\n\n👉 " + text)
+        else:
+            await query.edit_message_reply_markup(reply_markup=None)
+    except Exception as e:
+        log.warning("vision edit failed cid=%s: %s", cid, e)
+    if not isinstance(st, dict) or int(st.get("step") or 0) != ob.OB_VISION_DIALOG:
+        return  # stale button
+    turns = st.get("vision_turns") or []
+    if any(t.get("role") == "user" for t in turns if isinstance(t, dict)):
+        return  # she already answered in words
+    if not text:
+        await context.bot.send_message(chat_id=cid, text=ob.vision_other_text(lang))
+        return
+    shim = SimpleNamespace(
+        message=query.message,
+        effective_chat=update.effective_chat,
+        effective_user=update.effective_user,
+        callback_query=None,
+    )
+    _touch_user_message_date(cid, user_profiles.get(str(cid)) or {})
+    await ob.handle_onboarding_turn(
+        shim, context, text, onboarding, histories, user_profiles, subscribers
+    )
+
+
 async def handle_source_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -9125,6 +9171,9 @@ def _register_telegram_handlers(app_: Application) -> None:
             handle_safety_callback,
             pattern=r"^safety:(pause|keep|resume)$",
         )
+    )
+    app_.add_handler(
+        CallbackQueryHandler(handle_vision_callback, pattern=r"^ob_vis:[a-z]+$")
     )
     app_.add_handler(
         CallbackQueryHandler(handle_age_callback, pattern=r"^ob_age:(yes|no)$")
