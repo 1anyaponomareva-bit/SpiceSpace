@@ -204,6 +204,10 @@
     setText('#btn-subscription', 'settings_subscription');
     setText('#btn-support', 'settings_support');
     setText('#btn-stop', 'settings_stop');
+    setText('#settings-lang-label', 'settings_language');
+    document.querySelectorAll('.lang-chip').forEach((b) => {
+      b.classList.toggle('active', b.dataset.lang === (window.userLang || 'en'));
+    });
 
     setText('.calendar-title', 'weeks_12');
     const legends = document.querySelectorAll('.calendar-legend .legend-item');
@@ -462,9 +466,31 @@
     applyGreeting();
   }
 
+  // Language chips in settings (Anya, 21.11.2026): the bot then writes in this language too.
+  function bindLanguageSwitch(rerender) {
+    document.querySelectorAll('.lang-chip').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const lang = btn.dataset.lang === 'ru' ? 'ru' : 'en';
+        if (lang === (window.userLang || 'en')) return;
+        haptic();
+        window.userLang = lang;
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.set('lang', lang);
+          window.history.replaceState(null, '', url.toString());
+        } catch (_) {}
+        applyStaticI18n();
+        applyGreeting();
+        try { rerender(); } catch (_) {}
+        syncLanguageCode();
+      });
+    });
+  }
+
   function syncLanguageCode() {
     const lang = window.userLang || 'en';
     if (profile?.language_code === lang) return;
+    if (profile) profile.language_code = lang;
     apiFetch('/api/profile/language', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -1684,6 +1710,13 @@
     await streakP;
     syncTimezone();
     syncLanguageCode();
+    bindLanguageSwitch(() => {
+      renderTasks(profile, tasks);
+      renderAll(tgUser);
+      renderTimes(profile);
+      paintMainScreenTimes(profileMorningTime(profile), profileEveningTime(profile));
+      if (typeof renderCalendar === 'function') renderCalendar(calendarData);
+    });
   }
 
   if (document.readyState === 'loading') {

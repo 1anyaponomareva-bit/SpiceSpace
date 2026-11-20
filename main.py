@@ -6944,6 +6944,44 @@ async def handle_safety_callback(
     await context.bot.send_message(chat_id=cid, text=safety.keep_text(lang))
 
 
+def _set_user_language(cid: int, prof: dict, lang: str) -> None:
+    prof["language_code"] = lang
+    user_profiles[str(cid)] = prof
+    st = onboarding.get(cid)
+    if isinstance(st, dict):
+        st["lang"] = lang
+        st["language_code"] = lang
+    try:
+        db_store.update_profile(cid, {"language_code": lang})
+    except Exception as e:
+        log.warning("language not saved cid=%s: %s", cid, e)
+
+
+async def _handle_language_switch(update: Update, cid: int, raw: str, prof: dict | None) -> bool:
+    """She asks for another language -> switch and confirm (the message is used up).
+    She writes in Russian while the bot speaks English -> switch quietly and go on."""
+    import lang_switch
+
+    if not isinstance(prof, dict) or not prof:
+        return False
+    current = str(prof.get("language_code") or "")
+    want = lang_switch.requested(raw)
+    if want:
+        if lang_switch.is_ru(want) != lang_switch.is_ru(current) or not current:
+            _set_user_language(cid, prof, want)
+            log.info("language switched on request cid=%s -> %s", cid, want)
+        await _bot_reply(update.message, lang_switch.CONFIRM[want])
+        st = onboarding.get(cid)
+        if isinstance(st, dict) and int(st.get("step") or 0) == ob.OB_NAME and not st.get("name"):
+            await _bot_reply(update.message, ob.get_greeting_new(want))  # the name question again
+        return True
+    implied = lang_switch.implied(raw, current)
+    if implied:
+        _set_user_language(cid, prof, implied)
+        log.info("language switched to ru (she writes in Russian) cid=%s", cid)
+    return False
+
+
 def _age_blocked(prof: dict | None) -> bool:
     flags = prof.get("cycle_flags") if isinstance(prof, dict) else None
     return bool(isinstance(flags, dict) and flags.get("ob_age_no"))
@@ -7009,6 +7047,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if await _handle_under_18(update, cid, raw, prof_early):
+        return
+
+    if await _handle_language_switch(update, cid, raw, prof_early):
         return
 
     if await _lava_handle_text(update, cid, raw, prof_early):
