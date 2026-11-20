@@ -9609,7 +9609,10 @@ async def _bootstrap_bot() -> None:
                 except ValueError:
                     continue
             if last_activity.tzinfo is None:
-                minutes_idle = (now.replace(tzinfo=None) - last_activity).total_seconds() / 60
+                # stored as the server's naive local time (datetime.now()); `now` here is in
+                # the bot's zone (UTC+7), so comparing it naively made every pause look 7
+                # hours long and the "ты там?" reminder came minutes after her last reply
+                minutes_idle = (datetime.now() - last_activity).total_seconds() / 60
             else:
                 minutes_idle = (now - last_activity).total_seconds() / 60
             if minutes_idle < 120:
