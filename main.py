@@ -6994,6 +6994,120 @@ async def handle_vision_callback(
     )
 
 
+async def handle_card_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """«Да, подходит» / «Поправить» under a goal card (Anya, 22.11.2026). «Да» goes on as
+    if she typed it; «Поправить» asks what to change, without a model call."""
+    from types import SimpleNamespace
+
+    query = update.callback_query
+    if not query or not query.data or not query.message:
+        return
+    await query.answer()
+    cid = query.message.chat_id
+    _restore_cid_flow(cid)
+    st = onboarding.get(cid)
+    lang = (query.from_user.language_code if query.from_user else None) or "en"
+    if isinstance(st, dict):
+        lang = str(st.get("lang") or lang)
+    ru = str(lang).lower().startswith("ru")
+    yes = query.data == "ob_card:yes"
+    label = (ob.CARD_YES_RU if ru else ob.CARD_YES_EN) if yes else (ob.CARD_FIX_RU if ru else ob.CARD_FIX_EN)
+    try:
+        if query.message.text:
+            await query.edit_message_text(query.message.text + "\n\n👉 " + label)
+        else:
+            await query.edit_message_reply_markup(reply_markup=None)
+    except Exception as e:
+        log.warning("card edit failed cid=%s: %s", cid, e)
+    if not isinstance(st, dict):
+        return
+    step = int(st.get("step") or 0)
+    turns_key = {
+        ob.OB_VISION_DIALOG: "vision_turns",
+        ob.OB_GOAL_DIALOG: "goal_turns",
+        ob.OB_WEEKLY_TACTICS: "weekly_turns",
+    }.get(step)
+    if not st.get("goal_confirm") and not turns_key:
+        return  # stale button: onboarding already moved on
+    _touch_user_message_date(cid, user_profiles.get(str(cid)) or {})
+    if yes or st.get("goal_confirm"):
+        # in the «Верно?» check «нет» already asks her to rewrite the goal
+        text = ("Да, подходит" if ru else "Yes, that works") if yes else ("нет" if ru else "no")
+        shim = SimpleNamespace(
+            message=query.message,
+            effective_chat=update.effective_chat,
+            effective_user=update.effective_user,
+            callback_query=None,
+        )
+        await ob.handle_onboarding_turn(
+            shim, context, text, onboarding, histories, user_profiles, subscribers
+        )
+        return
+    ask = ob.CARD_FIX_ASK_RU if ru else ob.CARD_FIX_ASK_EN
+    turns = st.setdefault(turns_key, [])
+    turns.append({"role": "user", "content": "Хочу поправить" if ru else "I want to change it"})
+    turns.append({"role": "assistant", "content": ask})
+    st["last_activity_at"] = datetime.now()
+    _persist_cid_flow(cid)
+    await context.bot.send_message(chat_id=cid, text=ask)
+
+
+async def handle_time_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Ready-made «утро и вечер» buttons (Anya, 22.11.2026): one tap sets both times and
+    finishes onboarding; «Другое время» goes on with the typed questions."""
+    from types import SimpleNamespace
+
+    query = update.callback_query
+    if not query or not query.data or not query.message:
+        return
+    await query.answer()
+    cid = query.message.chat_id
+    _restore_cid_flow(cid)
+    st = onboarding.get(cid)
+    lang = (query.from_user.language_code if query.from_user else None) or "en"
+    if isinstance(st, dict):
+        lang = str(st.get("lang") or lang)
+    code = query.data.split(":", 1)[1]
+    try:
+        if query.message.text:
+            await query.edit_message_text(
+                query.message.text + "\n\n👉 " + ob.time_preset_label(code, lang)
+            )
+        else:
+            await query.edit_message_reply_markup(reply_markup=None)
+    except Exception as e:
+        log.warning("time edit failed cid=%s: %s", cid, e)
+    if not isinstance(st, dict) or int(st.get("step") or 0) != ob.OB_MORNING_TIME:
+        return  # stale button
+    _touch_user_message_date(cid, user_profiles.get(str(cid)) or {})
+    preset = ob.time_preset(code)
+    if not preset:
+        await context.bot.send_message(chat_id=cid, text=ob.morning_time_question(lang))
+        return
+    st["morning_time"], st["evening_time"] = preset
+    shim = SimpleNamespace(
+        message=query.message,
+        effective_chat=update.effective_chat,
+        effective_user=update.effective_user,
+        callback_query=None,
+    )
+    await ob._complete_onboarding(
+        shim,
+        context,
+        cid,
+        st,
+        onboarding,
+        histories,
+        user_profiles,
+        subscribers,
+        context.bot_data.get("claude_model_names") or [],
+    )
+
+
 async def handle_source_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -9453,6 +9567,12 @@ def _register_telegram_handlers(app_: Application) -> None:
         CallbackQueryHandler(handle_vision_callback, pattern=r"^ob_vis:[a-z]+$")
     )
     app_.add_handler(
+        CallbackQueryHandler(handle_card_callback, pattern=r"^ob_card:(yes|fix)$")
+    )
+    app_.add_handler(
+        CallbackQueryHandler(handle_time_callback, pattern=r"^ob_time:(8-20|9-21|10-22|other)$")
+    )
+    app_.add_handler(
         CallbackQueryHandler(handle_age_callback, pattern=r"^ob_age:(yes|no)$")
     )
     app_.add_handler(
@@ -9926,7 +10046,10 @@ async def _bootstrap_bot() -> None:
                 )
                 if wrote_today:
                     continue
-            if not st.get("name"):
+            # no name yet: she pressed start and went quiet. One short nudge for the
+            # name too (Anya, 22.11.2026: 38% of starts never answer the greeting)
+            no_name = not str(st.get("name") or "").strip()
+            if no_name and (step != ob.OB_NAME or st.get("age_blocked")):
                 continue
             last_activity = st.get("last_activity_at")
             if not last_activity:
@@ -9952,8 +10075,11 @@ async def _bootstrap_bot() -> None:
             try:
                 lang = str(st.get("lang") or st.get("language_code") or "en")
                 name = str(st.get("name") or "").strip()
-                reminder = ob.s("onboarding_reminder", lang)
-                text = f"{name}, {reminder}" if name else reminder.capitalize()
+                if no_name:
+                    text = ob.s("onboarding_reminder_noname", lang)
+                else:
+                    reminder = ob.s("onboarding_reminder", lang)
+                    text = f"{name}, {reminder}" if name else reminder.capitalize()
                 await bot.send_message(chat_id=cid, text=text)
                 st["reminder_sent"] = True
                 _persist_cid_flow(cid)  # so a restart doesn't send it twice

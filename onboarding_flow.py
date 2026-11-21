@@ -67,6 +67,7 @@ If she did not understand, say your wording was off and ask simpler. No new ques
 If she is annoyed or asks you to just answer, draft nothing: say the question missed, in a few words, then ask one simple open question about what she wants to work on in 12 weeks.
 A refusal is a limit: do not pitch that path again.
 Do not ask for revenue numbers while she is exploring.
+Never ask her weight, height, body measurements or how many kilos she wants to lose. For a weight or body goal write the card without numbers (what she will be doing regularly, how she will feel); use a number only if she named it herself.
 When the intention is clear, send a goal card instead of asking more: one complete, grammatical sentence in second person that starts with "By week 12" in her language and names a concrete result she can check (what will exist, how many, or what she will be doing). No fragments, no lists of conditions, and do not describe her situation, country, family or feelings in the card. If she already named her time budget, add it as a second short line ("Time: 2-3 hours a day" in her language). Last line: {final_question} The card is plain text: no heading, no labels like 'Goal:'. Do not recap what she said before the card. Set ready_for_goal=true. Use only facts from the dialog; never invent a goal, a field or a number.
 At most 3 short sentences, except for the card.
 
@@ -485,6 +486,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "reminder_set": "Напомню в",
     "invalid_time": "Напиши время в формате ЧЧ:ММ — например, 14:00. Или «нет».",
     "onboarding_reminder": "ты там? Осталось буквально пара вопросов 💙",
+    "onboarding_reminder_noname": "Привет 🤍 Напиши, как тебя зовут, и начнём с одной твоей цели",
     "week_locked": (
         "Одна цель на 12 недель — это правило, не рекомендация. "
         "Именно один фокус даёт результат."
@@ -721,6 +723,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "reminder_set": "I'll remind you at",
     "invalid_time": "Write the time in HH:MM format — for example, 14:00. Or 'no'.",
     "onboarding_reminder": "you there? Just a couple more questions 💙",
+    "onboarding_reminder_noname": "Hi 🤍 Tell me your name and we'll start with one goal of yours",
     "week_locked": (
         "One goal for 12 weeks — that's the rule, not a suggestion. "
         "One focus is what gets results."
@@ -965,6 +968,40 @@ def evening_time_question(lang: str = "en") -> str:
 
 MORNING_TIME_QUESTION = morning_time_question()
 EVENING_TIME_QUESTION = evening_time_question()
+
+
+TIME_PRESETS = (("8-20", "08:00", "20:00"), ("9-21", "09:00", "21:00"), ("10-22", "10:00", "22:00"))
+TIME_PICK_RU = "Последний вопрос 🙂 Когда мне писать тебе?\n\nУтром дам шаг на день, вечером спрошу, как прошло."
+TIME_PICK_EN = "Last question 🙂 When should I write to you?\n\nIn the morning I'll send the step for the day, in the evening I'll ask how it went."
+TIME_OTHER_RU, TIME_OTHER_EN = "Другое время", "Other time"
+
+
+def time_pick_question(lang: str = "en") -> str:
+    """Morning and evening in one question with ready-made times (Anya, 22.11.2026)."""
+    return TIME_PICK_RU if _is_ru(lang) else TIME_PICK_EN
+
+
+def time_preset_label(code: str, lang: str = "en") -> str:
+    for c, m, e in TIME_PRESETS:
+        if c == code:
+            return f"{m.lstrip('0')} и {e}" if _is_ru(lang) else f"{m.lstrip('0')} and {e}"
+    return TIME_OTHER_RU if _is_ru(lang) else TIME_OTHER_EN
+
+
+def time_preset(code: str) -> tuple[str, str] | None:
+    for c, m, e in TIME_PRESETS:
+        if c == code:
+            return m, e
+    return None
+
+
+def time_pick_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(time_preset_label(c, lang), callback_data=f"ob_time:{c}")]
+            for c, _, _ in TIME_PRESETS]
+    rows.append([InlineKeyboardButton(time_preset_label("other", lang), callback_data="ob_time:other")])
+    return InlineKeyboardMarkup(rows)
+
+
 
 _KIDS_HINTS = (
     "ребён",
@@ -1266,6 +1303,29 @@ def vision_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
         for code, label_ru, label_en in VISION_OPTIONS
     ]
     return InlineKeyboardMarkup([btns[i:i + 2] for i in range(0, len(btns), 2)])
+
+
+CARD_YES_RU, CARD_FIX_RU = "Да, подходит ✅", "Поправить ✏️"
+CARD_YES_EN, CARD_FIX_EN = "Yes, that works ✅", "Change it ✏️"
+CARD_FIX_ASK_RU = "Что поправить? Напиши, как тебе правильнее 🙂"
+CARD_FIX_ASK_EN = "What should I change? Write it the way that feels right 🙂"
+_CARD_QUESTION_KEYS = ("goal_final_question", "weekly_confirm_question", "right")
+
+
+def card_keyboard(text: str, lang: str = "en") -> InlineKeyboardMarkup | None:
+    """Two buttons under a goal card or a «Верно?» check, so she taps instead of typing
+    «да» (Anya, 22.11.2026: a quarter of people stopped at the goal card)."""
+    lines = [ln.strip() for ln in str(text or "").strip().splitlines() if ln.strip()]
+    if not lines:
+        return None
+    last = lines[-1]
+    if not any(last.endswith(s(k, lang)) for k in _CARD_QUESTION_KEYS):
+        return None
+    ru = _is_ru(lang)
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(CARD_YES_RU if ru else CARD_YES_EN, callback_data="ob_card:yes"),
+        InlineKeyboardButton(CARD_FIX_RU if ru else CARD_FIX_EN, callback_data="ob_card:fix"),
+    ]])
 
 
 def vision_choice_text(code: str, lang: str = "en") -> str:
@@ -2534,7 +2594,7 @@ async def _propose_goal_confirm(
         confirm_msg = _weekly_confirmation_text(polished_s, lang)
     else:
         confirm_msg = _confirmation_text(polished_s, lang)
-    await msg.reply_text(confirm_msg)
+    await msg.reply_text(confirm_msg, reply_markup=card_keyboard(confirm_msg, lang))
 
 
 async def _complete_change_weekly_from_dialog(
@@ -2616,7 +2676,8 @@ async def _dispatch_goal_confirm_after(
 
     if after == "weekly_to_morning":
         st["step"] = OB_MORNING_TIME
-        await msg.reply_text(morning_time_question(_ob_lang(st)))
+        lang = _ob_lang(st)
+        await msg.reply_text(time_pick_question(lang), reply_markup=time_pick_keyboard(lang))
         return
 
     if after == "finish_weekly":
@@ -4075,9 +4136,7 @@ async def handle_onboarding_turn(
 
         if result.get("ready_for_goal"):
             start_goal_dialog_after_dig(st, turns)
-            await msg.reply_text(reply)
-        else:
-            await msg.reply_text(reply)
+        await msg.reply_text(reply, reply_markup=card_keyboard(reply, lang))
         return
 
     if step == OB_REENGAGE_GOAL:
@@ -4245,7 +4304,7 @@ async def handle_onboarding_turn(
                 after="main_to_weekly",
             )
         else:
-            await msg.reply_text(reply)
+            await msg.reply_text(reply, reply_markup=card_keyboard(reply, lang))
         return
 
     async def _complete_weekly_tactics_pick(weekly_goal: str) -> None:
@@ -4350,7 +4409,7 @@ async def handle_onboarding_turn(
         if result.get("ready") and result.get("weekly_goal"):
             await _complete_weekly_tactics_pick(result["weekly_goal"])
         else:
-            await msg.reply_text(reply)
+            await msg.reply_text(reply, reply_markup=card_keyboard(reply, lang))
         return
 
     await msg.reply_text(ob_text("something_wrong", lang))
