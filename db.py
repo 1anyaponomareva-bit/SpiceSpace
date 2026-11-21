@@ -1094,6 +1094,37 @@ def save_flow_blob(user_id: int | str, blob: dict) -> None:
     )
 
 
+def load_flow_blobs_since(since_iso: str) -> dict[int, dict]:
+    """Saved flow states written after since_iso, by user id (the reminder job needs
+    them after a restart, before anyone writes)."""
+    out: dict[int, dict] = {}
+    if _use_supabase:
+        rows = _request(
+            "GET",
+            f"conversation_history?role=eq.{FLOW_STATE_ROLE}&created_at=gte.{since_iso}"
+            "&select=user_id,content&order=created_at.asc&limit=1000",
+        ) or []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                parsed = json.loads(str(row.get("content") or ""))
+                uid = int(row.get("user_id"))
+            except (TypeError, ValueError):
+                continue
+            if isinstance(parsed, dict):
+                out[uid] = parsed
+        return out
+    for key, blob in _read_flow_file().items():
+        try:
+            uid = int(key)
+        except ValueError:
+            continue
+        if isinstance(blob, dict):
+            out[uid] = blob
+    return out
+
+
 def load_flow_blob(user_id: int | str) -> dict | None:
     key = str(user_id)
     if _use_supabase:

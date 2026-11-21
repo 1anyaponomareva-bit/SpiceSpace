@@ -1379,6 +1379,11 @@ def _restore_cid_flow(cid: int) -> None:
     except Exception as e:
         log.warning("flow restore failed cid=%s: %s", cid, e)
         return
+    _apply_flow_blob(cid, blob)
+
+
+def _apply_flow_blob(cid: int, blob: object) -> None:
+    global _flow_save_muted
     if not isinstance(blob, dict):
         return
     _flow_save_muted = True
@@ -1396,6 +1401,37 @@ def _restore_cid_flow(cid: int) -> None:
             pending_evening[cid] = evening
     finally:
         _flow_save_muted = False
+
+
+REMINDER_RESTORE_HOURS = 30
+ONBOARDING_REMINDER_MAX_IDLE_MIN = 24 * 60
+reminder_flows_restored: list[bool] = []
+
+
+def _restore_recent_flows(now_utc: datetime | None = None) -> int:
+    """After a restart the onboarding steps live only in the DB and came back only when
+    someone wrote, so the reminder job saw nobody (Anya, 21.11: stopped at the weekly
+    goal right before a deploy, no reminder all day). Load the recent ones up front."""
+    now_utc = now_utc or datetime.now(timezone.utc).replace(tzinfo=None)
+    since = (now_utc - timedelta(hours=REMINDER_RESTORE_HOURS)).isoformat(timespec="seconds")
+    try:
+        blobs = db_store.load_flow_blobs_since(since)
+    except Exception as e:
+        log.warning("flow bulk restore failed: %s", e)
+        return 0
+    n = 0
+    for cid, blob in blobs.items():
+        if (
+            cid in onboarding
+            or cid in pending_morning
+            or cid in pending_evening
+            or ob.onboarding_resume_held(cid)
+        ):
+            continue
+        _apply_flow_blob(cid, blob)
+        n += cid in onboarding
+    return n
+
 
 _FLOW_ESCAPE_EXACT = frozenset(
     {
@@ -9674,6 +9710,10 @@ async def _bootstrap_bot() -> None:
     async def onboarding_reminder_job() -> None:
         """One reminder if onboarding stalled 2+ hours after user shared their name."""
         now = datetime.now(tz)
+        if not reminder_flows_restored:
+            reminder_flows_restored.append(True)
+            n = await asyncio.to_thread(_restore_recent_flows)
+            log.info("onboarding_reminder: restored %s onboarding states after start", n)
         for cid, st in list(onboarding.items()):
             if not isinstance(st, dict):
                 continue
@@ -9711,6 +9751,8 @@ async def _bootstrap_bot() -> None:
                 minutes_idle = (now - last_activity).total_seconds() / 60
             if minutes_idle < 120:
                 continue
+            if minutes_idle > ONBOARDING_REMINDER_MAX_IDLE_MIN:
+                continue  # stalled days ago: the win-back messages take it from here
             if _onboarding_reminder_quiet(st, prof_rem if isinstance(prof_rem, dict) else None, now):
                 continue  # night where she is: the reminder waits for the morning
             try:
@@ -9720,6 +9762,7 @@ async def _bootstrap_bot() -> None:
                 text = f"{name}, {reminder}" if name else reminder.capitalize()
                 await bot.send_message(chat_id=cid, text=text)
                 st["reminder_sent"] = True
+                _persist_cid_flow(cid)  # so a restart doesn't send it twice
             except Exception as e:
                 log.warning("onboarding_reminder failed cid=%s: %s", cid, e)
 
