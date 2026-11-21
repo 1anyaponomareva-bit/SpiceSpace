@@ -9788,6 +9788,7 @@ async def _bootstrap_bot() -> None:
         onboarding_reminder_job,
         IntervalTrigger(minutes=15, timezone=tz),
         id="onboarding_reminder_job",
+        misfire_grace_time=300,  # the loop is often ~10 s late; the default 1 s skipped runs
         replace_existing=True,
     )
 
@@ -9815,6 +9816,7 @@ async def _bootstrap_bot() -> None:
             winback_job,
             IntervalTrigger(minutes=20, timezone=tz),
             id="winback_job",
+            misfire_grace_time=300,  # the loop is often ~10 s late; the default 1 s skipped runs
             replace_existing=True,
         )
 
