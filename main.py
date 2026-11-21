@@ -45,6 +45,7 @@ import threads_publisher
 import onboarding_flow as ob
 import safety
 import tz_guess
+import ed_guard
 import memory_context
 from bot_ui import ui_lang, ui_text
 from bot_typing import typing_while
@@ -3483,44 +3484,45 @@ TRIAL_INTRO_AT_ONBOARDING = False
 # in the feminine.
 _TRIAL_TEXTS = {
     "ru": {
+        # Anya, 21.11.2026: no «бесплатный» in the trial texts, « - » instead of a long dash
         "intro": (
-            "Первые 4 дня со мной — бесплатно: утренние и вечерние сообщения, чат "
-            "и мини-приложение. Дальше — по подписке. Я заранее напомню 💚"
+            "Первые 4 дня со мной - пробный период: утренние и вечерние сообщения, чат "
+            "и мини-приложение. Дальше - по подписке. Я заранее напомню 💚"
         ),
         "announce": (
             "{name}, небольшая новость 💚 Спейс переходит на подписку. "
-            "У тебя 4 бесплатных дня — до {date} включительно. "
+            "У тебя 4 пробных дня - до {date} включительно. "
             "Всё работает как прежде, а ближе к концу я напомню."
         ),
         "day3": (
-            "{name}, завтра последний бесплатный день 🌙 Чтобы утренние и вечерние "
+            "{name}, завтра последний день пробного периода 🌙 Чтобы утренние и вечерние "
             "сообщения не прервались, оформи подписку: {p1} в месяц или {p3} за 3 месяца."
         ),
         "day4": (
-            "{name}, бесплатные 4 дня закончились 🌙 Спасибо за эти дни вместе. "
+            "{name}, пробные 4 дня закончились 🌙 Спасибо за эти дни вместе. "
             "{goal_line}Оформи подписку, и завтра утром я напишу как обычно."
         ),
-        "goal_line": "Я помню твою цель — «{goal}» — и хочу идти к ней с тобой дальше. ",
+        "goal_line": "Я помню твою цель - «{goal}» - и хочу идти к ней с тобой дальше. ",
     },
     "en": {
         "intro": (
-            "Your first 4 days with me are free: morning and evening messages, chat "
+            "Your first 4 days with me are a trial: morning and evening messages, chat "
             "and the mini app. After that it's a subscription. I'll remind you in advance 💚"
         ),
         "announce": (
             "{name}, a little news 💚 Space is moving to a subscription. "
-            "You have 4 free days — through {date}. "
+            "You have a 4-day trial - through {date}. "
             "Everything works as before, and I'll remind you near the end."
         ),
         "day3": (
-            "{name}, tomorrow is your last free day 🌙 So your morning and evening "
+            "{name}, tomorrow is the last day of your trial 🌙 So your morning and evening "
             "messages don't stop, subscribe: {p1} a month or {p3} for 3 months."
         ),
         "day4": (
-            "{name}, your 4 free days are over 🌙 Thank you for these days together. "
+            "{name}, your 4-day trial is over 🌙 Thank you for these days together. "
             "{goal_line}Subscribe, and tomorrow morning I'll write as usual."
         ),
-        "goal_line": "I remember your goal — «{goal}» — and I want to keep going toward it with you. ",
+        "goal_line": "I remember your goal - «{goal}» - and I want to keep going toward it with you. ",
     },
 }
 
@@ -5371,7 +5373,8 @@ async def _coach_reply(
         model_names = requested_models  # a hard moment always gets the full model
     if extra_rule:
         turn_parts.append(extra_rule)
-    topic = specialty_instructions(user_text, lang=lang)
+    goal_text = f"{prof.get('main_goal') or ''} {prof.get('weekly_goal') or ''}"
+    topic = specialty_instructions(user_text, lang=lang, goal_text=goal_text)
     if topic:
         turn_parts.append(topic)
     if facts_text:
@@ -7161,6 +7164,41 @@ async def _handle_under_18(update: Update, cid: int, raw: str, prof: dict | None
     return True
 
 
+_ED_GOAL_STEPS = frozenset({ob.OB_VISION, ob.OB_VISION_DIALOG, OB_GOAL_DIALOG, ob.OB_GOAL_12W, ob.OB_WEEKLY_TACTICS})
+
+
+async def _handle_eating_disorder_signs(update: Update, cid: int, raw: str, prof: dict | None) -> bool:
+    """Eating-disorder signs, any goal (21.11.2026): a vetted reply instead of a model one,
+    once a day; then the chat model carries on under ED_RULE. During the goal steps of
+    onboarding a named height / weight / target is checked too (BMI < 18.5, > 1% a week)."""
+    lang = _user_lang(prof, update)
+    st = onboarding.get(cid) if isinstance(onboarding.get(cid), dict) else None
+    kind = ed_guard.detect(raw)
+    body: dict = {}
+    if not kind and st is not None and int(st.get("step") or -1) in _ED_GOAL_STEPS:
+        body = {**(st.get("body") or {}), **ed_guard.parse_body(raw)}
+        if body:
+            st["body"] = body
+        concern = ed_guard.weight_goal_concern(body)
+        if concern and st.get("ed_goal") != concern:
+            st["ed_goal"] = concern
+            kind = concern
+    if not kind:
+        return False
+    if kind in ("signs", "acute") and not ed_guard.should_reply(cid):
+        return False  # answered today already: the chat model goes on, with the ED rule
+    log.warning("eating-disorder signs cid=%s kind=%s", cid, kind)  # no text in logs
+    if isinstance(prof, dict) and prof:  # no profile yet: a flag write would create one
+        try:
+            await asyncio.to_thread(db_store.mark_cycle_flag, cid, "ed_signs")
+        except Exception as e:
+            log.warning("ed flag not saved cid=%s: %s", cid, e)
+    text = ed_guard.reply(kind, lang, body)
+    _append_history_turn(cid, raw, text)
+    await _bot_reply(update.message, text)
+    return True
+
+
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_chat or not update.message or not update.message.text:
         return
@@ -7183,6 +7221,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if await _handle_under_18(update, cid, raw, prof_early):
+        return
+
+    if await _handle_eating_disorder_signs(update, cid, raw, prof_early):
         return
 
     if await _handle_language_switch(update, cid, raw, prof_early):

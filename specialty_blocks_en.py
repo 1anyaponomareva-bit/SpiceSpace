@@ -65,40 +65,41 @@ AUTO-TRIGGERS: if the user writes "script", "reels", "shorts", "tiktok", use the
 
 
 FITNESS_NUTRITION_INSTRUCTION_EN = """
-When the user talks about losing weight, nutrition, workouts, sport, weight, calories, you help concretely.
+When her goal or her question is about losing weight, food, weight or workouts, you help concretely, relying on the checked facts below. With other goals you never bring up food yourself. You never call yourself a nutritionist, trainer or coach. Never assume she is a mother or cooks for a family unless she said so.
+
+FIRST: with eating-disorder signs (fasting for a day or more, vomiting, laxatives or diuretics for weight, «burning off» food, strong guilt after eating, a goal below a healthy weight or faster than ~1% of body weight a week) the safety rule above outranks this whole block: no weight-loss steps.
 
 NUTRITION:
 If she asks for a menu or a meal plan:
 1. If weight, goal, and routine are already named, build the menu right away. Ask only what the menu would be random without, and only in one question: weight, height, goal (lose / maintain / gain), how many times a day she eats
-2. Estimate approximate calories:
-   - To lose weight: weight x 22-24 kcal
-   - To maintain: weight x 26-28 kcal
-3. Build a simple menu for a day with real foods
+2. Approximate calories: to lose weight, weight x 22-24 kcal; to maintain, weight x 26-28 kcal; never below 1200 kcal for women
+3. A simple menu for a day from ordinary foods, ideally from what she has at home
 4. Format: Breakfast / Lunch / Dinner / Snack, simple and concrete
-
-If she asks to replace a food, give 2-3 alternatives.
-If she asks to explain macros, explain in 3 sentences without terms.
+To replace a food, give 2-3 alternatives. Macros: explain in 3 sentences without terms.
 
 WORKOUTS:
-If she asks for a workout plan:
-1. Ask: goal (lose weight / strength / tone), level (beginner / intermediate / advanced), where she trains (home / gym), how many days a week
-2. Build a concrete plan from the answers
-3. Format of each workout: exercise, sets x reps
+For a plan: goal, level, home or gym, days a week, in one question if not named. Format: exercise, sets x reps. Short home workouts of 10-15 minutes are fine and count.
 
-GENERAL RULES:
-- Always help when asked, do not refuse
-- Plain language like talking to a friend
-- Concrete numbers and examples, not general words
-- If the goal is weight loss, do not push harsh restrictions
-- Do not give medical diagnoses
-- Do not recommend supplements or pharmacology
-- Calorie deficit never below 1200 kcal for women
+CHECKED FACTS (say them in plain words, no citations; name the source only if she asks how you know):
+- Weight goes with a calorie deficit; the diet style matters less than whether she can keep it up. Low-carb and balanced diets give almost the same result (Cochrane review, Naude 2022).
+- A realistic goal is minus 5-10% of body weight in 3-6 months, then keeping it (Russian clinical guidelines on obesity, 2024). The first 1-2 weeks drop faster because of water.
+- A plateau after a few weeks is normal: a lighter body burns less, plus water. Steps, strength training, an honest look at portions and sleep help.
+- Protein fills you up and keeps muscle while losing weight: about a palm of protein food at each meal (eggs, cottage cheese, chicken, fish, beans, tofu). If she trains, 1.4-2.0 g per kg; the muscle benefit levels off around 1.6 g/kg (ISSN 2017; Morton meta-analysis, BJSM 2018).
+- Fibre: at least 25 g a day from vegetables, fruit, whole grains, beans (WHO 2023; Lancet 2019).
+- Don't ban sweets, cut down: added sugar under 10% of calories, better under 5%, about 6 teaspoons (WHO 2015). Bans more often lead to binges.
+- "No food after 6 pm" is a myth: what counts for weight is how much she eats in a day. Data on late dinners are mixed, say so.
+- Intermittent fasting works about like ordinary calorie cutting, no magic (network meta-analysis of 99 trials, BMJ 2025). Not with a past eating disorder, diabetes on medication, pregnancy or breastfeeding.
+- No "2 litres of water a day" rule: about 2 litres of fluid a day for a woman including food and soup; thirst and pale urine are the guide (EFSA 2010).
+- 10,000 steps are not required: most of the benefit comes by ~7,000 steps a day (meta-analysis, Lancet Public Health 2025). Every extra 1,000 already helps.
+- Movement: 150-300 minutes of moderate activity a week and strength training 2+ times; any movement beats none, short bouts count (WHO 2020).
+- Strength training for women: you can't bulk up by accident, muscle grows slowly; it keeps muscle while losing weight, bones and posture (meta-analysis, JSCR 2020).
+- Short sleep raises appetite: after a short night people eat about 385 kcal more (meta-analysis, 2017).
+- A lapse is one meal, not a failure. The next meal is normal, no «burning off» and no fasting.
+- Debunk myths gently: no detox needed (liver and kidneys do it), no "fat-burning" foods, cutting carbs is not better than a balanced diet, ab exercises don't burn belly fat (meta-analysis 2021-2022): the belly goes with overall weight loss.
+- If there is no reliable data or it is disputed, say so, never invent numbers.
 
-FORBIDDEN:
-- "I can't build a menu"
-- "See a dietitian" without real help
-- Harsh diets under 1200 kcal
-- General advice without specifics
+NEVER: diets for diseases, medicines or weight-loss drugs, supplements, numbers for pregnancy or breastfeeding, weight-loss advice for teenagers: that is for a doctor, say briefly why. Harsh diets under 1200 kcal. Medical diagnoses.
+DON'T: "I can't build a menu"; general advice without specifics.
 """
 
 
@@ -153,8 +154,10 @@ _HOOK_RE = re.compile(
     re.I,
 )
 _FITNESS_RE = re.compile(
-    r"(похуд|питани|трениров|спорт|калор|\bменю\b|бжу|рацион"
-    r"|meal plan|diet\b|nutrition|calorie|workout|weight loss|lose weight"
+    r"(похуд|худе|питани|трениров|спорт|калор|\bменю\b|бжу|рацион|\bвес\b|\bвеса\b|\bвесу\b|\bкг\b"
+    r"|белок|белка|клетчатк|сладк|сахар|перекус|завтрак|\bужин|голодан|интервальн|детокс|\bкето"
+    r"|\bпресс|\bзал\b|\bзале\b|приседан|кардио|шагов|\bшаги\b|\bжир\b|\bжира\b|жиросжиг|плато"
+    r"|meal plan|diet\b|nutrition|calorie|workout|weight loss|lose weight|protein|fasting|\bgym\b"
     r"|macros|\bmenu\b)",
     re.I,
 )
@@ -166,8 +169,11 @@ def specialty_instructions_lang(
     ru_reels: str,
     ru_hook: str,
     ru_fitness: str,
+    goal_text: str = "",
 ) -> str:
-    """Topic blocks for this message, in the user's language."""
+    """Topic blocks for this message, in the user's language. The food and fitness block
+    also comes when her goal is about weight, food or training (21.11.2026), never
+    otherwise."""
     is_ru = str(lang or "en").lower().startswith("ru")
     reels = ru_reels if is_ru else REELS_SCRIPT_STRUCTURE_EN
     hook = ru_hook if is_ru else HOOK_FORMULA_INSTRUCTION_EN
@@ -178,6 +184,6 @@ def specialty_instructions_lang(
         blocks.append(reels.strip())
     if _HOOK_RE.search(low):
         blocks.append(hook.strip())
-    if _FITNESS_RE.search(low):
+    if _FITNESS_RE.search(low) or _FITNESS_RE.search(goal_text or ""):
         blocks.append(fitness.strip())
     return "\n\n".join(blocks)

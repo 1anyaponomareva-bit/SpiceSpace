@@ -388,10 +388,11 @@ _EN_USER_OVERRIDE = (
 
 # 21.11.2026: asked «сколько стоит?» mid-onboarding, the model said «я бесплатная».
 PRICE_RULE_EN = (
-    "If she asks what Space costs or whether it is free: the first 4 days are free, then a "
-    "subscription of 590 RUB a month or 1490 RUB for 3 months (write it as ₽ in Russian), "
-    "paid in the mini app. Say it plainly in one or two sentences, never say Space is free, "
-    "don't push, then go back to your question."
+    "If she asks what Space costs or whether it is free: the first 4 days are a trial (call "
+    "it a trial period, never use the word free), then a subscription of 590 RUB a "
+    "month or 1490 RUB for 3 months (write it as ₽ in Russian), paid in the mini app. Say it "
+    "plainly in one or two sentences, never say Space is free, don't push, then go back to "
+    "your question."
 )
 
 
@@ -661,12 +662,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "Неизвестный тариф. Выбери план в мини-приложении."
     ),
     "trial_expired_offer": (
-        "{name}, бесплатный период закончился, и сейчас я на паузе 🌙 "
-        "Оформи подписку кнопкой ниже — и продолжим с того места, где остановились."
+        "{name}, пробный период закончился, и сейчас я на паузе 🌙 "
+        "Оформи подписку кнопкой ниже - и продолжим с того места, где остановились."
     ),
     "subscription_paywall": (
         "{name}, для общения со мной нужна подписка 🌙\n\n"
-        "Бесплатный период закончился — оформить подписку можно кнопкой ниже."
+        "Пробный период закончился - оформить подписку можно кнопкой ниже."
     ),
     "subscription_subscribe_btn": "💳 Оформить подписку",
     "subscription_view_btn": "💳 Моя подписка",
@@ -890,12 +891,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "Unknown plan. Pick a plan in the mini app."
     ),
     "trial_expired_offer": (
-        "{name}, your free period is over, and I'm on pause for now 🌙 "
+        "{name}, your trial is over, and I'm on pause for now 🌙 "
         "Subscribe with the button below, and we'll pick up where we left off."
     ),
     "subscription_paywall": (
         "{name}, you need a subscription to chat with me 🌙\n\n"
-        "Your free trial has ended — subscribe with the button below."
+        "Your trial has ended - subscribe with the button below."
     ),
     "subscription_subscribe_btn": "💳 Subscribe",
     "subscription_view_btn": "💳 My subscription",

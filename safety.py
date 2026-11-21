@@ -287,5 +287,12 @@ Never discuss, rate or help with ways to hurt herself, even "hypothetically" or 
 Do not encourage dependence on you: never say you are all she needs or that she need not tell others. Support her ties with real people."""
 
 
+from ed_guard import ED_RULE_EN as _ED_RULE  # noqa: E402
+
+# eating-disorder signs, any goal (21.11.2026): chat and onboarding prompts carry it
+SAFETY_RULE_RU = SAFETY_RULE_RU + "\n\n" + _ED_RULE
+SAFETY_RULE_EN = SAFETY_RULE_EN + "\n\n" + _ED_RULE
+
+
 def safety_rule(lang: str) -> str:
     return SAFETY_RULE_RU if _is_ru(lang) else SAFETY_RULE_EN
