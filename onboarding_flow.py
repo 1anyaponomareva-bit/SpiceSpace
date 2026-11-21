@@ -386,14 +386,23 @@ _EN_USER_OVERRIDE = (
 )
 
 
+# 21.11.2026: asked «сколько стоит?» mid-onboarding, the model said «я бесплатная».
+PRICE_RULE_EN = (
+    "If she asks what Space costs or whether it is free: the first 4 days are free, then a "
+    "subscription of 590 RUB a month or 1490 RUB for 3 months (write it as ₽ in Russian), "
+    "paid in the mini app. Say it plainly in one or two sentences, never say Space is free, "
+    "don't push, then go back to your question."
+)
+
+
 def _system_with_lang(system: str, lang: str) -> str:
     lc = str(lang or "en").lower()
     if lc.startswith("ru"):
         return (
             "IMPORTANT: User speaks Russian. Respond in Russian only.\n\n"
-            + system + "\n\n" + SAFETY_RULE_EN
+            + system + "\n\n" + SAFETY_RULE_EN + "\n\n" + PRICE_RULE_EN
         )
-    return _EN_SYSTEM_PREFIX + system + "\n\n" + SAFETY_RULE_EN
+    return _EN_SYSTEM_PREFIX + system + "\n\n" + SAFETY_RULE_EN + "\n\n" + PRICE_RULE_EN
 
 
 def _user_content_with_lang(content: str, lang: str) -> str:
