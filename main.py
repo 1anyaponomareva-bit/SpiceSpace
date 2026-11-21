@@ -7108,13 +7108,37 @@ def _tz_confirmed(prof: dict | None) -> bool:
 
 
 def _confirm_timezone(cid: int, prof: dict, tz_name: str) -> None:
-    """Save the zone she gave (city or Mini App) and stop guessing."""
+    """Save the zone she gave (city or Mini App) and stop guessing. A new zone never
+    triggers a catch-up: today's slots that are already past on her real clock count as
+    sent (21.11.2026: Anya finished onboarding at 19:26 «Moscow», opened the Mini App,
+    her zone became UTC+7 = 23:29, and the 23:00 evening message came at once)."""
+    old_tz = str(prof.get("timezone") or "")
     prof["timezone"] = tz_name
     flags = dict(prof.get("cycle_flags") or {}) if isinstance(prof.get("cycle_flags"), dict) else {}
     flags["tz_set"] = True
     prof["cycle_flags"] = flags
-    db_store.update_profile(cid, {"timezone": tz_name, "cycle_flags": flags})
+    patch: dict = {"timezone": tz_name, "cycle_flags": flags}
+    if old_tz != tz_name:
+        patch.update(_past_slots_today(prof, datetime.now(_zone_or_default(tz_name))))
+        prof.update(patch)
+    db_store.update_profile(cid, patch)
     user_profiles[str(cid)] = prof
+
+
+def _past_slots_today(prof: dict, now_local: datetime) -> dict:
+    """last_*_sent_date = today for the morning/evening times already past today."""
+    out: dict = {}
+    today = now_local.date().isoformat()
+    now_min = now_local.hour * 60 + now_local.minute
+    for field, key, default in (
+        ("morning_time", "last_morning_sent_date", "09:30"),
+        ("evening_time", "last_evening_sent_date", "21:00"),
+    ):
+        hm = _normalize_profile_hm(prof.get(field) or (prof.get("daily_time") if field == "morning_time" else None), default)
+        h, m = map(int, hm.split(":"))
+        if h * 60 + m <= now_min and str(prof.get(key) or "")[:10] != today:
+            out[key] = today
+    return out
 
 
 async def _handle_city_timezone(update: Update, cid: int, raw: str, prof: dict | None) -> bool:
@@ -9517,33 +9541,27 @@ async def _bootstrap_bot() -> None:
 
     async def daily_check_job() -> None:
         try:
-            subscribers.update(db_store.load_subscribers())
+            # DB reads off the event loop and in one request (21.11.2026): read one by
+            # one, 2-3 times per person, they froze the whole bot ~16 s every minute.
+            subscribers.update(await asyncio.to_thread(db_store.load_subscribers))
             if not subscribers:
                 log.warning("daily_check_job: no subscribers — nobody gets morning/evening")
-            log.info("daily_check_job: subscribers=%s", sorted(subscribers))
+            t_read = time.perf_counter()
+            try:
+                fresh_all = await asyncio.to_thread(db_store.get_profiles, list(subscribers))
+            except db_store.ProfileReadError:
+                log.warning("daily_check profiles read failed, run skipped")
+                return
+            log.info(
+                "daily_check_job: subscribers=%s profiles=%s read_ms=%.0f",
+                len(subscribers), len(fresh_all), (time.perf_counter() - t_read) * 1000,
+            )
             for cid in list(subscribers):
                 key = str(cid)
-                profile = user_profiles.get(key)
+                profile = fresh_all.get(key)
                 if not isinstance(profile, dict):
-                    # Not in memory — try loading from Supabase
-                    try:
-                        profile = db_store.get_profile(key)
-                    except db_store.ProfileReadError:
-                        log.warning("daily_check profile read failed cid=%s", cid)
-                        continue
-                    if not isinstance(profile, dict):
-                        continue
-                    user_profiles[key] = profile
-
-                # Always reload fresh profile from DB to pick up time changes
-                try:
-                    fresh = db_store.get_profile(key)
-                except db_store.ProfileReadError:
-                    log.warning("daily_check profile read failed cid=%s", cid)
                     continue
-                if isinstance(fresh, dict):
-                    profile = fresh
-                    user_profiles[key] = fresh
+                user_profiles[key] = profile
 
                 tz_name = _profile_timezone_name(profile)
                 try:
@@ -9684,13 +9702,7 @@ async def _bootstrap_bot() -> None:
                     current_week = max(
                         1, min(12, (days_since_start // 7) + 1)
                     )
-                    try:
-                        fresh = db_store.get_profile(key)
-                    except db_store.ProfileReadError:
-                        fresh = None
-                    if isinstance(fresh, dict):
-                        profile = fresh
-                        user_profiles[key] = fresh
+                    # the profile was read fresh for this run above; no second read here
                     if int(profile.get("current_week") or 1) != current_week:
                         profile["current_week"] = current_week
                         db_store.update_profile(

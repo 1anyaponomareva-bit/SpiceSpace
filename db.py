@@ -306,6 +306,35 @@ def get_profile(user_id: int | str) -> dict | None:
     return None
 
 
+def get_profiles(user_ids) -> dict[str, dict]:
+    """Many profiles in one request, keyed by user id; raises ProfileReadError when the
+    read failed (21.11.2026: the minute check read ~100 profiles one by one, 2-3 times
+    each, and froze the bot for ~16 s every minute)."""
+    keys = sorted({str(u) for u in user_ids if str(u).lstrip("-").isdigit()})
+    if not keys:
+        return {}
+    if _use_supabase:
+        out: dict[str, dict] = {}
+        for i in range(0, len(keys), 200):
+            chunk = ",".join(keys[i:i + 200])
+            rows = _request("GET", f"user_profiles?user_id=in.({chunk})")
+            if rows is None:
+                raise ProfileReadError("bulk profile read failed")
+            for row in rows:
+                if isinstance(row, dict):
+                    r = dict(row)
+                    uid = str(r.pop("user_id", ""))
+                    if uid:
+                        out[uid] = sync_profile_times(_row_to_profile(r))
+        return out
+    profiles = _load_json(USER_PROFILES_PATH, {})
+    return {
+        k: sync_profile_times(p)
+        for k, p in (profiles.items() if isinstance(profiles, dict) else [])
+        if k in keys and isinstance(p, dict)
+    }
+
+
 def _merge_base(user_id: int | str) -> dict | None:
     """Profile dict safe to merge into. None means the read failed — do not write."""
     try:

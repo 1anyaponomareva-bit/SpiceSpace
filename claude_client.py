@@ -6,6 +6,7 @@ import inspect
 import logging
 import os
 import threading
+import time
 
 import anthropic
 
@@ -251,14 +252,18 @@ def generate(
         kwargs["system"] = _system_blocks(
             system, cache_core=cache_core, cache_dynamic=cache_history
         )
+    t0 = time.perf_counter()
     try:
         response = client.messages.create(**kwargs)
     except Exception as exc:
+        log.info("claude_time feature=%s model=%s s=%.1f failed=%s", feature, model_id,
+                 time.perf_counter() - t0, type(exc).__name__)
         if is_billing_error(exc):
             _billing_stopped = True
             log.error("claude billing stopped feature=%s: %s", feature, exc)
             raise ClaudeBillingError(str(exc)) from exc
         raise
+    log.info("claude_time feature=%s model=%s s=%.1f", feature, model_id, time.perf_counter() - t0)
     usage = getattr(response, "usage", None)
     read = created = input_tokens = output_tokens = 0
     if usage:

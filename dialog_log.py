@@ -62,10 +62,12 @@ async def _log_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         write(cid, "ОНА (кнопка):", str(update.callback_query.data or ""))
 
 
+from update_order import ChatOrderedProcessor  # noqa: E402
+
 def build_application(token: str) -> Application:
     """Application with dialog logging when enabled, the usual one otherwise."""
     if not enabled():
-        return Application.builder().bot(PacedBot(token)).build()
-    app = Application.builder().bot(DialogLogBot(token)).build()
+        return Application.builder().bot(PacedBot(token)).concurrent_updates(ChatOrderedProcessor()).build()
+    app = Application.builder().bot(DialogLogBot(token)).concurrent_updates(ChatOrderedProcessor()).build()
     app.add_handler(TypeHandler(Update, _log_incoming), group=-1)
     return app
