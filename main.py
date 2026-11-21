@@ -3477,6 +3477,8 @@ def _trial_day(profile: dict, today: date | None = None) -> int | None:
     return (ref - trial_start).days + 1
 
 
+TRIAL_INTRO_AT_ONBOARDING = False
+
 # Fixed texts about the free days (approved by the owner). Space speaks of herself
 # in the feminine.
 _TRIAL_TEXTS = {
@@ -3529,7 +3531,10 @@ def _trial_text(lang: str, key: str, **kw) -> str:
 
 
 def trial_intro_text(profile: dict, lang: str, new_trial: bool) -> str:
-    """Line after onboarding about the free days; empty when it does not apply."""
+    """Line after onboarding about the free days. Off (Anya, 21.11.2026: «убирай
+    сообщение про оплату») - nothing about payment at the end of onboarding."""
+    if not TRIAL_INTRO_AT_ONBOARDING:
+        return ""
     if not SUBSCRIPTIONS_ENABLED or not new_trial:
         return ""
     if _profile_is_premium_active(profile, _profile_local_date(profile)):

@@ -82,9 +82,11 @@ class TrialTextsTests(unittest.TestCase):
         for bad in ("бесплатный:", "напомнил", "написал", "был с тобой", "Спейс полностью бесплатный"):
             self.assertNotIn(bad, ru)
 
-    def test_intro_only_for_new_trial(self) -> None:
+    def test_no_payment_message_after_onboarding(self) -> None:
+        # Anya, 21.11.2026: «убирай сообщение про оплату»
         ns = _ns(date(2026, 11, 20))
-        self.assertIn("4 дня", ns["trial_intro_text"]({}, "ru", True))
+        ns["TRIAL_INTRO_AT_ONBOARDING"] = False
+        self.assertEqual(ns["trial_intro_text"]({}, "ru", True), "")
         self.assertEqual(ns["trial_intro_text"]({}, "ru", False), "")
 
     def test_announcement_once_for_earlier_users(self) -> None:
