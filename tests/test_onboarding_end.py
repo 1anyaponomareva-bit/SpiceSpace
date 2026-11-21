@@ -75,7 +75,7 @@ class Sequence(unittest.TestCase):
              mock.patch.object(ob.db, "update_profile"), \
              mock.patch.object(ob.db, "save_history_turn"), \
              mock.patch.object(ob, "next_step_message", side_effect=live), \
-             mock.patch.object(ob.asyncio, "sleep", new=mock.AsyncMock()):
+             mock.patch.object(ob.asyncio, "sleep", new=mock.AsyncMock()) as slept:
             asyncio.run(ob._complete_onboarding(update, context, 5, st, {}, {}, {}, set(), []))
         texts = [t for t, _ in sent]
         self.assertEqual(len(sent), 3, texts)
@@ -83,8 +83,13 @@ class Sequence(unittest.TestCase):
         self.assertIn("Первое сообщение - в 13:00", texts[0])
         self.assertTrue(texts[1].startswith("И ещё коротко"))
         self.assertIn("завтрашний завтрак", texts[2])
-        self.assertIsNotNone(sent[2][1])  # the Mini App button under the last one
+        # Anya, 22.11.2026: the Mini App button under the summary («Погнали»), only there
+        self.assertIsNotNone(sent[0][1])
+        self.assertIsNone(sent[1][1])
+        self.assertIsNone(sent[2][1])
         context.bot.send_message.assert_not_called()  # no separate «Смотри как выглядит прогресс»
+        pauses = [c.args[0] for c in slept.await_args_list]
+        self.assertEqual(pauses, [ob.SUMMARY_TO_NOTE_S, ob.NOTE_TO_QUESTION_S])
 
     def test_fallback_by_hour(self):
         async def run(hour):

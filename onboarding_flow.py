@@ -3448,6 +3448,9 @@ def quiet_slots_after_onboarding(
     return out
 
 
+SUMMARY_TO_NOTE_S = 10  # Anya, 22.11.2026: pauses so the end of onboarding isn't a burst
+NOTE_TO_QUESTION_S = 5
+
 NEXT_STEP_SYSTEM = """You are Space, a friend in Telegram. She has just finished setting her goals with you. Write ONE short message that carries the conversation on.
 - 1-3 short sentences, plain text, no markdown, no lists.
 - No greeting, no «good morning», no name, no summary of her goals, no praise.
@@ -3554,11 +3557,25 @@ async def _complete_onboarding(
     if len(hist) > 40:
         histories[cid] = hist[-40:]
 
-    progress_kb = None
-    fn = context.bot_data.get("progress_reply_keyboard")
-    if callable(fn):
-        progress_kb = fn()
+    webapp_base = os.getenv(
+        "WEBAPP_URL", "https://spicespace-production.up.railway.app/webapp"
+    )
+    webapp_url = mini_app_webapp_url(webapp_base, cid, lang)
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    open_spicespace_button_label(lang, prefix="✦ "),
+                    web_app=WebAppInfo(url=webapp_url),
+                )
+            ]
+        ]
+    )
+    # The live message is written while the first two are on their way.
+    live_task = asyncio.create_task(next_step_message(profile, lang, datetime.now(tz), model_names))
 
+    # Anya, 22.11.2026: not all at once. Summary with the Mini App button under it
+    # («Погнали»), 10 s later the honest note, 5 s later the question about her goal.
     await msg.reply_text(
         ob_text(
             "onboarding_complete",
@@ -3569,11 +3586,11 @@ async def _complete_onboarding(
             et=et,
             tz_note=completion_tz_note(profile, lang),
         ),
-        reply_markup=progress_kb,
+        reply_markup=keyboard,
     )
 
     if st.get("age_note"):
-        await asyncio.sleep(1)
+        await asyncio.sleep(SUMMARY_TO_NOTE_S)
         await msg.reply_text(age_reply_text("note", lang))
     if st.get("src_ask_end"):
         # came without a ?start= label: where did she hear about us (was before the name)
@@ -3597,27 +3614,16 @@ async def _complete_onboarding(
         if intro:
             await msg.reply_text(intro)
 
-    webapp_base = os.getenv(
-        "WEBAPP_URL", "https://spicespace-production.up.railway.app/webapp"
-    )
-    webapp_url = mini_app_webapp_url(webapp_base, cid, lang)
-    keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    open_spicespace_button_label(lang, prefix="✦ "),
-                    web_app=WebAppInfo(url=webapp_url),
-                )
-            ]
-        ]
-    )
     # Anya, 21.11.2026: the end of onboarding goes on as a conversation, not a burst -
     # summary, the honest note, then one live message about her week's goal that fits
     # the hour (today before 18:00, tomorrow after) and ends with an easy question.
-    # The Mini App button once, under it; no separate «Смотри как выглядит прогресс».
-    await asyncio.sleep(1)
-    first_step = await next_step_message(profile, lang, datetime.now(tz), model_names)
-    await msg.reply_text(first_step, reply_markup=keyboard)
+    await asyncio.sleep(NOTE_TO_QUESTION_S)
+    try:
+        first_step = await live_task
+    except Exception as e:
+        log.warning("next step message failed cid=%s: %s", cid, e)
+        first_step = ob_text("first_step_question", lang)
+    await msg.reply_text(first_step)
     # Keep the question in the chat history: without it the next reply looks like
     # the first contact and the model greets her again.
     histories.setdefault(cid, []).append({"role": "model", "parts": [first_step]})
