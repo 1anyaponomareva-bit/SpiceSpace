@@ -33,6 +33,8 @@ POOLS = {"morning": (9, 0), "day": (13, 0), "evening": (19, 0)}
 POOL_ORDER = ("morning", "day", "evening")
 POOL_SIZE = 5
 SPACING_MIN, SPACING_MAX = 15, 25  # minutes between threads in a pool
+TIGHT_MIN, TIGHT_MAX = 10, 12  # evening pool that would run past 23:59 Moscow
+MIN_TIGHT = 5  # never closer than this, even when the evening is overfull
 CHAIN_MIN_REPLIES = 15
 CHAIN_AFTER = timedelta(hours=2)
 CHAIN_CHECK_AFTER = timedelta(minutes=20)
@@ -109,11 +111,10 @@ def schedule(day: date, items: list[dict], now: datetime | None = None,
         if start < now:
             # picks came in late: start this pool right away
             start = now + timedelta(minutes=2)
-        at = start
-        for it in by_pool[pool]:
+        todo = [it for it in by_pool[pool] if str(it.get("text") or "").strip()]
+        deadline = datetime(day.year, day.month, day.day, 23, 59, tzinfo=MSK) if pool == POOL_ORDER[-1] else None
+        for it, at in zip(todo, _pool_times(start, len(todo), deadline, rng)):
             text = str(it.get("text") or "").strip()
-            if not text:
-                continue
             out.append({
                 "day": day.isoformat(),
                 "tid": str(it.get("tid") or it.get("id") or ""),
@@ -125,8 +126,30 @@ def schedule(day: date, items: list[dict], now: datetime | None = None,
                 "status": "queued",
                 "attempts": 0,
             })
-            at += timedelta(minutes=rng.randint(SPACING_MIN, SPACING_MAX))
     return out
+
+
+def _pool_times(start: datetime, n: int, deadline: datetime | None,
+                rng: random.Random) -> list[datetime]:
+    """Times for n threads from start, the usual 15-25 minutes apart. The evening pool
+    must end by 23:59 Moscow (Anya, 21.11.2026: «все сегодня выкладывай», threads of the
+    day go out that day): if it doesn't fit, 10-12 minutes apart, and if even that
+    doesn't fit, evenly spread up to the deadline (never closer than MIN_TIGHT)."""
+    def walk(lo: int, hi: int) -> list[datetime]:
+        out, at = [], start
+        for _ in range(n):
+            out.append(at)
+            at += timedelta(minutes=rng.randint(lo, hi))
+        return out
+
+    times = walk(SPACING_MIN, SPACING_MAX)
+    if deadline is None or n < 2 or times[-1] <= deadline:
+        return times
+    times = walk(TIGHT_MIN, TIGHT_MAX)
+    if times[-1] <= deadline or deadline <= start:
+        return times  # sent after the deadline: no burst, just the tight beat
+    step =max((deadline - start) / (n - 1), timedelta(minutes=MIN_TIGHT))
+    return [start + step * i for i in range(n)]
 
 
 def load(kv_get) -> list[dict]:
@@ -150,11 +173,21 @@ def put_day(kv_get, kv_set, day: date, picked: list[dict], now: datetime | None 
         # resending the day re-queues what failed or was cancelled; posted stays posted
         done = {x.get("tid") for x in items if x.get("day") == d and x.get("status") == "posted"}
         keep = [x for x in items if x.get("day") != d or x.get("status") == "posted"]
-        planned = schedule(day, picked, now)
+        # threads already out don't get a slot: scheduling them and dropping them after
+        # left 50-100 minute holes and pushed the evening into the night (21.11.2026)
+        planned = schedule(
+            day, [p for p in picked if str(p.get("tid") or p.get("id") or "") not in done], now
+        )
         # a thread that went out without a chain gets one if the resend carries it
         # (Anya, 18.11.2026: under every thread - thread + reply + reply2);
         # spread them out so links don't land all in one burst
-        by_tid = {x["tid"]: x for x in planned}
+        by_tid = {
+            str(p.get("tid") or p.get("id") or ""): {
+                "reply": str(p.get("reply") or "").strip()[:MAX_TEXT],
+                "reply2": str(p.get("reply2") or "").strip()[:MAX_TEXT],
+            }
+            for p in picked
+        }
         slot = now
         for x in keep:
             if x.get("day") != d or x.get("reply") or x.get("chain"):

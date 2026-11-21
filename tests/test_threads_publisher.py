@@ -73,6 +73,53 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(out[0]["at"], "2026-11-18T07:02:00+00:00")
 
 
+class EveningSameDayTests(unittest.TestCase):
+    """21.11.2026: the evening pool ran till 07:09 Moscow next day."""
+
+    MID = datetime(2026, 11, 18, 20, 59, tzinfo=timezone.utc)  # 23:59 MSK
+
+    def _times(self, out):
+        return sorted(datetime.fromisoformat(x["at"]) for x in out)
+
+    def test_posted_threads_leave_no_holes(self):
+        s = Store()
+        posted = items(18)
+        for x in posted:
+            x["pool"] = "morning"
+        tp.put_day(s.get_, s.set_, DAY, posted, now=EARLY)
+        q = tp.load(s.get_)
+        for x in q:
+            x["status"] = "posted"
+        s.set_(tp.QUEUE_KEY, {"items": q})
+        new = [{"tid": f"n{i:02d}", "text": f"новый {i}", "pool": "evening"} for i in range(1, 21)]
+        afternoon = datetime(2026, 11, 18, 12, 3, tzinfo=timezone.utc)
+        resend = [dict(x, pool="evening") for x in posted] + new  # the day's whole list again
+        tp.put_day(s.get_, s.set_, DAY, resend, now=afternoon)
+        ev = self._times([x for x in tp.load(s.get_) if x["status"] == "queued"])
+        self.assertEqual(len(ev), 20)
+        gaps = [(b - a).total_seconds() / 60 for a, b in zip(ev, ev[1:])]
+        self.assertLessEqual(max(gaps), 25, gaps)
+        self.assertLessEqual(ev[-1], self.MID)
+
+    def test_overfull_evening_tightens_to_ten_twelve(self):
+        out = tp.schedule(DAY, items(25, pool="evening"), now=EARLY)
+        ev = self._times(out)
+        gaps = {(b - a).total_seconds() / 60 for a, b in zip(ev, ev[1:])}
+        self.assertTrue(all(10 <= g <= 12 for g in gaps), gaps)
+        self.assertLessEqual(ev[-1], self.MID)
+
+    def test_very_overfull_evening_spreads_to_deadline(self):
+        ev = self._times(tp.schedule(DAY, items(40, pool="evening"), now=EARLY))
+        self.assertLessEqual(ev[-1], self.MID)
+        gaps = {round((b - a).total_seconds() / 60, 1) for a, b in zip(ev, ev[1:])}
+        self.assertTrue(all(g >= tp.MIN_TIGHT for g in gaps), gaps)
+
+    def test_normal_evening_keeps_usual_beat(self):
+        ev = self._times(tp.schedule(DAY, items(5, pool="evening"), now=EARLY))
+        gaps = {(b - a).total_seconds() / 60 for a, b in zip(ev, ev[1:])}
+        self.assertTrue(all(15 <= g <= 25 for g in gaps), gaps)
+
+
 class RunTests(unittest.TestCase):
     def test_publishes_one_due_thread_per_tick(self):
         s = Store()
