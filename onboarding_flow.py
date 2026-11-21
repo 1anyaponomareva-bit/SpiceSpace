@@ -537,11 +537,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "Всё запомнила ✨\n\n"
         "Цель на 12 недель: {main_goal}\n"
         "Первая неделя: {weekly_goal}\n\n"
-        "Буду писать утром в {mt} и вечером в {et}{tz_note}\n\n"
+        "Первое сообщение - в {mt}, вечером спрошу, как прошёл день, в {et}{tz_note}\n\n"
         "Погнали 💚"
     ),
     "progress_open": "Смотри как выглядит твой прогресс 👇",
     "first_step_question": "Давай начнём с маленького шага. Что одно ты можешь сделать для цели этой недели уже сегодня? Если не знаешь, с чего начать, напиши, разложим вместе 💚",
+    "first_step_question_evening": "Давай начнём с маленького шага. Что одно ты можешь сделать для цели этой недели завтра? Если не знаешь, с чего начать, напиши, разложим вместе 💚",
     "returning_just_chat": "Хорошо, я здесь. Напиши что у тебя на душе.",
     "returning_hint": (
         "Напиши «заново» или «обновить цели» — перенастроим цели. "
@@ -767,11 +768,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "Got it all ✨\n\n"
         "12-week goal: {main_goal}\n"
         "First week: {weekly_goal}\n\n"
-        "I'll write mornings at {mt} and evenings at {et}{tz_note}\n\n"
+        "First message at {mt}, and at {et} I'll ask how your day went{tz_note}\n\n"
         "Let's go 💙"
     ),
     "progress_open": "See how your progress looks 👇",
     "first_step_question": "Let's start with one small step. What is one thing you can do for this week's goal today? If you are not sure where to start, tell me and we will break it down together 💚",
+    "first_step_question_evening": "Let's start with one small step. What is one thing you can do for this week's goal tomorrow? If you are not sure where to start, tell me and we will break it down together 💚",
     "returning_just_chat": "Okay, I'm here. Tell me what's on your mind.",
     "returning_hint": (
         "Type «start over» or «update goals» to reconfigure. Or «just chat» to talk."
@@ -3293,6 +3295,9 @@ def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
     except Exception:
         tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     today_iso = datetime.now(tz).date().isoformat()
+    # Saved together with the finished profile: marking them a step later let the
+    # scheduler send «доброе утро» in between, before the summary (Anya, 21.11.2026).
+    profile.update(quiet_slots_after_onboarding(profile, datetime.now(tz)))
     try:
         existing = db.get_profile(cid) or {}
     except db.ProfileReadError:
@@ -3443,6 +3448,32 @@ def quiet_slots_after_onboarding(
     return out
 
 
+NEXT_STEP_SYSTEM = """You are Space, a friend in Telegram. She has just finished setting her goals with you. Write ONE short message that carries the conversation on.
+- 1-3 short sentences, plain text, no markdown, no lists.
+- No greeting, no «good morning», no name, no summary of her goals, no praise.
+- Use her local time: before 18:00 the step is for today, from 18:00 it is for tomorrow; if it is evening, say so lightly (e.g. «it's already evening, so let's just plan tomorrow's breakfast»).
+- Tie it to this week's goal: offer ONE concrete small step or two options to choose from.
+- End with one easy question she can answer with a word or a short phrase.
+- Do not assume she has children or a family unless the goals say so.
+- Space is a woman: in Russian use feminine verb forms. Use « - » (a short hyphen with spaces), never a long dash."""
+
+
+async def next_step_message(profile: dict, lang: str, now_local: datetime, model_names: list[str]) -> str:
+    """The live last message of onboarding; the fixed small-step question if the model fails."""
+    evening = now_local.hour >= 18
+    fallback = ob_text("first_step_question_evening" if evening else "first_step_question", lang)
+    user = (
+        f"Local time: {now_local.strftime('%H:%M')} ({'evening: step for tomorrow' if evening else 'step for today'})\n"
+        f"12-week goal: {profile.get('main_goal') or ''}\n"
+        f"This week's goal: {profile.get('weekly_goal') or ''}"
+    )
+    text = await _claude_plain_text(
+        NEXT_STEP_SYSTEM, user, model_names, lang=lang, fallback=fallback,
+        max_tokens=160, feature="onb_next_step",
+    )
+    return (text or fallback).strip()
+
+
 TZ_NOTE_RU = " по Москве.\nЕсли у тебя другое время, напиши свой город, и я подстроюсь."
 
 
@@ -3566,7 +3597,6 @@ async def _complete_onboarding(
         if intro:
             await msg.reply_text(intro)
 
-    await asyncio.sleep(1)
     webapp_base = os.getenv(
         "WEBAPP_URL", "https://spicespace-production.up.railway.app/webapp"
     )
@@ -3581,16 +3611,13 @@ async def _complete_onboarding(
             ]
         ]
     )
-    await context.bot.send_message(
-        chat_id=cid,
-        text=s("open_miniapp", lang),
-        reply_markup=keyboard,
-    )
+    # Anya, 21.11.2026: the end of onboarding goes on as a conversation, not a burst -
+    # summary, the honest note, then one live message about her week's goal that fits
+    # the hour (today before 18:00, tomorrow after) and ends with an easy question.
+    # The Mini App button once, under it; no separate «Смотри как выглядит прогресс».
     await asyncio.sleep(1)
-    # Fixed text: a generated question here read as "have you already done it?"
-    # right after the goal was set. Ask about the first step forward instead.
-    first_step = ob_text("first_step_question", lang)
-    await msg.reply_text(first_step)
+    first_step = await next_step_message(profile, lang, datetime.now(tz), model_names)
+    await msg.reply_text(first_step, reply_markup=keyboard)
     # Keep the question in the chat history: without it the next reply looks like
     # the first contact and the model greets her again.
     histories.setdefault(cid, []).append({"role": "model", "parts": [first_step]})

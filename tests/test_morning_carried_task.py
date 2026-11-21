@@ -25,6 +25,11 @@ def _ns(base_text: str, carried: str) -> dict:
         "re": re,
         "_yesterday_unfinished_task": lambda cid, p: carried,
         "_morning_message_text_base": base,
+        # the greeting-by-hour fix has its own tests; here the text stays as written
+        "greeting_for_hour": lambda text, hour: text,
+        "datetime": __import__("datetime").datetime,
+        "_zone_or_default": lambda name: None,
+        "_profile_timezone_name": lambda p: "",
     }
     return _main_functions(
         {"_task_words", "_mentions_task", "_carried_task_question", "_morning_message_text"}, ns

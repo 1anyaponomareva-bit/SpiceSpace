@@ -12,7 +12,7 @@ import time
 
 from telegram.ext import ExtBot
 
-from text_case import capitalize_sentences
+from text_case import capitalize_sentences, short_dashes
 
 GAP_SECONDS = 1.5
 
@@ -40,11 +40,12 @@ async def wait_turn(chat_id: object, gap: float = GAP_SECONDS) -> None:
 
 
 def _cap_text(args: tuple, kwargs: dict, pos: int) -> tuple:
-    """Capitalize the text argument wherever it was passed (keyword or position)."""
+    """Capitalize the text argument wherever it was passed (keyword or position), and
+    no long dashes (« - » instead of « — », 21.11.2026)."""
     if isinstance(kwargs.get("text"), str):
-        kwargs["text"] = capitalize_sentences(kwargs["text"])
+        kwargs["text"] = short_dashes(capitalize_sentences(kwargs["text"]))
     elif len(args) > pos and isinstance(args[pos], str):
-        args = args[:pos] + (capitalize_sentences(args[pos]),) + args[pos + 1:]
+        args = args[:pos] + (short_dashes(capitalize_sentences(args[pos])),) + args[pos + 1:]
     return args
 
 

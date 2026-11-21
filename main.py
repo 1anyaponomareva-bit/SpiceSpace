@@ -2649,7 +2649,27 @@ async def _morning_message_text(
     text = await _morning_message_text_base(chat_id, profile, model_names, carried)
     if carried and not _mentions_task(text, carried):
         text = f"{text.rstrip()}\n\n{_carried_task_question(carried, ru)}"
-    return text
+    return greeting_for_hour(text, datetime.now(_zone_or_default(_profile_timezone_name(profile))).hour)
+
+
+_MORNING_GREETING_RE = re.compile(r"\b(доброе утро|с добрым утром|good morning)\b", re.I)
+
+
+def greeting_for_hour(text: str, hour: int) -> str:
+    """«Доброе утро» only in the morning (Anya, 21.11.2026: the first message at 13:00
+    said good morning). Before 12:00 as is; afternoon - «привет», from 18:00 «добрый вечер»."""
+    if hour < 12:
+        return text
+
+    def swap(m: re.Match) -> str:
+        en = m.group(1).lower().startswith("good")
+        if hour >= 18:
+            new = "good evening" if en else "добрый вечер"
+        else:
+            new = "hi" if en else "привет"
+        return new[0].upper() + new[1:] if m.group(1)[0].isupper() else new
+
+    return _MORNING_GREETING_RE.sub(swap, text or "")
 
 
 async def _morning_message_text_base(

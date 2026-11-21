@@ -44,7 +44,8 @@ class CompletionNote(unittest.TestCase):
         note = ob.completion_tz_note({"timezone": "Europe/Moscow"}, "ru")
         self.assertIn("по Москве", note)
         text = ob.ob_text("onboarding_complete", "ru", main_goal="g", weekly_goal="w", mt="09:30", et="21:00", tz_note=note)
-        self.assertIn("вечером в 21:00 по Москве.\nЕсли у тебя другое время, напиши свой город", text)
+        self.assertIn("Первое сообщение - в 09:30, вечером спрошу, как прошёл день, в 21:00 по Москве.\nЕсли у тебя другое время, напиши свой город", text)
+        self.assertNotIn("утром", text)
 
     def test_known_zone_plain(self):
         self.assertEqual(ob.completion_tz_note({"timezone": "Europe/Moscow", "cycle_flags": {"tz_set": True}}, "ru"), ".")

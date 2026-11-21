@@ -64,3 +64,21 @@ def capitalize_sentences(text: str) -> str:
                     continue  # "1. пункт" stays as written; lists start lines anyway
             _raise_from(chars, i + 1)
     return "".join(chars)
+
+
+_DIGIT_DASH = re.compile(r"(?<=\d)\s*[—–]\s*(?=\d)")
+_ANY_DASH = re.compile(r"[ \t]*[—–][ \t]*")
+
+
+def short_dashes(text: str) -> str:
+    """No long dash in anything the bot sends (Anya, 21.11.2026): « - » instead of
+    « — » or « – »; between digits a plain hyphen («2-3»)."""
+    if not text or not isinstance(text, str) or ("—" not in text and "–" not in text):
+        return text
+    text = _DIGIT_DASH.sub("-", text)
+
+    def swap(m: re.Match) -> str:
+        start = m.start() == 0 or text[m.start() - 1] == "\n"
+        return "- " if start else " - "
+
+    return _ANY_DASH.sub(swap, text)
