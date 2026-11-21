@@ -16,6 +16,7 @@ from telegram.ext import ContextTypes
 
 import db
 from bot_typing import typing_while
+from claude_budget import DYNAMIC_MARKER
 from safety import SAFETY_RULE_EN
 from goal_change import (
     build_change_12w_state,
@@ -397,13 +398,15 @@ PRICE_RULE_EN = (
 
 
 def _system_with_lang(system: str, lang: str) -> str:
+    """Shared rules first, then the step's own prompt after DYNAMIC_MARKER: the rules are
+    the same for every step and every person, so they are read from cache (22.11.2026)."""
     lc = str(lang or "en").lower()
-    if lc.startswith("ru"):
-        return (
-            "IMPORTANT: User speaks Russian. Respond in Russian only.\n\n"
-            + system + "\n\n" + SAFETY_RULE_EN + "\n\n" + PRICE_RULE_EN
-        )
-    return _EN_SYSTEM_PREFIX + system + "\n\n" + SAFETY_RULE_EN + "\n\n" + PRICE_RULE_EN
+    head = (
+        "IMPORTANT: User speaks Russian. Respond in Russian only.\n\n"
+        if lc.startswith("ru")
+        else _EN_SYSTEM_PREFIX
+    )
+    return head + SAFETY_RULE_EN + "\n\n" + PRICE_RULE_EN + DYNAMIC_MARKER + system
 
 
 def _user_content_with_lang(content: str, lang: str) -> str:
@@ -1418,7 +1421,7 @@ async def _claude_plain_text(
                     _messages_with_lang(messages, lang),
                     system=_system_with_lang(system, lang),
                     max_tokens=max_tokens,
-                    cache_core=False,
+                    cache_core=True,
                     feature=feature,
                 ).strip()
                 text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.I).strip()
@@ -1972,8 +1975,11 @@ def generate_json_reply(
     system: str,
     max_tokens: int = 400,
     feature: str = "onboarding",
+    cache_dynamic: bool = False,
 ) -> tuple[str, str]:
-    """Call Claude with the reply prefilled with "{" so it answers in JSON.
+    """cache_dynamic: the step's prompt is the same for everyone, cache it too.
+
+    Call Claude with the reply prefilled with "{" so it answers in JSON.
 
     Returns (json_text, model_text): json_text has the "{" restored, model_text is what
     the model itself wrote. A 400 on the prefilled call is retried once without it.
@@ -1991,7 +1997,8 @@ def generate_json_reply(
                 messages + [_JSON_PREFILL],
                 system=system,
                 max_tokens=max_tokens,
-                cache_core=False,
+                cache_core=True,
+                cache_dynamic=cache_dynamic,
                 feature=feature,
             ).strip()
         except Exception as exc:
@@ -2010,7 +2017,8 @@ def generate_json_reply(
         messages,
         system=json_system,
         max_tokens=max_tokens,
-        cache_core=False,
+        cache_core=True,
+        cache_dynamic=cache_dynamic,
         feature=f"{feature}_retry" if prefill else feature,
     ).strip()
     return text, text
@@ -2145,15 +2153,19 @@ async def _extract_name(
     )
     name_system = s("name_extract_system", lang)
 
+    # Pulling a name out of a short reply is easy: the cheap model first, the main one if
+    # it fails. Checked on 12 replies (22.11.2026): same names as the main model.
+    from claude_client import schedule_model_chain
+
     def call() -> str:
-        for mid in model_names:
+        for mid in schedule_model_chain(model_names):
             try:
                 text = claude_generate(
                     mid,
                     [{"role": "user", "content": _user_content_with_lang(prompt, lang)}],
                     system=_system_with_lang(name_system, lang),
                     max_tokens=60,
-                    cache_core=False,
+                    cache_core=True,
                     feature="onb_extract_name",
                 ).strip()
                 if text:
@@ -2199,6 +2211,7 @@ async def _claude_vision_dialog(
                     _messages_with_lang(messages, lang),
                     system=_system_with_lang(system, lang),
                     feature="onb_why_dig",
+                    cache_dynamic=True,
                 )
                 parsed = _parse_vision_dialog_json(text)
                 if parsed:
@@ -2267,7 +2280,7 @@ async def _claude_weekly_recap_dialog(
                     _messages_with_lang(messages, lang),
                     system=system,
                     max_tokens=400,
-                    cache_core=False,
+                    cache_core=True,
                     feature="weekly_recap_dialog",
                 ).strip()
                 parsed = _parse_weekly_recap_json(text)
@@ -2315,7 +2328,7 @@ async def _claude_change_weekly_dialog(
                     _messages_with_lang(messages, lang),
                     system=system,
                     max_tokens=400,
-                    cache_core=False,
+                    cache_core=True,
                     feature="change_weekly_dialog",
                 ).strip()
                 parsed = _parse_weekly_change_json(text)
@@ -2475,7 +2488,7 @@ async def _polish_goal(
                     [{"role": "user", "content": _user_content_with_lang(prompt, lang)}],
                     system=_system_with_lang(polish_system, lang),
                     max_tokens=220,
-                    cache_core=False,
+                    cache_core=True,
                     feature="onb_polish_goal",
                 ).strip()
                 if text:

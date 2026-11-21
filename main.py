@@ -5394,7 +5394,15 @@ async def _coach_reply(
     if extra_rule:
         turn_parts.append(extra_rule)
     goal_text = f"{prof.get('main_goal') or ''} {prof.get('weekly_goal') or ''}"
-    topic = specialty_instructions(user_text, lang=lang, goal_text=goal_text)
+    # A block that comes from her goal is the same in every message: it goes into the
+    # system prompt, read from cache. One that only this message asked for stays in the
+    # message (22.11.2026).
+    goal_topic = specialty_instructions("", lang=lang, goal_text=goal_text)
+    if goal_topic:
+        extra_parts.append(goal_topic)
+    topic = specialty_instructions(user_text, lang=lang)
+    if goal_topic and topic:
+        topic = topic.replace(goal_topic, "").strip()
     if topic:
         turn_parts.append(topic)
     if facts_text:

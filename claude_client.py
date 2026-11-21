@@ -175,7 +175,8 @@ def _system_blocks(
     if not system:
         return ""
     if not cache_core:
-        return system
+        # never send the marker itself to the model
+        return system.replace(DYNAMIC_MARKER, "\n\n")
     if DYNAMIC_MARKER in system:
         static, dynamic = system.split(DYNAMIC_MARKER, 1)
         blocks: list[dict] = []
@@ -234,8 +235,11 @@ def generate(
     lang: str = "ru",
     strict: bool = False,
     cache_history: bool = False,
+    cache_dynamic: bool | None = None,
 ) -> str:
-    """cache_history: also cache the per-user part of the system prompt and the
+    """cache_dynamic: also cache the part of the system prompt after DYNAMIC_MARKER
+    (defaults to cache_history); for prompts whose whole system is the same for everyone.
+    cache_history: also cache the per-user part of the system prompt and the
     conversation up to the new message (chat), so a run of messages reads them
     from cache instead of paying for them again each time."""
     global _billing_stopped
@@ -250,7 +254,9 @@ def generate(
     }
     if system:
         kwargs["system"] = _system_blocks(
-            system, cache_core=cache_core, cache_dynamic=cache_history
+            system,
+            cache_core=cache_core,
+            cache_dynamic=cache_history if cache_dynamic is None else cache_dynamic,
         )
     t0 = time.perf_counter()
     try:
