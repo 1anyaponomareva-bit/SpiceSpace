@@ -377,8 +377,14 @@ def update_profile_field(user_id: int | str, field: str, value: object) -> dict 
     return update_profile(user_id, {field: value})
 
 
+
+def _guess_tz(lang: object) -> str:
+    from tz_guess import default_timezone
+
+    return default_timezone(str(lang or ""))
+
 def _profile_local_today(profile: dict) -> str:
-    tz_name = str(profile.get("timezone") or "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
+    tz_name = str(profile.get("timezone") or "").strip() or _guess_tz(profile.get("language_code"))
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
@@ -925,7 +931,7 @@ def _profile_to_row(p: dict) -> dict:
         "daily_time": morning,
         "morning_time": morning,
         "evening_time": evening,
-        "timezone": p.get("timezone", "Asia/Ho_Chi_Minh"),
+        "timezone": p.get("timezone") or _guess_tz(p.get("language_code")),
         "daily_enabled": p.get("daily_enabled", True),
         "last_daily_sent_date": last_m if last_m else None,
         "last_morning_sent_date": last_m if last_m else None,
@@ -1644,6 +1650,18 @@ def lava_payments_all() -> list[dict] | None:
             return rows
     local = [r for r in _lava_local().values() if isinstance(r, dict)]
     return local or None
+
+
+def profiles_created_since(since_iso: str) -> list[dict]:
+    """user_id, language_code, timezone, cycle_flags of profiles created after since_iso."""
+    if not _use_supabase:
+        return []
+    rows = _request(
+        "GET",
+        f"user_profiles?created_at=gte.{since_iso}"
+        "&select=user_id,language_code,timezone,cycle_flags&limit=5000",
+    )
+    return [r for r in (rows or []) if isinstance(r, dict)]
 
 
 def kv_get(key: str) -> dict | None:

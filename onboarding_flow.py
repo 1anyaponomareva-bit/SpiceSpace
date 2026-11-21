@@ -527,7 +527,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "Всё запомнила ✨\n\n"
         "Цель на 12 недель: {main_goal}\n"
         "Первая неделя: {weekly_goal}\n\n"
-        "Буду писать утром в {mt} и вечером в {et}.\n\n"
+        "Буду писать утром в {mt} и вечером в {et}{tz_note}\n\n"
         "Погнали 💚"
     ),
     "progress_open": "Смотри как выглядит твой прогресс 👇",
@@ -757,7 +757,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "Got it all ✨\n\n"
         "12-week goal: {main_goal}\n"
         "First week: {weekly_goal}\n\n"
-        "I'll write mornings at {mt} and evenings at {et}.\n\n"
+        "I'll write mornings at {mt} and evenings at {et}{tz_note}\n\n"
         "Let's go 💙"
     ),
     "progress_open": "See how your progress looks 👇",
@@ -1035,7 +1035,7 @@ def _seed_from_profile(st: dict, profile: dict) -> None:
     st.setdefault("weekly_goal", str(profile.get("weekly_goal") or "").strip())
     st.setdefault("morning_time", profile.get("morning_time") or profile.get("daily_time") or "09:30")
     st.setdefault("evening_time", profile.get("evening_time") or "21:00")
-    st.setdefault("timezone", profile.get("timezone") or _default_timezone())
+    st.setdefault("timezone", profile.get("timezone") or _default_timezone(lang))
     st.setdefault("time_per_day", profile.get("time_per_day") or "30 минут")
     if profile.get("has_kids") is not None:
         st["has_kids"] = profile.get("has_kids")
@@ -1277,7 +1277,7 @@ def _profile_chatted_today(profile: dict | None) -> bool:
     if not last:
         return False
     try:
-        tz = ZoneInfo(str(profile.get("timezone") or _default_timezone()))
+        tz = ZoneInfo(str(profile.get("timezone") or _default_timezone(profile.get("language_code"))))
         today = datetime.now(tz).date().isoformat()
     except Exception:
         today = date.today().isoformat()
@@ -1643,8 +1643,11 @@ def greeting_returning(name: str, lang: str = "en") -> str:
     return ob_text("greeting_returning", lang, name=n)
 
 
-def _default_timezone() -> str:
-    return os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
+def _default_timezone(lang: str | None = None) -> str:
+    """Her zone until she tells it: Moscow for Russian speakers (see tz_guess)."""
+    from tz_guess import bot_timezone, default_timezone
+
+    return default_timezone(lang) if lang else bot_timezone()
 
 
 def _detect_kids_from_text(text: str) -> bool:
@@ -3259,7 +3262,7 @@ def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
         "morning_time": morning,
         "evening_time": evening,
         "daily_time": morning,
-        "timezone": str(st.get("timezone") or _default_timezone()),
+        "timezone": str(st.get("timezone") or _default_timezone(st.get("language_code") or st.get("lang"))),
         "daily_enabled": True,
         "has_kids": st.get("has_kids"),
         "raw_goal": str(st.get("main_goal", "")).strip()[:2000],
@@ -3276,7 +3279,7 @@ def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
         "language_code": str(st.get("language_code") or "en")[:16],
     }
     try:
-        tz = ZoneInfo(str(profile.get("timezone") or _default_timezone()))
+        tz = ZoneInfo(str(profile.get("timezone") or _default_timezone(profile.get("language_code"))))
     except Exception:
         tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     today_iso = datetime.now(tz).date().isoformat()
@@ -3430,6 +3433,20 @@ def quiet_slots_after_onboarding(
     return out
 
 
+TZ_NOTE_RU = " по Москве.\nЕсли у тебя другое время, напиши свой город, и я подстроюсь."
+
+
+def completion_tz_note(profile: dict, lang: str) -> str:
+    """«по Москве» + how to fix it, while Moscow is only our guess (21.11.2026)."""
+    from tz_guess import MOSCOW
+
+    flags = profile.get("cycle_flags") if isinstance(profile, dict) else None
+    tz_set = isinstance(flags, dict) and flags.get("tz_set")
+    if _is_ru(lang) and str((profile or {}).get("timezone") or "") == MOSCOW and not tz_set:
+        return TZ_NOTE_RU
+    return "."
+
+
 async def _complete_onboarding(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -3454,7 +3471,7 @@ async def _complete_onboarding(
     # week 1 from today. Before, a repeated onboarding kept the old start date, so the
     # new goal landed on e.g. week 12 of the previous cycle.
     try:
-        tz = ZoneInfo(str(profile.get("timezone") or _default_timezone()))
+        tz = ZoneInfo(str(profile.get("timezone") or _default_timezone(profile.get("language_code"))))
     except Exception:
         tz = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
     today_iso = datetime.now(tz).date().isoformat()
@@ -3509,6 +3526,7 @@ async def _complete_onboarding(
             weekly_goal=weekly_goal,
             mt=mt,
             et=et,
+            tz_note=completion_tz_note(profile, lang),
         ),
         reply_markup=progress_kb,
     )

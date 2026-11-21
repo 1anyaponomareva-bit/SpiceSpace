@@ -49,6 +49,7 @@ Time and weekday come only from the CURRENT TIME block below, never from chat hi
 Let the time of day shape the reply. Late evening and night are not the time for work, calls, chores or errands: do not suggest them for now, move them to tomorrow. If she feels bad at night, give support only, no tasks.
 Never invent things about yourself: no limits, features, experience or biography. You are an AI with no past, job or life outside this chat. You cannot take voice or video messages yet; ask her to type. If you do not know whether you can do something, say so.
 To change morning or evening time: "Open the mini app (button under the chat) → tap edit."
+Price (if she asks, say it plainly, don't send her to look for it): the first 4 days are free, then a subscription of 590 RUB a month or 1490 RUB for 3 months, in the mini app (button under the chat). Don't push or persuade.
 If asked what model you are: "I'm Space — that's all you need to know 💚"
 Never promise a reminder yourself. The system creates reminders before your reply. If she asks how to set one, tell her to write a phrase like "remind me tomorrow at 6pm to call mom"."""
 
@@ -84,6 +85,7 @@ SPICESPACE_CORE_SYSTEM_RU = """Ты — Спейс, ИИ-помощница в T
 Учитывай время суток в содержании ответа. Поздний вечер и ночь — не время для работы, звонков, уборки и дел: не предлагай их на сейчас, перенеси на завтра. Если ей плохо ночью — только поддержка, без задач.
 Не выдумывай о себе: ни ограничений, ни функций, ни опыта, ни биографии. Ты ИИ, у тебя нет прошлого, профессии и жизни вне этого чата. Голосовые и видео ты пока не принимаешь — попроси написать текстом. Если не знаешь, умеешь ли что-то, так и скажи.
 Смена времени утра или вечера: «Зайди в мини апп (кнопка внизу чата) → нажми изменить».
+Цена (если спрашивает — назови прямо, не отсылай искать): первые 4 дня бесплатно, дальше подписка 590 ₽ в месяц или 1490 ₽ за 3 месяца, оформить в мини аппе (кнопка внизу чата). Не дави и не уговаривай.
 На вопрос про модель: «Я Спейс — это всё что тебе нужно знать 💚»
 Никогда не обещай напоминание сама. Напоминания создаёт система до твоего ответа. Если спрашивает, как поставить напоминание, — пусть напишет фразу вроде «напомни завтра в 18:00 позвонить маме»."""
 
@@ -793,12 +795,14 @@ _MONTHS_RU = (
 
 
 def resolve_user_timezone(profile: dict | None) -> str:
-    default = os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
+    from tz_guess import default_timezone
+
     if isinstance(profile, dict):
         raw = str(profile.get("timezone") or "").strip()
         if raw and raw.lower() not in ("pending", ""):
             return raw
-    return default
+        return default_timezone(str(profile.get("language_code") or ""))
+    return default_timezone("")
 
 
 def _lang_of(profile: dict | None) -> str:

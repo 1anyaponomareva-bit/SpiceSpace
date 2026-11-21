@@ -44,6 +44,7 @@ import meta_stats
 import threads_publisher
 import onboarding_flow as ob
 import safety
+import tz_guess
 import memory_context
 from bot_ui import ui_lang, ui_text
 from bot_typing import typing_while
@@ -1403,6 +1404,51 @@ def _apply_flow_blob(cid: int, blob: object) -> None:
         _flow_save_muted = False
 
 
+async def _save_scheduled_turn(cid: int, text: str) -> None:
+    """Morning and evening messages go to the saved history too (21.11.2026): without it
+    neither we nor the bot could see what she got before she went quiet or blocked."""
+    try:
+        await asyncio.to_thread(db_store.save_history_turn, cid, "model", str(text or "")[:4000])
+    except Exception as e:
+        log.warning("scheduled message not saved cid=%s: %s", cid, e)
+
+
+TZ_FIX_KV = "tz_fix_2111"
+TZ_FIX_SINCE = "2026-11-10T00:00:00"
+
+
+def _fix_guessed_timezones() -> int:
+    """Once (Anya, 21.11.2026): Russian-speaking people who never told their zone got
+    Vietnam time, so mornings came at 4-5 a.m. Moscow. Move them to Moscow. The owner's
+    accounts stay (she really is in Vietnam); ids are kept in app_kv to undo it."""
+    if db_store.kv_get(TZ_FIX_KV):
+        return 0
+    skip = {ADMIN_TELEGRAM_ID}
+    for part in str(os.getenv("WEEKTEST_TELEGRAM_IDS", "") or "").replace(";", ",").split(","):
+        if part.strip().isdigit():
+            skip.add(int(part.strip()))
+    moved: list[int] = []
+    for row in db_store.profiles_created_since(TZ_FIX_SINCE):
+        try:
+            uid = int(row.get("user_id"))
+        except (TypeError, ValueError):
+            continue
+        tz_now = str(row.get("timezone") or "").strip()
+        if uid in skip or _tz_confirmed(row):
+            continue
+        if tz_now not in ("", "pending", tz_guess.bot_timezone()):
+            continue
+        if tz_guess.default_timezone(str(row.get("language_code") or "")) != tz_guess.MOSCOW:
+            continue
+        db_store.update_profile(uid, {"timezone": tz_guess.MOSCOW})
+        cached = user_profiles.get(str(uid))
+        if isinstance(cached, dict):
+            cached["timezone"] = tz_guess.MOSCOW
+        moved.append(uid)
+    db_store.kv_set(TZ_FIX_KV, {"moved": moved, "from": tz_guess.bot_timezone(), "to": tz_guess.MOSCOW})
+    return len(moved)
+
+
 REMINDER_RESTORE_HOURS = 30
 ONBOARDING_REMINDER_MAX_IDLE_MIN = 24 * 60
 reminder_flows_restored: list[bool] = []
@@ -1638,7 +1684,8 @@ def _profile_timezone_name(profile: dict | None) -> str:
         tz = str(profile.get("timezone") or "").strip()
         if tz and tz.lower() != "pending":
             return tz
-    return os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
+        return tz_guess.default_timezone(str(profile.get("language_code") or ""))
+    return tz_guess.bot_timezone()
 
 
 def _is_placeholder_timezone(tz: str | None) -> bool:
@@ -5291,7 +5338,7 @@ async def _coach_reply(
         user_profiles[tid] = prof
     lang = str(prof.get("language_code") or "en")
     is_russian = lang.lower().startswith("ru")
-    tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
+    tz_name = _profile_timezone_name(prof)
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name)
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
     facts = await asyncio.to_thread(
@@ -5472,7 +5519,7 @@ async def _coach_reply_photo(
     if isinstance(prof, dict):
         prof = await _refresh_profile_timezone(chat_id, prof)
         user_profiles[tid] = prof
-    tz_name = str(prof.get("timezone") or os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
+    tz_name = _profile_timezone_name(prof)
     yesterday = db_store.get_yesterday_summary(chat_id, tz_name)
     today_summary = db_store.get_daily_summary(chat_id, _profile_local_date(prof))
     lang = str(prof.get("language_code") or "en")
@@ -6697,6 +6744,7 @@ async def _deliver_scheduled_morning(
             text=sanitize_bot_reply(text),
             reply_markup=_webapp_keyboard(cid, ulang),
         )
+        await _save_scheduled_turn(cid, text)
         pending_morning[cid] = {
             "task": _yesterday_unfinished_task(cid, profile),
             "text": text,
@@ -7026,6 +7074,45 @@ async def _handle_language_switch(update: Update, cid: int, raw: str, prof: dict
     return False
 
 
+def _tz_confirmed(prof: dict | None) -> bool:
+    flags = prof.get("cycle_flags") if isinstance(prof, dict) else None
+    return bool(isinstance(flags, dict) and flags.get("tz_set"))
+
+
+def _confirm_timezone(cid: int, prof: dict, tz_name: str) -> None:
+    """Save the zone she gave (city or Mini App) and stop guessing."""
+    prof["timezone"] = tz_name
+    flags = dict(prof.get("cycle_flags") or {}) if isinstance(prof.get("cycle_flags"), dict) else {}
+    flags["tz_set"] = True
+    prof["cycle_flags"] = flags
+    db_store.update_profile(cid, {"timezone": tz_name, "cycle_flags": flags})
+    user_profiles[str(cid)] = prof
+
+
+async def _handle_city_timezone(update: Update, cid: int, raw: str, prof: dict | None) -> bool:
+    """After onboarding said «по Москве, напиши свой город»: a short message that is just
+    a city sets her time zone (21.11.2026). The times stay the same on her clock."""
+    if not isinstance(prof, dict) or not prof or _tz_confirmed(prof):
+        return False
+    if cid in onboarding or not str(prof.get("main_goal") or "").strip():
+        return False
+    hit = tz_guess.city_timezone(raw)
+    if not hit:
+        return False
+    tz_name, label = hit
+    await asyncio.to_thread(_confirm_timezone, cid, prof, tz_name)
+    log.info("timezone set from city cid=%s -> %s", cid, tz_name)
+    mt = _normalize_profile_hm(prof.get("morning_time") or prof.get("daily_time"), "09:30")
+    et = _normalize_profile_hm(prof.get("evening_time"), "21:00")
+    if ui_lang(prof) == "ru":
+        text = f"Поняла, теперь пишу по времени {label}: утром в {mt}, вечером в {et} 🤍"
+    else:
+        text = f"Got it, I'll go by your local time now: mornings at {mt}, evenings at {et} 🤍"
+    _append_history_turn(cid, raw, text)
+    await _bot_reply(update.message, text)
+    return True
+
+
 def _age_blocked(prof: dict | None) -> bool:
     flags = prof.get("cycle_flags") if isinstance(prof, dict) else None
     return bool(isinstance(flags, dict) and flags.get("ob_age_no"))
@@ -7094,6 +7181,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if await _handle_language_switch(update, cid, raw, prof_early):
+        return
+
+    if await _handle_city_timezone(update, cid, raw, prof_early):
         return
 
     if await _lava_handle_text(update, cid, raw, prof_early):
@@ -9693,6 +9783,10 @@ async def _bootstrap_bot() -> None:
                                     text=sanitize_bot_reply(evening_text),
                                     reply_markup=keyboard,
                                 )
+                                histories.setdefault(cid, []).append(
+                                    {"role": "model", "parts": [evening_text]}
+                                )
+                                await _save_scheduled_turn(cid, evening_text)
                                 await _maybe_send_trial_evening_message(
                                     bot, cid, profile, today_date, user_profiles
                                 )
@@ -9722,6 +9816,12 @@ async def _bootstrap_bot() -> None:
             reminder_flows_restored.append(True)
             n = await asyncio.to_thread(_restore_recent_flows)
             log.info("onboarding_reminder: restored %s onboarding states after start", n)
+            try:
+                moved = await asyncio.to_thread(_fix_guessed_timezones)
+                if moved:
+                    log.info("timezone fix: %s Russian-speaking profiles moved to Moscow", moved)
+            except Exception as e:
+                log.warning("timezone fix failed: %s", e)
         for cid, st in list(onboarding.items()):
             if not isinstance(st, dict):
                 continue
@@ -10647,11 +10747,9 @@ def patch_profile_timezone_endpoint(
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid timezone") from exc
 
-    if str(profile.get("timezone") or "") == new_tz:
+    if str(profile.get("timezone") or "") == new_tz and _tz_confirmed(profile):
         return {"ok": True}  # sent on every Mini App open; skip the write when unchanged
-    profile["timezone"] = new_tz
-    db_store.upsert_profile(int(tid), profile)
-    user_profiles[tid] = profile
+    _confirm_timezone(int(tid), profile, new_tz)  # the phone's zone beats our guess
     return {"ok": True, "profile": _enrich_profile_for_api(profile, tid)}
 
 
