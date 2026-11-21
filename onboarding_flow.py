@@ -180,17 +180,18 @@ OB_ASK_EVENING_TIME = OB_EVENING_TIME
 
 # Anya, 21.11.2026: this text, no 18+ buttons under it; the 18+ and "not a therapist"
 # note comes after onboarding (AGE_NOTE_*). Sentences start with a capital letter.
+# Anya's wording, 22.11.2026: short, with air between the lines
 GREETING_NEW_RU = (
-    "Привет 👋 рада, что заглянула!\n"
-    "Я Спейс, ИИ в тг. Берём одну твою цель и идём к ней по маленькому шагу в день. "
-    "Я сама пишу первой и напоминаю, тебе ничего не надо держать в голове.\n"
-    "Первый шаг дам уже сегодня. Как тебя зовут? 🤍"
+    "Привет 👋 Я Спейс 🤍\n\n"
+    "Помогаю не бросить то, что для тебя важно. "
+    "Ты называешь цель, а я каждый день помогаю тебе ее достичь.\n\n"
+    "Как тебя зовут?"
 )
 GREETING_NEW_EN = (
-    "Hi 👋 so glad you stopped by!\n"
-    "I'm Space, an AI in Telegram. We take one goal of yours and move toward it one small step a day. "
-    "I message you first and remind you, so you don't have to keep anything in your head.\n"
-    "You'll get your first step today. What's your name? 🤍"
+    "Hi 👋 I'm Space 🤍\n\n"
+    "I help you not give up on what matters to you. "
+    "You name a goal, and every day I help you reach it.\n\n"
+    "What's your name?"
 )
 AGE_NOTE_RU = (
     "И ещё коротко, чтобы было честно 🤍 Я ИИ, не психолог и не врач: со здоровьем и тяжёлыми "

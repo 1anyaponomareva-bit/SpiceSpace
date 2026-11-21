@@ -31,8 +31,8 @@ class Minor(unittest.TestCase):
 class Greeting(unittest.TestCase):
     def test_new_greeting_asks_name_without_18_line(self):
         ru = ob.get_greeting_new("ru")
-        self.assertTrue(ru.startswith("Привет 👋 рада, что заглянула!"))
-        self.assertTrue(ru.endswith("Как тебя зовут? 🤍"))
+        self.assertTrue(ru.startswith("Привет 👋 Я Спейс 🤍"))
+        self.assertTrue(ru.endswith("Как тебя зовут?"))
         self.assertNotIn("18", ru)
         self.assertIn("name", ob.get_greeting_new("en"))
 
