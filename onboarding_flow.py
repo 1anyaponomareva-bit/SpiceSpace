@@ -2950,20 +2950,22 @@ def parse_time_nl(raw: str, context: str = "morning") -> str | None:
         h, mi = int(m.group(1)), int(m.group(2))
         return fmt(h, mi)
 
-    m = re.fullmatch(r"(\d{1,2})(?:\s*[:.]\s*(\d{2}))?", text)
+    # «21 40», «21-40», «21ч40», «в 9 30»: people often skip the colon (21.11: «В 21 40»
+    # was not understood and dropped her out of onboarding at the last question)
+    m = re.fullmatch(r"(?:в\s+)?(\d{1,2})(?:\s*[:.\-ч]\s*(\d{2})|\s+(\d{2}))?", text)
     if m:
         h = int(m.group(1))
-        mi = int(m.group(2)) if m.group(2) else 0
+        mi = int(m.group(2) or m.group(3) or 0)
         return resolve_ambiguous(h, mi)
 
     m = re.search(
-        r"(?:в\s+)?(\d{1,2})(?:\s*[:.]\s*(\d{2}))?\s*(утра|утром|вечера|вечером|ночи|ночью|час|часов)?",
+        r"(?:в\s+)?(\d{1,2})(?:\s*[:.\-ч]\s*(\d{2})|\s+(\d{2})(?!\d))?\s*(утра|утром|вечера|вечером|ночи|ночью|час|часов)?",
         text,
     )
     if m:
         h = int(m.group(1))
-        mi = int(m.group(2)) if m.group(2) else 0
-        marker = m.group(3)
+        mi = int(m.group(2) or m.group(3) or 0)
+        marker = m.group(4)
         if marker in ("утра", "утром", "вечера", "вечером", "ночи", "ночью"):
             return resolve_marked(h, mi, marker)
         return resolve_ambiguous(h, mi)
@@ -2982,10 +2984,13 @@ def parse_time_nl(raw: str, context: str = "morning") -> str | None:
                 return resolve_marked(hour, mi, marker)
             return resolve_ambiguous(hour, mi)
 
+    evening_word = bool(re.search(r"(вечера|вечером|ночи|ночью)", text)) or (
+        ctx == "evening" and not re.search(r"(утра|утром)", text)
+    )
     if "полдевят" in text or "пол 9" in text:
-        return "08:30"
+        return "20:30" if evening_word else "08:30"
     if "полдесят" in text or "пол 10" in text:
-        return "09:30"
+        return "21:30" if evening_word else "09:30"
 
     return None
 

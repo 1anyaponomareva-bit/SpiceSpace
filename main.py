@@ -5911,7 +5911,13 @@ def _structured_flow_reply_matches(
     if kind == "goal_confirm":
         return ob._is_goal_confirm_yes(raw) or ob._is_goal_confirm_no(raw)
     if kind == "time_setup":
-        return bool(_extract_hhmm_from_text(raw) or _parse_daily_time(raw.strip()))
+        st = onboarding.get(cid) if isinstance(onboarding.get(cid), dict) else {}
+        ctx = "evening" if int(st.get("step") or -1) == OB_ASK_EVENING_TIME else "morning"
+        return bool(
+            _extract_hhmm_from_text(raw)
+            or _parse_daily_time(raw.strip())
+            or ob.parse_time_nl(raw, ctx)
+        )
     if kind == "midday_reminder":
         low = raw.strip().lower()
         return _user_declined(low) or bool(
@@ -5993,7 +5999,9 @@ async def _try_flow_escape(
         await _exit_flow_and_reply(update, cid, raw, prof)
         return True
 
-    if structured:
+    if structured and structured != "time_setup":
+        # the time question is the last step of onboarding: an answer we can't read
+        # gets asked again, it must not throw her out with everything she told us
         streak = flow_mismatch_streak.get(cid, 0) + 1
         flow_mismatch_streak[cid] = streak
         if streak >= 2:
