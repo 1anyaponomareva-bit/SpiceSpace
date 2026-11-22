@@ -610,10 +610,14 @@ STRINGS: dict[str, dict[str, str]] = {
     "vision_fallback": "Расскажи ещё чуть-чуть?",
     "goal_fallback": "Расскажи подробнее?",
     "weekly_dialog_fallback": "Расскажи подробнее?",
-    "weekly_dialog_opening": "Что ты сама хочешь успеть на этой неделе, чтобы стать ближе к цели?",
+    "weekly_dialog_opening": (
+        "Что ты сама хочешь успеть на этой неделе, чтобы стать ближе к цели?\n\n"
+        "Если пока не знаешь, могу предложить несколько вариантов."
+    ),
     "new_week_morning_nudge": (
         "Доброе утро 💚 Вчера вечером мы начали ставить цель на новую неделю. "
-        "Что ты сама хочешь успеть на этой неделе, чтобы стать ближе к цели?"
+        "Что ты сама хочешь успеть на этой неделе, чтобы стать ближе к цели?\n\n"
+        "Если пока не знаешь, могу предложить несколько вариантов."
     ),
     "new_week_morning_resume": "Доброе утро 💚 Вчера мы не договорили про цель на новую неделю.",
     "default_goal": "твоя цель",
@@ -841,10 +845,14 @@ STRINGS: dict[str, dict[str, str]] = {
     "vision_fallback": "Tell me a bit more?",
     "goal_fallback": "Tell me more?",
     "weekly_dialog_fallback": "Tell me more?",
-    "weekly_dialog_opening": "What do you want to get done this week to move toward your goal?",
+    "weekly_dialog_opening": (
+        "What do you want to get done this week to move toward your goal?\n\n"
+        "If you're not sure yet, I can suggest a few options."
+    ),
     "new_week_morning_nudge": (
         "Good morning 💚 Last night we started setting your goal for the new week. "
-        "What do you want to get done this week to move toward your goal?"
+        "What do you want to get done this week to move toward your goal?\n\n"
+        "If you're not sure yet, I can suggest a few options."
     ),
     "new_week_morning_resume": "Good morning 💚 Yesterday we didn't finish setting your goal for the new week.",
     "default_goal": "your goal",
@@ -1363,6 +1371,32 @@ def name_keyboard(first_name: str | None, lang: str = "en") -> InlineKeyboardMar
         [InlineKeyboardButton(f"Я {name} 👋" if ru else f"I'm {name} 👋", callback_data="ob_name:tg")],
         [InlineKeyboardButton(NAME_OTHER_RU if ru else NAME_OTHER_EN, callback_data="ob_name:other")],
     ])
+
+
+OPTIONS_OFFER_RU = "Если пока не знаешь, могу предложить несколько вариантов."
+OPTIONS_OFFER_EN = "If you're not sure yet, I can suggest a few options."
+_LIST_LINE_RE = re.compile(r"(?m)^\s*(\d+[.)]|[-•–])\s+\S")
+
+
+def with_options_offer(text: str, lang: str = "en") -> str:
+    """Anya, 22.11.2026: every question about the 12-week or the weekly goal ends with
+    «Если пока не знаешь, могу предложить несколько вариантов.» Not under a goal card,
+    not when options are already listed, not twice."""
+    t = str(text or "").rstrip()
+    if not t.endswith("?") or card_keyboard(t, lang) is not None:
+        return text
+    low = t.lower()
+    if any(k in low for k in ("могу предложить", "предложу несколько", "i can suggest", "suggest a few")):
+        return text
+    if _LIST_LINE_RE.search(t):
+        return text
+    return t + "\n\n" + (OPTIONS_OFFER_RU if _is_ru(lang) else OPTIONS_OFFER_EN)
+
+
+def _offer_in_last_turn(turns: list | None, reply: str) -> None:
+    """Keep the dialog history the model sees equal to what was sent."""
+    if turns and isinstance(turns[-1], dict) and turns[-1].get("role") == "assistant":
+        turns[-1]["content"] = reply[:2000]
 
 
 def vision_choice_text(code: str, lang: str = "en") -> str:
@@ -4169,6 +4203,7 @@ async def handle_onboarding_turn(
             if _user_turn_count(turns) >= _DIG_USER_TURN_CAP:
                 result["ready_for_goal"] = True
 
+        reply = with_options_offer(reply, lang)
         turns.append({"role": "assistant", "content": reply[:2000]})
 
         if result.get("ready_for_goal"):
@@ -4341,6 +4376,8 @@ async def handle_onboarding_turn(
                 after="main_to_weekly",
             )
         else:
+            reply = with_options_offer(reply, lang)
+            _offer_in_last_turn(turns, reply)
             await msg.reply_text(reply, reply_markup=card_keyboard(reply, lang))
         return
 
@@ -4446,6 +4483,8 @@ async def handle_onboarding_turn(
         if result.get("ready") and result.get("weekly_goal"):
             await _complete_weekly_tactics_pick(result["weekly_goal"])
         else:
+            reply = with_options_offer(reply, lang)
+            _offer_in_last_turn(turns, reply)
             await msg.reply_text(reply, reply_markup=card_keyboard(reply, lang))
         return
 

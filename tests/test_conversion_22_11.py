@@ -168,3 +168,25 @@ class PayStats(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OptionsOffer(unittest.TestCase):
+    """Anya, 22.11.2026: the offer of options in every 12-week / weekly goal question."""
+
+    def test_added_to_goal_question(self):
+        q = "Хорошо, спорт и тело. Какой результат хотелось бы увидеть к концу этих 12 недель?"
+        out = ob.with_options_offer(q, "ru")
+        self.assertTrue(out.endswith("Если пока не знаешь, могу предложить несколько вариантов."))
+        self.assertEqual(ob.with_options_offer(out, "ru"), out)  # never twice
+
+    def test_not_under_card_or_list(self):
+        card = "К 12-й неделе ты бегаешь 3 раза в неделю.\n\nПодходит такая цель?"
+        self.assertEqual(ob.with_options_offer(card, "ru"), card)
+        listed = "Можно так:\n1. Бег\n2. Йога\nЧто ближе?"
+        self.assertEqual(ob.with_options_offer(listed, "ru"), listed)
+        self.assertEqual(ob.with_options_offer("Записала.", "ru"), "Записала.")
+
+    def test_weekly_fixed_texts(self):
+        for key in ("weekly_dialog_opening", "new_week_morning_nudge"):
+            self.assertIn(ob.OPTIONS_OFFER_RU, ob.ob_text(key, "ru"))
+            self.assertIn(ob.OPTIONS_OFFER_EN, ob.ob_text(key, "en"))
