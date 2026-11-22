@@ -138,6 +138,7 @@ OB_CHANGE_WEEKLY = 10
 OB_CHANGE_12W = 11
 OB_WEEKLY_RECAP = 12
 OB_REENGAGE_GOAL = 13
+OB_TIMEZONE = 14  # English speakers: where are you (22.11.2026)
 
 GOAL_TYPE_12W = "12-недельная цель"
 GOAL_TYPE_WEEKLY = "цель на неделю"
@@ -1003,6 +1004,50 @@ def time_preset(code: str) -> tuple[str, str] | None:
         if c == code:
             return m, e
     return None
+
+
+# Anya, 22.11.2026 (English Threads test): people outside Russian-speaking Telegram got the
+# bot's own zone (Vietnam), so «morning» came in the US evening. Before the summary they are
+# asked where they are; US zones are one tap, anything else is a typed city or GMT+N.
+US_ZONES = (
+    ("et", "America/New_York", "🇺🇸 Eastern (New York)"),
+    ("ct", "America/Chicago", "🇺🇸 Central (Chicago)"),
+    ("mt", "America/Denver", "🇺🇸 Mountain (Denver)"),
+    ("pt", "America/Los_Angeles", "🇺🇸 Pacific (Los Angeles)"),
+)
+TZ_FROM_EN_LABEL = "America/New_York"  # ?start=en_… before she answers
+TZ_ASK_EN = "One more thing: where are you? 🌍 So my messages come at your local time."
+TZ_OTHER_BTN_EN = "🌍 Somewhere else"
+TZ_OTHER_ASK_EN = "Write your city or time zone, for example London or GMT+1 🙂"
+TZ_UNCLEAR_EN = "I didn't recognize that one. Write a big city near you, for example Chicago or London 🙂"
+TZ_NOTE_EN = ".\nIf my times don't match your clock, write your city and I'll adjust."
+
+
+def us_zone(code: str) -> str:
+    for c, tz, _ in US_ZONES:
+        if c == code:
+            return tz
+    return ""
+
+
+def tz_keyboard() -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(label, callback_data=f"ob_tz:{c}")] for c, _, label in US_ZONES]
+    rows.append([InlineKeyboardButton(TZ_OTHER_BTN_EN, callback_data="ob_tz:other")])
+    return InlineKeyboardMarkup(rows)
+
+
+def needs_tz_question(st: dict, existing: dict | None = None) -> bool:
+    """Ask where she is: not for Russian-speaking Telegram (Moscow guess + «напиши город»),
+    not when the zone is already known (Mini App, an earlier answer), never twice."""
+    from tz_guess import MOSCOW, default_timezone
+
+    lang = str(st.get("language_code") or st.get("lang") or "en")
+    if _is_ru(lang) or default_timezone(lang) == MOSCOW:
+        return False
+    if st.get("tz_set") or st.get("tz_asked"):
+        return False
+    flags = (existing or {}).get("cycle_flags") if isinstance(existing, dict) else None
+    return not (isinstance(flags, dict) and flags.get("tz_set"))
 
 
 def time_pick_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
@@ -3479,6 +3524,17 @@ def persist_profile(cid: int, st: dict, model_names: list[str]) -> dict:
         if value is None or value == "":
             continue
         profile[key] = value
+    old_flags = existing.get("cycle_flags") if isinstance(existing.get("cycle_flags"), dict) else {}
+    if (
+        not str(st.get("timezone") or "").strip()
+        and str(existing.get("timezone") or "").strip()
+        and (old_flags.get("tz_set") or old_flags.get("tz_en_label"))
+    ):
+        profile["timezone"] = str(existing["timezone"])
+    if st.get("tz_set"):
+        flags = dict(profile.get("cycle_flags") or {}) if isinstance(profile.get("cycle_flags"), dict) else {}
+        flags["tz_set"] = True
+        profile["cycle_flags"] = flags
     if not str(profile.get("cycle_start_date") or "").strip():
         profile["cycle_start_date"] = today_iso
     if not str(profile.get("trial_start_date") or "").strip():
@@ -3653,6 +3709,8 @@ def completion_tz_note(profile: dict, lang: str) -> str:
     tz_set = isinstance(flags, dict) and flags.get("tz_set")
     if _is_ru(lang) and str((profile or {}).get("timezone") or "") == MOSCOW and not tz_set:
         return TZ_NOTE_RU
+    if not _is_ru(lang) and not tz_set:
+        return TZ_NOTE_EN
     return "."
 
 
@@ -3670,6 +3728,17 @@ async def _complete_onboarding(
     msg = update.message
     if not msg:
         return
+
+    if needs_tz_question(st):
+        try:
+            existing = await asyncio.to_thread(db.get_profile, cid)
+        except Exception:
+            existing = None
+        if needs_tz_question(st, existing):
+            st["tz_asked"] = True
+            st["step"] = OB_TIMEZONE
+            await msg.reply_text(TZ_ASK_EN, reply_markup=tz_keyboard())
+            return
 
     profile = await asyncio.to_thread(persist_profile, cid, st, model_names)
     onboarding.pop(cid, None)
@@ -3929,6 +3998,7 @@ async def handle_onboarding_turn(
         OB_WEEKLY_TACTICS,
         OB_MORNING_TIME,
         OB_EVENING_TIME,
+        OB_TIMEZONE,
         OB_CHANGE_12W,
         OB_REENGAGE_GOAL,
     ):
@@ -4431,6 +4501,23 @@ async def handle_onboarding_turn(
             model_names=model_names,
             after=after,
         )
+
+    if step == OB_TIMEZONE:
+        from tz_guess import city_timezone
+
+        hit = city_timezone(raw)
+        if hit:
+            st["timezone"], st["tz_set"] = hit[0], True
+        else:
+            st["tz_tries"] = int(st.get("tz_tries") or 0) + 1
+            if st["tz_tries"] < 2:
+                await msg.reply_text(TZ_UNCLEAR_EN)
+                return
+            # never keep her stuck here: the guess stays, the summary says how to fix it
+        await _complete_onboarding(
+            update, context, cid, st, onboarding, histories, user_profiles, subscribers, model_names,
+        )
+        return
 
     if step == OB_MORNING_TIME:
         parsed = parse_time_nl(raw, "morning")

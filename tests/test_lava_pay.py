@@ -374,6 +374,7 @@ class SubscriptionInfoTests(unittest.TestCase):
             "timedelta": _td,
             "_profile_local_date": lambda p: today,
             "_profile_truthy": lambda v: v is True,
+            "ui_lang": lambda p: "ru",
         }
         return _main_functions(
             {"_subscription_info", "_profile_is_premium_active", "_profile_in_trial", "_trial_start_raw"}, ns

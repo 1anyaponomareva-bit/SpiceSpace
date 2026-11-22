@@ -1276,7 +1276,7 @@ def _compact_flow_value(value: object) -> object:
 
 _ONBOARDING_STEPS = {
     ob.OB_NAME, ob.OB_VISION, ob.OB_VISION_DIALOG, ob.OB_GOAL_DIALOG,
-    ob.OB_WEEKLY_TACTICS, ob.OB_MORNING_TIME, ob.OB_EVENING_TIME, ob.OB_DONE,
+    ob.OB_WEEKLY_TACTICS, ob.OB_MORNING_TIME, ob.OB_EVENING_TIME, ob.OB_DONE, ob.OB_TIMEZONE,
 }
 _funnel_marked: dict[int, set[str]] = {}
 
@@ -3594,12 +3594,15 @@ def trial_intro_text(profile: dict, lang: str, new_trial: bool) -> str:
 def _trial_prices(lang: str, today: date | None = None) -> dict:
     """Prices for the trial texts; lock - the «до 1 декабря» line, empty from 1 December."""
     prices = {
-        "p1": lava_pay.format_amount(lava_pay.plan_rub("1m"), "RUB"),
-        "p3": lava_pay.format_amount(lava_pay.plan_rub("3m"), "RUB"),
+        "p1": lava_pay.shown_price("1m", lang),
+        "p3": lava_pay.shown_price("3m", lang),
         "p_new": lava_pay.format_amount(lava_pay.RUB_FROM_RISE["1m"], "RUB"),
     }
+    # the «до 1 декабря» ruble price lock is for Russian speakers only (22.11.2026)
     prices["lock"] = (
-        _trial_text(lang, "lock", **prices) if lava_pay.price_locked_now(today) else ""
+        _trial_text(lang, "lock", **prices)
+        if lava_pay.price_locked_now(today) and str(lang or "").lower().startswith("ru")
+        else ""
     )
     return prices
 
@@ -3988,7 +3991,7 @@ def _lava_plan_btn_text(plan: str, lang: str) -> str:
         lang,
         "plan_btn",
         label=lava_pay.plan_label(plan, lang),
-        rub=lava_pay.format_amount(lava_pay.plan_rub(plan), "RUB").replace(" ₽", ""),
+        price=lava_pay.shown_price(plan, lang),
     )
 
 
@@ -4416,7 +4419,7 @@ async def _lava_apply_event(bot, ev: dict) -> bool:
         (row or {}).get("plan")
         or (parent or {}).get("plan")
         or (tagged or {}).get("plan")
-        or lava_pay.plan_from_amount(ev["amount"], ev["currency"])
+        or lava_pay.plan_from_event(ev)
     )
     if plan not in lava_pay.PLANS:
         plan = "1m"
@@ -6291,6 +6294,7 @@ def _onboarding_pause_steps() -> frozenset[int]:
             ob.OB_WEEKLY_TACTICS,
             ob.OB_MORNING_TIME,
             ob.OB_EVENING_TIME,
+            ob.OB_TIMEZONE,
             ob.OB_CHANGE_12W,
             ob.OB_REENGAGE_GOAL,
         }
@@ -6579,6 +6583,12 @@ async def notify_onboarding_done(bot, cid: int, profile: dict) -> None:
     await notify_admin(bot, f"✅ Прошла знакомство: {name}\nЦель: {goal}")
 
 
+def is_en_start_label(arg: str | None) -> bool:
+    """?start=en_… links from the English Threads (Anya, 22.11.2026)."""
+    raw = str(arg or "").strip().lower()
+    return raw == "en" or raw.startswith(("en_", "en-"))
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_chat or not update.message:
         return
@@ -6601,6 +6611,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except db_store.ProfileReadError:
             existing = None
     is_new_user = not isinstance(existing, dict) or not existing
+    en_label = is_new_user and is_en_start_label(context.args[0] if context.args else "")
+    if en_label:
+        lang = "en"
     if is_new_user:
         source = (context.args[0] if context.args else "").strip()[:40]
         src = f"\nОткуда: {source}" if source else ""
@@ -6611,7 +6624,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     fields: dict[str, object] = {"daily_enabled": True}
     if not saved_lang:
         fields["language_code"] = lang
+    if en_label:
+        fields["timezone"] = ob.TZ_FROM_EN_LABEL
     prof = db_store.update_profile(cid, fields)
+    if en_label:
+        with suppress(Exception):
+            prof = db_store.mark_cycle_flag(cid, "tz_en_label") or prof
     start_label = spice_stats.clean_label(context.args[0] if context.args else "")
     if is_new_user and isinstance(prof, dict):
         label = start_label
@@ -7411,6 +7429,47 @@ async def handle_time_callback(
         histories,
         user_profiles,
         subscribers,
+        context.bot_data.get("claude_model_names") or [],
+    )
+
+
+async def handle_tz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """«Where are you?» before the onboarding summary (English speakers, 22.11.2026):
+    a US zone in one tap, «Somewhere else» asks for a city."""
+    from types import SimpleNamespace
+
+    query = update.callback_query
+    if not query or not query.data or not query.message:
+        return
+    await query.answer()
+    cid = query.message.chat_id
+    _restore_cid_flow(cid)
+    st = onboarding.get(cid)
+    code = query.data.split(":", 1)[1]
+    label = next((lb for c, _, lb in ob.US_ZONES if c == code), ob.TZ_OTHER_BTN_EN)
+    try:
+        if query.message.text:
+            await query.edit_message_text(query.message.text + "\n\n👉 " + label)
+        else:
+            await query.edit_message_reply_markup(reply_markup=None)
+    except Exception as e:
+        log.warning("tz edit failed cid=%s: %s", cid, e)
+    if not isinstance(st, dict) or int(st.get("step") or 0) != ob.OB_TIMEZONE:
+        return  # stale button
+    _touch_user_message_date(cid, user_profiles.get(str(cid)) or {})
+    tz = ob.us_zone(code)
+    if not tz:
+        await context.bot.send_message(chat_id=cid, text=ob.TZ_OTHER_ASK_EN)
+        return
+    st["timezone"], st["tz_set"] = tz, True
+    shim = SimpleNamespace(
+        message=query.message,
+        effective_chat=update.effective_chat,
+        effective_user=update.effective_user,
+        callback_query=None,
+    )
+    await ob._complete_onboarding(
+        shim, context, cid, st, onboarding, histories, user_profiles, subscribers,
         context.bot_data.get("claude_model_names") or [],
     )
 
@@ -9704,8 +9763,8 @@ def _subscription_info(profile: dict) -> dict:
         "until": str(profile.get("subscription_end") or "")[:10] if active else "",
         "auto_renew": bool(active and tag and not tag.get("cancelled")),
         "plan": tag["plan"] if tag else "",
-        "price_1m": lava_pay.format_amount(lava_pay.plan_rub("1m"), "RUB"),
-        "price_3m": lava_pay.format_amount(lava_pay.plan_rub("3m"), "RUB"),
+        "price_1m": lava_pay.shown_price("1m", ui_lang(profile)),
+        "price_3m": lava_pay.shown_price("3m", ui_lang(profile)),
         "trial": False,
         "trial_until": "",
     }
@@ -9883,6 +9942,9 @@ def _register_telegram_handlers(app_: Application) -> None:
     )
     app_.add_handler(
         CallbackQueryHandler(handle_time_callback, pattern=r"^ob_time:(8-20|9-21|10-22|other)$")
+    )
+    app_.add_handler(
+        CallbackQueryHandler(handle_tz_callback, pattern=r"^ob_tz:(et|ct|mt|pt|other)$")
     )
     app_.add_handler(
         CallbackQueryHandler(handle_age_callback, pattern=r"^ob_age:(yes|no)$")

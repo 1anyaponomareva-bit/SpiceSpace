@@ -112,6 +112,42 @@ def plan_rub(plan: str) -> object:
     return (_found.get(plan) or {}).get("rub") or our_rub(plan)
 
 
+USD_PRICES_ENV = "LAVA_USD_PRICES"  # optional, e.g. "1m=9.99,3m=24.99"; else the price in lava
+
+
+def _usd_override(plan: str) -> float | None:
+    for part in str(os.getenv(USD_PRICES_ENV) or "").split(","):
+        key, _, value = part.partition("=")
+        if key.strip().lower() == plan:
+            try:
+                return float(value.strip().lstrip("$"))
+            except ValueError:
+                return None
+    return None
+
+
+def plan_usd(plan: str) -> float | None:
+    """Dollar price English speakers see (22.11.2026): the LAVA_USD_PRICES setting when set,
+    else the USD price of the offer in lava, else None (then they see rubles)."""
+    override = _usd_override(plan)
+    if override:
+        return override
+    amount = (_found.get(plan) or {}).get("usd_amount")
+    try:
+        return float(amount) if amount else None
+    except (TypeError, ValueError):
+        return None
+
+
+def shown_price(plan: str, lang: str) -> str:
+    """«590 ₽» for Russian, «$7.08» for everyone else when a dollar price is known."""
+    if not str(lang or "").lower().startswith("ru"):
+        usd = plan_usd(plan)
+        if usd:
+            return format_amount(usd, "USD")
+    return format_amount(plan_rub(plan), "RUB")
+
+
 def plan_has_usd(plan: str) -> bool:
     info = _found.get(plan) if plan else None
     return True if info is None else bool(info.get("usd"))
@@ -151,10 +187,16 @@ def pick_offers(products: list[dict]) -> dict[str, dict]:
                     p.get("currency") in ("USD", "EUR") and p.get("periodicity") == price.get("periodicity")
                     for p in prices
                 )
+                usd_amount = next(
+                    (p.get("amount") for p in prices
+                     if p.get("currency") == "USD" and p.get("periodicity") == price.get("periodicity")),
+                    None,
+                )
                 cand = {
                     "id": str(offer["id"]),
                     "rub": price.get("amount"),
                     "usd": usd,
+                    "usd_amount": usd_amount,
                     "title": str(data.get("title") or ""),
                     "name": str(offer.get("name") or ""),
                 }
@@ -239,7 +281,7 @@ def normalize_promo(text: str) -> str:
 _T = {
     "ru": {
         "choose_plan": "Выбери период подписки на Спейс 💚",
-        "plan_btn": "{label} - {rub} ₽",
+        "plan_btn": "{label} - {price}",
         "choose_method": "Как будешь платить?",
         "method_ru_btn": "🇷🇺 Карта российского банка",
         "method_intl_btn": "🌍 Иностранная карта",
@@ -286,7 +328,7 @@ _T = {
     },
     "en": {
         "choose_plan": "Choose your Space subscription 💚",
-        "plan_btn": "{label} - {rub} ₽",
+        "plan_btn": "{label} - {price}",
         "choose_method": "How would you like to pay?",
         "method_ru_btn": "🇷🇺 Russian bank card",
         "method_intl_btn": "🌍 International card",
@@ -453,6 +495,16 @@ _KIND_BY_EVENT = {
 }
 
 
+def plan_from_event(ev: dict) -> str:
+    """Plan of a payment with no stored contract: the paid period lava reports
+    (willExpireAt - timestamp) first, the amount only when that is missing (22.11.2026:
+    a 3-month payment in dollars used to count as 1 month)."""
+    start, end = _parse_day(str(ev.get("timestamp") or "")), _parse_day(str(ev.get("will_expire") or ""))
+    if start and end and end > start:
+        return "3m" if (end - start).days > 45 else "1m"
+    return plan_from_amount(ev.get("amount"), str(ev.get("currency") or ""))
+
+
 def parse_event(body: dict) -> dict:
     """Normalize a lava webhook body. kind: paid / renewed / failed / renew_failed / cancelled / other."""
     event = str(body.get("eventType") or body.get("event_type") or "")
@@ -551,4 +603,11 @@ def plan_from_amount(amount: object, currency: str) -> str:
     if currency == "RUB":
         one = float(plan_rub("1m") or PLANS["1m"]["rub"])
         return "3m" if value > one * 1.5 else "1m"
+    if currency == "USD":
+        one_usd = plan_usd("1m")
+        three_usd = plan_usd("3m")
+        if one_usd:
+            return "3m" if value > one_usd * 1.5 else "1m"
+        if three_usd:
+            return "3m" if value >= three_usd * 0.8 else "1m"
     return "1m"

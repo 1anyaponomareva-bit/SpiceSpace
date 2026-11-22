@@ -50,7 +50,11 @@ class CompletionNote(unittest.TestCase):
     def test_known_zone_plain(self):
         self.assertEqual(ob.completion_tz_note({"timezone": "Europe/Moscow", "cycle_flags": {"tz_set": True}}, "ru"), ".")
         self.assertEqual(ob.completion_tz_note({"timezone": "Asia/Omsk"}, "ru"), ".")
-        self.assertEqual(ob.completion_tz_note({"timezone": "Asia/Ho_Chi_Minh"}, "en"), ".")
+        self.assertEqual(
+            ob.completion_tz_note({"timezone": "America/Chicago", "cycle_flags": {"tz_set": True}}, "en"), "."
+        )
+        # English and the zone only guessed: say how to fix it (22.11.2026)
+        self.assertEqual(ob.completion_tz_note({"timezone": "America/New_York"}, "en"), ob.TZ_NOTE_EN)
 
 
 class CityHandler(unittest.TestCase):
