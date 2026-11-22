@@ -18,6 +18,7 @@ import hmac
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -52,11 +53,41 @@ METHODS: dict[str, dict] = {
     "intl": {"currency": "USD", "label_ru": "иностранная карта", "label_en": "international card"},
 }
 
+# Anya, 22.11.2026: who subscribes before 1 December keeps 590 ₽ a month (lava renews at
+# the contract price: "для существующих подписчиков стоимость останется прежней");
+# new subscribers from 1 December pay 990 ₽.
+PRICE_RISE_DAY = date(2026, 12, 1)
+RUB_FROM_RISE = {"1m": 990}
+
+
+def price_locked_now(today: date | None = None) -> bool:
+    """True before 1 December: the 590 ₽ price is still on offer and stays with her."""
+    return (today or date.today()) < PRICE_RISE_DAY
+
+
+def our_rub(plan: str, today: date | None = None) -> int:
+    """The RUB price the bot expects for a plan on this day."""
+    if not price_locked_now(today) and plan in RUB_FROM_RISE:
+        return RUB_FROM_RISE[plan]
+    return PLANS[plan]["rub"]
+
+
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 _PROMO_RE = re.compile(r"^[A-Za-z0-9_\-]{3,36}$")
 
-# cid -> {"plan", "method", "step": "email" | "promo" | "", "promo", "email"}
+# cid -> {"plan", "method", "step": "email" | "promo" | "", "promo", "email"}.
+# A memory cache only: main.py keeps a copy in app_kv ("lava_co:<cid>") so a restart
+# does not lose the step (before 22.11.2026 a typed email then went to the chat).
 checkout: dict[int, dict] = {}
+KV_PREFIX = "lava_co:"
+
+
+def default_method(lang: str, plan: str = "") -> str:
+    """Anya, 22.11.2026: payment method by the Telegram language - ru pays with a
+    Russian card, everyone else with an international one (if the offer has a USD price)."""
+    if str(lang or "").lower().startswith("ru"):
+        return "ru"
+    return "intl" if plan_has_usd(plan) else "ru"
 
 
 def api_key() -> str:
@@ -65,6 +96,8 @@ def api_key() -> str:
 
 # Offers found in the lava account by period: plan -> {"id", "rub", "usd"}.
 _found: dict[str, dict] = {}
+_found_at = 0.0
+OFFERS_TTL = 3600  # re-read hourly: a price set in lava shows up without a deploy
 
 
 def offer_id(plan: str) -> str:
@@ -76,11 +109,11 @@ def offer_id(plan: str) -> str:
 
 def plan_rub(plan: str) -> object:
     """RUB price shown on the button: the one set in lava when known."""
-    return (_found.get(plan) or {}).get("rub") or PLANS[plan]["rub"]
+    return (_found.get(plan) or {}).get("rub") or our_rub(plan)
 
 
 def plan_has_usd(plan: str) -> bool:
-    info = _found.get(plan)
+    info = _found.get(plan) if plan else None
     return True if info is None else bool(info.get("usd"))
 
 
@@ -126,16 +159,17 @@ def pick_offers(products: list[dict]) -> dict[str, dict]:
                     "name": str(offer.get("name") or ""),
                 }
                 prev = found.get(plan)
-                exact = price.get("amount") == PLANS[plan]["rub"]
-                if prev is None or (exact and prev.get("rub") != PLANS[plan]["rub"]):
+                want = our_rub(plan)
+                exact = price.get("amount") == want
+                if prev is None or (exact and prev.get("rub") != want):
                     found[plan] = cand
     return found
 
 
 async def load_offers(force: bool = False) -> dict[str, dict]:
     """Fetch subscription offers from the lava account once (or again with force)."""
-    global _found
-    if _found and not force:
+    global _found, _found_at
+    if _found and not force and time.monotonic() - _found_at < OFFERS_TTL:
         return _found
     key = api_key()
     if not key:
@@ -155,6 +189,7 @@ async def load_offers(force: bool = False) -> dict[str, dict]:
                 break
             url, params = str(nxt), None
     _found = pick_offers(items)
+    _found_at = time.monotonic()
     log.info("lava offers: %s", {p: (v["id"], v["rub"], v["usd"]) for p, v in _found.items()})
     return _found
 
@@ -204,17 +239,17 @@ def normalize_promo(text: str) -> str:
 _T = {
     "ru": {
         "choose_plan": "Выбери период подписки на Спейс 💚",
-        "plan_btn": "{label} — {rub} ₽",
+        "plan_btn": "{label} - {rub} ₽",
         "choose_method": "Как будешь платить?",
         "method_ru_btn": "🇷🇺 Карта российского банка",
         "method_intl_btn": "🌍 Иностранная карта",
         "ask_email": (
-            "Напиши свой email — на него придёт чек об оплате. "
+            "Напиши свой email - на него придёт чек об оплате. "
             "Спрошу только один раз."
         ),
         "bad_email": "Похоже, в адресе опечатка. Напиши email ещё раз, например name@mail.ru",
         "ask_promo": "Напиши промокод одним словом.",
-        "bad_promo": "Такой промокод не нашёлся. Проверь и напиши ещё раз — или оплати без него.",
+        "bad_promo": "Такой промокод не нашёлся. Проверь и напиши ещё раз - или оплати без него.",
         "no_promo_btn": "Без промокода",
         "summary": (
             "Подписка на Спейс\n\n"
@@ -223,12 +258,14 @@ _T = {
             "Сумма: {amount}\n"
             "{promo_line}"
             "\nПодписка продлевается автоматически по той же цене. "
-            "Отменить можно в любой момент — доступ останется до конца оплаченного срока."
+            "Отменить можно в любой момент - доступ останется до конца оплаченного срока."
         ),
         "promo_line": "Промокод: {promo}\n",
         "pay_btn": "💳 Перейти к оплате",
         "promo_btn": "🎟 Ввести промокод",
         "change_btn": "↩️ Изменить",
+        "other_card_btn": "🌍 Другая карта",
+        "ru_card_btn": "🇷🇺 Карта российского банка",
         "error": "Не получилось создать оплату. Попробуй ещё раз чуть позже 🙏 Если не выйдет, напиши Ане: @panomareva",
         "unavailable": "Оплата пока недоступна. Скоро включим 💚",
         "paid": (
@@ -249,14 +286,14 @@ _T = {
     },
     "en": {
         "choose_plan": "Choose your Space subscription 💚",
-        "plan_btn": "{label} — {rub} ₽",
+        "plan_btn": "{label} - {rub} ₽",
         "choose_method": "How would you like to pay?",
         "method_ru_btn": "🇷🇺 Russian bank card",
         "method_intl_btn": "🌍 International card",
-        "ask_email": "Send me your email — the receipt goes there. I'll only ask once.",
+        "ask_email": "Send me your email - the receipt goes there. I'll only ask once.",
         "bad_email": "Looks like a typo. Please send your email again, e.g. name@gmail.com",
         "ask_promo": "Send your promo code as one word.",
-        "bad_promo": "That promo code wasn't found. Check it and send again — or pay without it.",
+        "bad_promo": "That promo code wasn't found. Check it and send again - or pay without it.",
         "no_promo_btn": "No promo code",
         "summary": (
             "Space subscription\n\n"
@@ -265,12 +302,14 @@ _T = {
             "Amount: {amount}\n"
             "{promo_line}"
             "\nThe subscription renews automatically at the same price. "
-            "You can cancel anytime — access stays until the paid period ends."
+            "You can cancel anytime - access stays until the paid period ends."
         ),
         "promo_line": "Promo code: {promo}\n",
         "pay_btn": "💳 Go to payment",
         "promo_btn": "🎟 Enter promo code",
         "change_btn": "↩️ Change",
+        "other_card_btn": "🌍 Other card",
+        "ru_card_btn": "🇷🇺 Russian bank card",
         "error": "Couldn't create the payment. Please try again a bit later 🙏 If it still fails, message Anya: @panomareva",
         "unavailable": "Payments aren't available yet. Coming soon 💚",
         "paid": (

@@ -84,6 +84,16 @@ def _onboarded(p: dict) -> bool:
 FUNNEL = ("start", "age", "name", "goal_talk", "main_goal", "weekly", "time")
 
 
+# payment steps (from 22.11.2026): the bot keeps cycle_flags["pay_<step>"] = time of the
+# first time she reached it. Payment itself is counted from lava_payments (paid_1m/3m).
+PAY_STEPS = ("day3", "day4", "pause", "open", "plan", "email", "link")
+
+
+def _pay_time(p: dict, step: str) -> object:
+    flags = p.get("cycle_flags")
+    return flags.get("pay_" + step) if isinstance(flags, dict) else None
+
+
 def _flag(p: dict, key: str) -> bool:
     flags = p.get("cycle_flags")
     return bool((isinstance(flags, dict) and flags.get(key)) or p.get(key))
@@ -176,6 +186,7 @@ def _empty_counts() -> dict:
         "age_under": 0,
         "lang_ru": 0,
         "lang_other": 0,
+        **{"pay_" + s: 0 for s in PAY_STEPS},
     }
 
 
@@ -221,6 +232,15 @@ def build_spice_stats(
             b["trial_started"] += 1
         _add_funnel(b, p)
 
+    # payment steps reached on report_day, by label (anyone, whatever day she started)
+    for uid, p in profiles.items():
+        if not isinstance(p, dict):
+            continue
+        for step in PAY_STEPS:
+            t = _pay_time(p, step)
+            if t and t is not True and local_day(t) == report_day:
+                bucket(day, labels.get(str(uid), NO_LABEL))["pay_" + step] += 1
+
     for uid, days in (message_days or {}).items():
         uid = str(uid)
         start = start_days.get(uid)
@@ -264,6 +284,10 @@ def build_spice_stats(
             c["onboarded"] += 1
             c["trial_started"] += 1
         _add_funnel(c, p)
+        for step in PAY_STEPS:
+            t = _pay_time(p, step)
+            if t and (t is True or (local_day(t) or report_day) <= report_day):
+                c["pay_" + step] += 1
         days = message_days.get(uid) or set()
         if start + timedelta(days=1) in days:
             c["active_d2"] += 1
@@ -340,5 +364,10 @@ def build_spice_stats(
             "поэтому у новых людей f_age = f_start (а про 18+ говорит после знакомства)",
             "lang_ru / lang_other": "язык телеграма русский / любой другой или неизвестен (знакомство тогда идёт на английском)",
             "label_none": "люди без метки ?start= (в том числе все, кто пришёл до 13.11.2026)",
+            "pay_steps": "шаги оплаты, бот отмечает с 22.11.2026: pay_day3 / pay_day4 - получили сообщение "
+            "3-го и 4-го дня пробного периода, pay_pause - получили утреннее сообщение паузы (дни 5-7), "
+            "pay_open - нажали оформить или кнопку тарифа, pay_plan - выбрали тариф, pay_email - ввели почту, "
+            "pay_link - получили ссылку lava, оплатили - paid_1m / paid_3m. В day_by_label - кто дошёл до шага "
+            "в этот день (считается первый раз), в cohorts - сколько из пришедших в start_day дошли до шага",
         },
     }

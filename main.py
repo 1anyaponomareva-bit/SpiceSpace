@@ -3514,15 +3514,30 @@ _TRIAL_TEXTS = {
             "У тебя 4 пробных дня - до {date} включительно. "
             "Всё работает как прежде, а ближе к концу я напомню."
         ),
+        # Anya, 22.11.2026: day 3 starts with her own 3 days, then the price
         "day3": (
-            "{name}, завтра последний день пробного периода 🌙 Чтобы утренние и вечерние "
-            "сообщения не прервались, оформи подписку: {p1} в месяц или {p3} за 3 месяца."
+            "{name}, вот наши первые 3 дня 🌙\n\n{facts}\n"
+            "Завтра последний день пробного периода. "
+            "Чтобы продолжить - {p1} в месяц или {p3} за 3 месяца.{lock}"
         ),
+        "day3_short": (
+            "{name}, завтра последний день пробного периода 🌙 "
+            "Чтобы продолжить - {p1} в месяц или {p3} за 3 месяца.{lock}"
+        ),
+        "fact_goal": "🎯 Цель: «{goal}»\n",
+        "fact_done": "✅ Сделано шагов: {k}\n",
+        "fact_next": "👣 Дальше на этой неделе: «{weekly}»\n",
         "day4": (
             "{name}, пробные 4 дня закончились 🌙 Спасибо за эти дни вместе. "
-            "{goal_line}Оформи подписку, и завтра утром я напишу как обычно."
+            "{goal_line}Оформи подписку, и завтра утром я напишу как обычно.{lock}"
         ),
         "goal_line": "Я помню твою цель - «{goal}» - и хочу идти к ней с тобой дальше. ",
+        # until 1 December (Anya, 22.11.2026)
+        "lock": "\n\nЕсли оформишь до 1 декабря, цена {p1} в месяц останется за тобой. С 1 декабря будет {p_new}.",
+        # mornings of days 5-7 after the trial, no model call (Anya, 22.11.2026)
+        "pause1": "{name}, твой шаг на сегодня готов 🌙 Открою его, как только оформишь подписку.{lock}",
+        "pause2": "{name}, я на паузе 🤍 {goal_line}Оформи подписку, и я снова буду писать тебе утром и вечером.",
+        "pause3": "{name}, последний раз напомню про подписку 🌙 Если захочешь продолжить, я здесь.{lock}",
     },
     "en": {
         "intro": (
@@ -3535,14 +3550,26 @@ _TRIAL_TEXTS = {
             "Everything works as before, and I'll remind you near the end."
         ),
         "day3": (
-            "{name}, tomorrow is the last day of your trial 🌙 So your morning and evening "
-            "messages don't stop, subscribe: {p1} a month or {p3} for 3 months."
+            "{name}, here are our first 3 days 🌙\n\n{facts}\n"
+            "Tomorrow is the last day of your trial. "
+            "To keep going - {p1} a month or {p3} for 3 months.{lock}"
         ),
+        "day3_short": (
+            "{name}, tomorrow is the last day of your trial 🌙 "
+            "To keep going - {p1} a month or {p3} for 3 months.{lock}"
+        ),
+        "fact_goal": "🎯 Goal: «{goal}»\n",
+        "fact_done": "✅ Steps done: {k}\n",
+        "fact_next": "👣 Next this week: «{weekly}»\n",
         "day4": (
             "{name}, your 4-day trial is over 🌙 Thank you for these days together. "
-            "{goal_line}Subscribe, and tomorrow morning I'll write as usual."
+            "{goal_line}Subscribe, and tomorrow morning I'll write as usual.{lock}"
         ),
         "goal_line": "I remember your goal - «{goal}» - and I want to keep going toward it with you. ",
+        "lock": "\n\nSubscribe before December 1 and {p1} a month stays your price. From December 1 it will be {p_new}.",
+        "pause1": "{name}, your step for today is ready 🌙 I'll open it as soon as you subscribe.{lock}",
+        "pause2": "{name}, I'm on pause 🤍 {goal_line}Subscribe, and I'll write to you morning and evening again.",
+        "pause3": "{name}, one last reminder about the subscription 🌙 If you want to keep going, I'm here.{lock}",
     },
 }
 
@@ -3564,11 +3591,47 @@ def trial_intro_text(profile: dict, lang: str, new_trial: bool) -> str:
     return _trial_text(lang, "intro")
 
 
-def _trial_prices(lang: str) -> dict:
-    return {
+def _trial_prices(lang: str, today: date | None = None) -> dict:
+    """Prices for the trial texts; lock - the «до 1 декабря» line, empty from 1 December."""
+    prices = {
         "p1": lava_pay.format_amount(lava_pay.plan_rub("1m"), "RUB"),
         "p3": lava_pay.format_amount(lava_pay.plan_rub("3m"), "RUB"),
+        "p_new": lava_pay.format_amount(lava_pay.RUB_FROM_RISE["1m"], "RUB"),
     }
+    prices["lock"] = (
+        _trial_text(lang, "lock", **prices) if lava_pay.price_locked_now(today) else ""
+    )
+    return prices
+
+
+def _trial_facts(cid: int, profile: dict, lang: str, today: date) -> str:
+    """Her own first days for the day 3 message: goal, steps done, next step this week."""
+    goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
+    weekly = str(profile.get("weekly_goal") or "").strip()
+    parts: list[str] = []
+    if goal:
+        parts.append(_trial_text(lang, "fact_goal", goal=goal[:200]))
+    done = 0
+    try:
+        start = date.fromisoformat(_trial_start_raw(profile))
+    except (TypeError, ValueError):
+        start = None
+    if start is not None:
+        for i in range(TRIAL_DAYS - 1):
+            d = start + timedelta(days=i)
+            if d > today:
+                break
+            try:
+                summ = db_store.get_daily_summary(cid, d) or {}
+            except Exception:
+                summ = {}
+            if str(summ.get("task_completed") or "") in ("true", "partial"):
+                done += 1
+    if done:
+        parts.append(_trial_text(lang, "fact_done", k=done))
+    if weekly and weekly.lower() != goal.lower():
+        parts.append(_trial_text(lang, "fact_next", weekly=weekly[:200]))
+    return "".join(parts)
 
 
 async def _maybe_send_payments_announcement(
@@ -3631,7 +3694,14 @@ async def _maybe_send_trial_evening_message(
     name = str(profile.get("name") or "").strip() or ob._friend_word(lang)
     goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
     goal_line = _trial_text(lang, "goal_line", goal=goal[:200]) if goal else ""
-    text = _trial_text(lang, key, name=name, goal_line=goal_line, **_trial_prices(lang))
+    facts = _trial_facts(cid, profile, lang, today) if key == "day3" else ""
+    text_key = "day3_short" if key == "day3" and not facts else key
+    if lava_pay.enabled():
+        with suppress(Exception):
+            await lava_pay.load_offers()
+    text = _trial_text(
+        lang, text_key, name=name, goal_line=goal_line, facts=facts, **_trial_prices(lang, today)
+    )
     try:
         await bot.send_message(
             chat_id=cid, text=text, reply_markup=_subscription_offer_keyboard(cid, lang)
@@ -3639,9 +3709,59 @@ async def _maybe_send_trial_evening_message(
         updated = db_store.mark_cycle_flag(cid, flag_key)
         if isinstance(updated, dict):
             user_profiles[str(cid)] = updated
+        _pay_mark(cid, key, user_profiles.get(str(cid)))
         log.info("trial %s message sent cid=%s start=%s", key, cid, start_raw)
     except Exception as e:
         log.warning("trial %s message failed cid=%s: %s", key, cid, e)
+
+
+_trial_pause_sent: set[str] = set()
+
+
+async def _maybe_send_trial_pause(
+    bot, cid: int, profile: dict, today: date, user_profiles: dict[str, dict]
+) -> None:
+    """Mornings of days 5-7: a short note instead of silence, with the tariff buttons
+    (Anya, 22.11.2026). Never after /stop, a blocked bot, under 18 or in a crisis window."""
+    if not SUBSCRIPTIONS_ENABLED or _profile_is_premium_active(profile, today):
+        return
+    day = _trial_day(profile, today)
+    if day is None or not (TRIAL_DAYS + 1 <= day <= TRIAL_DAYS + 3):
+        return
+    if profile_is_blocked(profile) or not _profile_daily_enabled(profile) or _age_blocked(profile):
+        return
+    if safety.in_crisis_window(cid):
+        return
+    start_raw = _trial_start_raw(profile)
+    n = day - TRIAL_DAYS
+    flag_key = f"trial_pause{n}_{start_raw}"
+    if not start_raw or flag_key + str(cid) in _trial_pause_sent:
+        return
+    if db_store.cycle_flag_sent(profile, flag_key):
+        return
+    _trial_pause_sent.add(flag_key + str(cid))
+    lang = ui_lang(profile)
+    name = str(profile.get("name") or "").strip() or ob._friend_word(lang)
+    goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
+    goal_line = _trial_text(lang, "goal_line", goal=goal[:200]) if goal else ""
+    if lava_pay.enabled():
+        with suppress(Exception):
+            await lava_pay.load_offers()
+    text = _trial_text(lang, f"pause{n}", name=name, goal_line=goal_line, **_trial_prices(lang, today))
+    try:
+        await bot.send_message(
+            chat_id=cid, text=text, reply_markup=_subscription_offer_keyboard(cid, lang)
+        )
+    except Exception as e:
+        log.warning("trial pause%s failed cid=%s: %s", n, cid, e)
+        if is_telegram_block_error(e):
+            _mark_telegram_blocked(cid, profile)
+        return
+    updated = db_store.mark_cycle_flag(cid, flag_key)
+    if isinstance(updated, dict):
+        user_profiles[str(cid)] = updated
+    _pay_mark(cid, "pause", user_profiles.get(str(cid)))
+    log.info("trial pause%s sent cid=%s start=%s", n, cid, start_raw)
 
 async def handle_open_subscription_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -3674,6 +3794,9 @@ def _subscription_miniapp_url(cid: int, lang: str) -> str:
 
 def _subscription_offer_keyboard(cid: int, lang: str) -> InlineKeyboardMarkup:
     if lava_pay.enabled():
+        if lava_pay.available_plans():
+            # Anya, 22.11.2026: the tariffs right under the message, no «choose a period» step
+            return _lava_plan_keyboard(lang)
         return InlineKeyboardMarkup(
             [[InlineKeyboardButton(
                 ob.ob_text("subscription_subscribe_btn", lang), callback_data="lava:start"
@@ -3695,11 +3818,12 @@ def _subscription_paywall_text(profile: dict, lang: str) -> str:
     name = str(profile.get("name") or "").strip() or ob._friend_word(lang)
     today = _profile_local_date(profile)
     days = _days_since_trial_start(profile, today)
+    lock = _trial_prices(lang, today)["lock"]
     if days is not None and days >= TRIAL_DAYS and not _profile_is_premium_active(
         profile, today
     ):
-        return ob.ob_text("trial_expired_offer", lang, name=name)
-    return ob.ob_text("subscription_paywall", lang, name=name)
+        return ob.ob_text("trial_expired_offer", lang, name=name) + lock
+    return ob.ob_text("subscription_paywall", lang, name=name) + lock
 
 
 async def _send_subscription_paywall(
@@ -3713,7 +3837,7 @@ async def _send_subscription_paywall(
             "trial_expired_offer",
             lang,
             name=str(profile.get("name") or "").strip() or ob._friend_word(lang),
-        )
+        ) + _trial_prices(lang, _profile_local_date(profile))["lock"]
         if offer
         else _subscription_paywall_text(profile, lang)
     )
@@ -3747,6 +3871,9 @@ async def _reply_subscription_paywall_if_needed(
     if not msg:
         return False
     lang = ui_lang(profile)
+    if lava_pay.enabled():
+        with suppress(Exception):
+            await lava_pay.load_offers()
     await _bot_reply(
         msg,
         _subscription_paywall_text(profile, lang),
@@ -3856,17 +3983,18 @@ async def successful_payment_handler(
 # ---------------------------------------------------------------- lava.top checkout
 
 
+def _lava_plan_btn_text(plan: str, lang: str) -> str:
+    return lava_pay.t(
+        lang,
+        "plan_btn",
+        label=lava_pay.plan_label(plan, lang),
+        rub=lava_pay.format_amount(lava_pay.plan_rub(plan), "RUB").replace(" ₽", ""),
+    )
+
+
 def _lava_plan_keyboard(lang: str) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(
-            lava_pay.t(
-                lang,
-                "plan_btn",
-                label=lava_pay.plan_label(p, lang),
-                rub=lava_pay.format_amount(lava_pay.plan_rub(p), "RUB").replace(" ₽", ""),
-            ),
-            callback_data=f"lava:plan:{p}",
-        )]
+        [InlineKeyboardButton(_lava_plan_btn_text(p, lang), callback_data=f"lava:buy:{p}")]
         for p in lava_pay.available_plans()
     ]
     return InlineKeyboardMarkup(rows)
@@ -3878,6 +4006,60 @@ def _lava_method_keyboard(lang: str, plan: str = "") -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(lava_pay.t(lang, "method_intl_btn"), callback_data="lava:method:intl")])
     rows.append([InlineKeyboardButton(lava_pay.t(lang, "change_btn"), callback_data="lava:start")])
     return InlineKeyboardMarkup(rows)
+
+
+# ---- payment steps for /api/stats/daily (Anya, 22.11.2026: «где бросают»)
+PAY_STEPS = ("day3", "day4", "pause", "open", "plan", "email", "link")
+
+
+def _pay_mark(cid: int, step: str, profile: dict | None = None) -> None:
+    """Remember when she first reached a payment step: cycle_flags["pay_<step>"] = UTC time."""
+    if step not in PAY_STEPS:
+        return
+    key = "pay_" + step
+    prof = profile if isinstance(profile, dict) else user_profiles.get(str(cid))
+    flags = prof.get("cycle_flags") if isinstance(prof, dict) else None
+    if isinstance(flags, dict) and flags.get(key):
+        return
+    try:
+        updated = db_store.mark_cycle_flag(
+            cid, key, value=datetime.now(timezone.utc).isoformat(timespec="seconds")
+        )
+    except Exception as e:
+        log.warning("pay mark %s failed cid=%s: %s", step, cid, e)
+        return
+    if isinstance(updated, dict):
+        user_profiles[str(cid)] = updated
+
+
+# ---- checkout state survives a restart: memory + app_kv "lava_co:<cid>"
+_lava_co_checked: set[int] = set()
+_LAVA_CO_FIELDS = ("plan", "method", "step", "promo", "email")
+
+
+def _lava_co(cid: int) -> dict | None:
+    co = lava_pay.checkout.get(cid)
+    if co is None and cid not in _lava_co_checked:
+        _lava_co_checked.add(cid)
+        try:
+            saved = db_store.kv_get(lava_pay.KV_PREFIX + str(cid))
+        except Exception:
+            saved = None
+        if isinstance(saved, dict) and saved:
+            co = {k: saved.get(k) or "" for k in _LAVA_CO_FIELDS}
+            lava_pay.checkout[cid] = co
+    return co
+
+
+def _lava_co_save(cid: int) -> None:
+    co = lava_pay.checkout.get(cid)
+    if not isinstance(co, dict):
+        return
+    _lava_co_checked.add(cid)
+    try:
+        db_store.kv_set(lava_pay.KV_PREFIX + str(cid), {k: co.get(k) or "" for k in _LAVA_CO_FIELDS})
+    except Exception as e:
+        log.warning("lava checkout save failed cid=%s: %s", cid, e)
 
 
 async def _lava_send_start(bot, cid: int, profile: dict) -> None:
@@ -3892,8 +4074,9 @@ async def _lava_send_start(bot, cid: int, profile: dict) -> None:
     if not lava_pay.available_plans():
         await bot.send_message(chat_id=cid, text=lava_pay.t(lang, "unavailable"))
         return
-    prev = lava_pay.checkout.get(cid) or {}
+    prev = _lava_co(cid) or {}
     lava_pay.checkout[cid] = {"step": "", "email": prev.get("email", "")}
+    _lava_co_save(cid)
     await bot.send_message(
         chat_id=cid,
         text=lava_pay.t(lang, "choose_plan"),
@@ -3901,10 +4084,39 @@ async def _lava_send_start(bot, cid: int, profile: dict) -> None:
     )
 
 
+async def _lava_choose(bot, cid: int, profile: dict, plan: str, method: str = "") -> None:
+    """A tariff tapped: the method comes from her Telegram language (a button under the
+    summary switches it), the email is asked once, then the summary with the link."""
+    lang = ui_lang(profile)
+    co = _lava_co(cid) or {}
+    lava_pay.checkout[cid] = co
+    co["plan"] = plan
+    co["method"] = method if method in lava_pay.METHODS else lava_pay.default_method(lang, plan)
+    if method != "intl" and co["method"] == "intl" and not lava_pay.plan_has_usd(plan):
+        co["method"] = "ru"
+    _pay_mark(cid, "plan", profile)
+    if not co.get("email"):
+        try:
+            known = db_store.lava_latest_for_user(cid) or {}
+        except Exception:
+            known = {}
+        tag = lava_pay.parse_profile_tag(profile.get("plan")) or {}
+        co["email"] = str(known.get("email") or tag.get("email") or "")
+    if co.get("email"):
+        co["step"] = ""
+        _lava_co_save(cid)
+        async with typing_while(bot, cid):
+            await _lava_show_summary(bot, cid, profile)
+        return
+    co["step"] = "email"
+    _lava_co_save(cid)
+    await bot.send_message(chat_id=cid, text=lava_pay.t(lang, "ask_email"))
+
+
 async def _lava_show_summary(bot, cid: int, profile: dict) -> None:
     """Create the lava invoice and show the summary with the payment link."""
     lang = ui_lang(profile)
-    co = lava_pay.checkout.get(cid) or {}
+    co = _lava_co(cid) or {}
     plan, method, email = co.get("plan"), co.get("method"), co.get("email")
     if plan not in lava_pay.PLANS or method not in lava_pay.METHODS or not email:
         await _lava_send_start(bot, cid, profile)
@@ -3923,6 +4135,7 @@ async def _lava_show_summary(bot, cid: int, profile: dict) -> None:
         if promo and e.status in (400, 404, 409, 422):
             co["promo"] = ""
             co["step"] = "promo"
+            _lava_co_save(cid)
             await bot.send_message(
                 chat_id=cid,
                 text=lava_pay.t(lang, "bad_promo"),
@@ -3932,11 +4145,13 @@ async def _lava_show_summary(bot, cid: int, profile: dict) -> None:
             )
             return
         co["step"] = ""
+        _lava_co_save(cid)
         await bot.send_message(chat_id=cid, text=lava_pay.t(lang, "error"))
         return
     except Exception as e:
         log.exception("lava invoice error cid=%s: %s", cid, e)
         co["step"] = ""
+        _lava_co_save(cid)
         await bot.send_message(chat_id=cid, text=lava_pay.t(lang, "error"))
         return
 
@@ -3958,6 +4173,8 @@ async def _lava_show_summary(bot, cid: int, profile: dict) -> None:
         if isinstance(updated, dict):
             user_profiles[str(cid)] = updated
     co["step"] = ""
+    _lava_co_save(cid)
+    _pay_mark(cid, "link", user_profiles.get(str(cid)))
     text = lava_pay.t(
         lang,
         "summary",
@@ -3967,6 +4184,10 @@ async def _lava_show_summary(bot, cid: int, profile: dict) -> None:
         promo_line=lava_pay.t(lang, "promo_line", promo=promo) if promo else "",
     )
     rows = [[InlineKeyboardButton(lava_pay.t(lang, "pay_btn"), url=inv.payment_url)]]
+    if method == "ru" and lava_pay.plan_has_usd(plan):
+        rows.append([InlineKeyboardButton(lava_pay.t(lang, "other_card_btn"), callback_data="lava:method:intl")])
+    elif method == "intl":
+        rows.append([InlineKeyboardButton(lava_pay.t(lang, "ru_card_btn"), callback_data="lava:method:ru")])
     if not promo:
         rows.append([InlineKeyboardButton(lava_pay.t(lang, "promo_btn"), callback_data="lava:promo")])
     rows.append([InlineKeyboardButton(lava_pay.t(lang, "change_btn"), callback_data="lava:start")])
@@ -3990,39 +4211,36 @@ async def handle_lava_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_reply_markup(reply_markup=None)
 
     if action == "start" or not lava_pay.enabled():
+        _pay_mark(cid, "open", prof)
         await _lava_send_start(context.bot, cid, prof)
         return
-    co = lava_pay.checkout.get(cid)
+    if action in ("buy", "plan"):
+        _pay_mark(cid, "open", prof)
+        with suppress(Exception):
+            await lava_pay.load_offers()
+        if arg in lava_pay.available_plans():
+            await _lava_choose(context.bot, cid, prof, arg)
+        else:
+            await _lava_send_start(context.bot, cid, prof)
+        return
+    co = _lava_co(cid)
     if co is None:
         await _lava_send_start(context.bot, cid, prof)
         return
-    if action == "plan" and arg in lava_pay.available_plans():
-        co["plan"] = arg
-        await context.bot.send_message(
-            chat_id=cid,
-            text=lava_pay.t(lang, "choose_method"),
-            reply_markup=_lava_method_keyboard(lang, arg),
-        )
-        return
     if action == "method" and arg in lava_pay.METHODS:
-        co["method"] = arg
-        if not co.get("email"):
-            known = db_store.lava_latest_for_user(cid) or {}
-            tag = lava_pay.parse_profile_tag(prof.get("plan")) or {}
-            co["email"] = str(known.get("email") or tag.get("email") or "")
-        if co.get("email"):
-            async with typing_while(context.bot, cid):
-                await _lava_show_summary(context.bot, cid, prof)
+        if co.get("plan") in lava_pay.PLANS:
+            await _lava_choose(context.bot, cid, prof, co["plan"], method=arg)
         else:
-            co["step"] = "email"
-            await context.bot.send_message(chat_id=cid, text=lava_pay.t(lang, "ask_email"))
+            await _lava_send_start(context.bot, cid, prof)
         return
     if action == "promo":
         co["step"] = "promo"
+        _lava_co_save(cid)
         await context.bot.send_message(chat_id=cid, text=lava_pay.t(lang, "ask_promo"))
         return
     if action == "nopromo":
         co["promo"] = ""
+        _lava_co_save(cid)
         async with typing_while(context.bot, cid):
             await _lava_show_summary(context.bot, cid, prof)
         return
@@ -4031,17 +4249,38 @@ async def handle_lava_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def _lava_handle_text(update: Update, cid: int, raw: str, profile) -> bool:
     """Email / promo code typed during checkout. False lets the message go to the chat."""
-    co = lava_pay.checkout.get(cid)
-    if not co or not co.get("step") or not update.message:
+    if not update.message:
         return False
     prof = profile if isinstance(profile, dict) else {}
     lang = ui_lang(prof)
     text = raw.strip()
     one_word = len(text.split()) == 1
     bot = update.get_bot()
+    co = _lava_co(cid)
+    if not co or not co.get("step"):
+        # A lone email outside a checkout step (e.g. the step was lost): keep it for the
+        # payment instead of sending it to the chat, and show the tariffs.
+        if (
+            one_word
+            and lava_pay.enabled()
+            and lava_pay.valid_email(text)
+            and onboarding.get(cid) is None
+            and not _profile_is_premium_active(prof, _profile_local_date(prof))
+        ):
+            co = co or {}
+            co["email"] = text.lower()
+            co["step"] = ""
+            lava_pay.checkout[cid] = co
+            _lava_co_save(cid)
+            _pay_mark(cid, "email", prof)
+            await _lava_send_start(bot, cid, prof)
+            return True
+        return False
     if co["step"] == "email":
         if lava_pay.valid_email(text):
             co["email"] = text.lower()
+            _lava_co_save(cid)
+            _pay_mark(cid, "email", prof)
             async with typing_while(bot, cid):
                 await _lava_show_summary(bot, cid, prof)
             return True
@@ -4049,15 +4288,18 @@ async def _lava_handle_text(update: Update, cid: int, raw: str, profile) -> bool
             await update.message.reply_text(lava_pay.t(lang, "bad_email"))
             return True
         co["step"] = ""
+        _lava_co_save(cid)
         return False
     if co["step"] == "promo":
         code = lava_pay.normalize_promo(text)
         if code and one_word:
             co["promo"] = code
+            _lava_co_save(cid)
             async with typing_while(bot, cid):
                 await _lava_show_summary(bot, cid, prof)
             return True
         co["step"] = ""
+        _lava_co_save(cid)
         return False
     return False
 
@@ -6484,6 +6726,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _bot_reply(
         update.message,
         ob.get_greeting_new(lang),
+        reply_markup=_name_kb(update, lang),
     )
 
 
@@ -6551,6 +6794,7 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _bot_reply(
             update.message,
             ob.get_greeting_new(lang),
+            reply_markup=_name_kb(update, lang),
         )
         return
 
@@ -6994,6 +7238,65 @@ async def handle_vision_callback(
     )
 
 
+def _name_kb(update, lang: str):
+    """«Я Маша 👋» / «Зови меня иначе» under the name question (Anya, 22.11.2026)."""
+    user = getattr(update, "effective_user", None)
+    return ob.name_keyboard(getattr(user, "first_name", None) if user else None, lang)
+
+
+async def handle_name_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """The name in one tap: her Telegram name goes on as if she typed it; «Зови меня
+    иначе» asks for the name, then the usual typed answer is awaited."""
+    from types import SimpleNamespace
+
+    query = update.callback_query
+    if not query or not query.data or not query.message:
+        return
+    await query.answer()
+    cid = query.message.chat_id
+    _restore_cid_flow(cid)
+    st = onboarding.get(cid)
+    lang = (query.from_user.language_code if query.from_user else None) or "en"
+    if isinstance(st, dict):
+        lang = str(st.get("lang") or lang)
+    ru = str(lang).lower().startswith("ru")
+    name = ""
+    if query.data == "ob_name:tg":
+        name = ob.telegram_name(query.from_user.first_name if query.from_user else "")
+    label = (f"Я {name} 👋" if ru else f"I'm {name} 👋") if name else (ob.NAME_OTHER_RU if ru else ob.NAME_OTHER_EN)
+    try:
+        if query.message.text:
+            await query.edit_message_text(query.message.text + "\n\n👉 " + label)
+        else:
+            await query.edit_message_reply_markup(reply_markup=None)
+    except Exception as e:
+        log.warning("name edit failed cid=%s: %s", cid, e)
+    if (
+        not isinstance(st, dict)
+        or int(st.get("step") or 0) != ob.OB_NAME
+        or str(st.get("name") or "").strip()
+        or st.get("age_blocked")
+    ):
+        return  # stale button
+    _touch_user_message_date(cid, user_profiles.get(str(cid)) or {})
+    if not name:
+        await context.bot.send_message(
+            chat_id=cid, text=ob.NAME_OTHER_ASK_RU if ru else ob.NAME_OTHER_ASK_EN
+        )
+        return
+    shim = SimpleNamespace(
+        message=query.message,
+        effective_chat=update.effective_chat,
+        effective_user=update.effective_user,
+        callback_query=None,
+    )
+    await ob.handle_onboarding_turn(
+        shim, context, name, onboarding, histories, user_profiles, subscribers
+    )
+
+
 async def handle_card_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -7215,7 +7518,7 @@ async def _handle_language_switch(update: Update, cid: int, raw: str, prof: dict
         await _bot_reply(update.message, lang_switch.CONFIRM[want])
         st = onboarding.get(cid)
         if isinstance(st, dict) and int(st.get("step") or 0) == ob.OB_NAME and not st.get("name"):
-            await _bot_reply(update.message, ob.get_greeting_new(want))  # the name question again
+            await _bot_reply(update.message, ob.get_greeting_new(want), reply_markup=_name_kb(update, want))  # the name question again
         return True
     implied = lang_switch.implied(raw, current)
     if implied:
@@ -7509,6 +7812,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _bot_reply(
             update.message,
             ob.get_greeting_new(lang),
+            reply_markup=_name_kb(update, lang),
         )
         return
 
@@ -7860,6 +8164,7 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await _bot_reply(
                 msg,
                 ob.get_greeting_new(lang),
+                reply_markup=_name_kb(update, lang),
             )
             return
 
@@ -9567,6 +9872,9 @@ def _register_telegram_handlers(app_: Application) -> None:
         CallbackQueryHandler(handle_vision_callback, pattern=r"^ob_vis:[a-z]+$")
     )
     app_.add_handler(
+        CallbackQueryHandler(handle_name_callback, pattern=r"^ob_name:(tg|other)$")
+    )
+    app_.add_handler(
         CallbackQueryHandler(handle_card_callback, pattern=r"^ob_card:(yes|fix)$")
     )
     app_.add_handler(
@@ -9766,6 +10074,10 @@ async def _bootstrap_bot() -> None:
                 profile = user_profiles.get(key) or profile
 
                 if not _profile_has_daily_access(profile, today_date):
+                    if in_morning:
+                        await _maybe_send_trial_pause(
+                            bot, cid, profile, today_date, user_profiles
+                        )
                     if in_morning or in_evening:
                         log.info(
                             "daily_check skipped cid=%s: no access (trial over, no paid days) now=%s",

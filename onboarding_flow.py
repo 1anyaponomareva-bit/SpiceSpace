@@ -1329,6 +1329,42 @@ def card_keyboard(text: str, lang: str = "en") -> InlineKeyboardMarkup | None:
     ]])
 
 
+NAME_OTHER_RU, NAME_OTHER_EN = "Зови меня иначе", "Call me something else"
+NAME_OTHER_ASK_RU = "Как тебя называть? Напиши 🙂"
+NAME_OTHER_ASK_EN = "What should I call you? Write it 🙂"
+_NAME_STOP = {"admin", "user", "test", "none", "null", "deleted", "account", "bot", "telegram"}
+
+
+def telegram_name(first_name: str | None) -> str:
+    """Her Telegram first name if it looks like a name, else "" (Anya, 22.11.2026: the name
+    in one tap). Letters only (any alphabet, a hyphen or apostrophe inside), 2-20 chars,
+    the first word of a two-word name."""
+    words = str(first_name or "").strip().split()
+    if not words or len(words) > 2:
+        return ""
+    w = words[0].strip()
+    if not (2 <= len(w) <= 20) or not w[0].isalpha() or not w[-1].isalpha():
+        return ""
+    if not all(ch.isalpha() or ch in "-'’" for ch in w):
+        return ""
+    if w.lower() in _NAME_STOP or (w.isupper() and len(w) > 3):
+        return ""
+    return w[0].upper() + w[1:] if w.islower() else w
+
+
+def name_keyboard(first_name: str | None, lang: str = "en") -> InlineKeyboardMarkup | None:
+    """Under the name question: «Я Маша 👋» (her Telegram name) and «Зови меня иначе».
+    No buttons at all when the Telegram name does not look like a name."""
+    name = telegram_name(first_name)
+    if not name:
+        return None
+    ru = _is_ru(lang)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"Я {name} 👋" if ru else f"I'm {name} 👋", callback_data="ob_name:tg")],
+        [InlineKeyboardButton(NAME_OTHER_RU if ru else NAME_OTHER_EN, callback_data="ob_name:other")],
+    ])
+
+
 def vision_choice_text(code: str, lang: str = "en") -> str:
     """Button -> the answer as if she typed it; "" for "other" and unknown codes."""
     for c, label_ru, label_en in VISION_OPTIONS:

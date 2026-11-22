@@ -39,9 +39,12 @@ class _Db:
     def cycle_flag_sent(self, profile, key):
         return key in self.flags
 
-    def mark_cycle_flag(self, cid, key):
+    def mark_cycle_flag(self, cid, key, value=True):
         self.flags.add(key)
         return None
+
+    def get_daily_summary(self, cid, d):
+        return {"task_completed": "true"} if d.day % 2 else {}
 
 
 class _Ob:
@@ -66,11 +69,14 @@ def _ns(today: date, start_date: str = "2026-11-13") -> dict:
         "_profile_local_date": lambda p: today,
         "_profile_is_premium_active": lambda p, d: False,
         "_subscription_offer_keyboard": lambda cid, lang: None,
+        "_pay_mark": lambda *a, **k: None,
+        "suppress": __import__("contextlib").suppress,
     }
     return _main_functions(
         {
             "_trial_text", "trial_intro_text", "_trial_prices", "_maybe_send_payments_announcement",
             "_maybe_send_trial_evening_message", "_trial_start_raw", "_trial_day", "_lava_end_text",
+            "_trial_facts",
         },
         ns,
     )
@@ -111,7 +117,7 @@ class TrialTextsTests(unittest.TestCase):
         prof = {"name": "Аня", "trial_start_date": "2026-11-13", "main_goal": "Запустить курс"}
         for today, expect in (
             (date(2026, 11, 14), None),
-            (date(2026, 11, 15), "завтра последний день пробного периода"),
+            (date(2026, 11, 15), "Завтра последний день пробного периода"),
             (date(2026, 11, 16), "пробные 4 дня закончились"),
             (date(2026, 11, 17), None),
         ):
@@ -127,6 +133,11 @@ class TrialTextsTests(unittest.TestCase):
         bot = _Bot()
         asyncio.run(ns["_maybe_send_trial_evening_message"](bot, 1, prof, date(2026, 11, 15), {}))
         self.assertIn("590 ₽ в месяц или 1490 ₽ за 3 месяца", bot.sent[0])
+        # Anya, 22.11.2026: her own 3 days before the price, the «до 1 декабря» line
+        self.assertLess(bot.sent[0].index("«Запустить курс»"), bot.sent[0].index("590"))
+        self.assertIn("✅ Сделано шагов: 2", bot.sent[0])
+        self.assertIn("до 1 декабря", bot.sent[0])
+        self.assertNotIn("бесплатн", bot.sent[0])
         ns = _ns(date(2026, 11, 16))
         bot = _Bot()
         asyncio.run(ns["_maybe_send_trial_evening_message"](bot, 1, prof, date(2026, 11, 16), {}))

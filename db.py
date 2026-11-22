@@ -644,7 +644,8 @@ def cycle_flag_sent(profile: dict, flag_key: str) -> bool:
     return bool(profile.get(flag_key))
 
 
-def mark_cycle_flag(user_id: int | str, flag_key: str) -> dict | None:
+def mark_cycle_flag(user_id: int | str, flag_key: str, value: object = True) -> dict | None:
+    """value: True, or e.g. the time a payment step happened (counted in /api/stats/daily)."""
     profile = _merge_base(user_id)
     if profile is None:
         return None
@@ -652,9 +653,9 @@ def mark_cycle_flag(user_id: int | str, flag_key: str) -> dict | None:
     if not isinstance(cf, dict):
         cf = {}
     cf = dict(cf)
-    cf[flag_key] = True
+    cf[flag_key] = value
     profile["cycle_flags"] = cf
-    profile[flag_key] = True
+    profile[flag_key] = value
     upsert_profile(user_id, profile)
     return profile
 
