@@ -6790,6 +6790,10 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
         _purge_user_runtime(cid)  # again: nothing may have been re-cached meanwhile
+        # the profile is gone: start like a new person, in her Telegram language, not the
+        # language the old profile had (Anya, 22.11.2026: got the English greeting)
+        if update.effective_user and update.effective_user.language_code:
+            lang = update.effective_user.language_code
         ob.start_new_onboarding(onboarding, cid, lang)
         await _bot_reply(
             update.message,
