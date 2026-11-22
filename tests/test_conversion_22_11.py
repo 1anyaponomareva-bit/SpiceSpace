@@ -74,7 +74,8 @@ class Pricing(unittest.TestCase):
         self.assertFalse(lava_pay.price_locked_now(date(2026, 12, 1)))
         self.assertEqual(lava_pay.our_rub("1m", date(2026, 11, 30)), 590)
         self.assertEqual(lava_pay.our_rub("1m", date(2026, 12, 1)), 990)
-        self.assertEqual(lava_pay.our_rub("3m", date(2026, 12, 1)), 1490)
+        self.assertEqual(lava_pay.our_rub("3m", date(2026, 11, 30)), 1490)
+        self.assertEqual(lava_pay.our_rub("3m", date(2026, 12, 1)), 2490)
 
     def test_lock_line_goes_away(self):
         self.assertIn("до 1 декабря", main._trial_prices("ru", date(2026, 11, 25))["lock"])

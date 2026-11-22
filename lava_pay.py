@@ -55,9 +55,9 @@ METHODS: dict[str, dict] = {
 
 # Anya, 22.11.2026: who subscribes before 1 December keeps 590 ₽ a month (lava renews at
 # the contract price: "для существующих подписчиков стоимость останется прежней");
-# new subscribers from 1 December pay 990 ₽.
+# new subscribers from 1 December pay 990 ₽ a month, 2490 ₽ for 3 months.
 PRICE_RISE_DAY = date(2026, 12, 1)
-RUB_FROM_RISE = {"1m": 990}
+RUB_FROM_RISE = {"1m": 990, "3m": 2490}
 
 
 def price_locked_now(today: date | None = None) -> bool:
