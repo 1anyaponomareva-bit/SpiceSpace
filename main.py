@@ -10521,13 +10521,22 @@ async def _bootstrap_bot() -> None:
     async def threads_publish_job() -> None:
         try:
             def _tick() -> list[str]:
-                if not threads_publisher.load(db_store.kv_get):
-                    return []
-                token, _info = meta_stats.current_token(
-                    "threads", "THREADS_ACCESS_TOKEN", meta_stats.THREADS_REFRESH_URL,
-                    "th_refresh_token", db_store.kv_get, db_store.kv_set,
-                )
-                return threads_publisher.run_once(db_store.kv_get, db_store.kv_set, token)
+                items = threads_publisher.load(db_store.kv_get)
+                notes: list[str] = []
+                # each account with something still to do gets its own tick and token
+                for account in threads_publisher.ACCOUNTS:
+                    if not any(
+                        threads_publisher.account_of(x) == account
+                        and (x.get("status") == "queued"
+                             or (x.get("status") == "posted" and x.get("reply") and not x.get("chain")))
+                        for x in items
+                    ):
+                        continue
+                    token = _threads_token(account)
+                    notes += threads_publisher.run_once(
+                        db_store.kv_get, db_store.kv_set, token, account=account
+                    )
+                return notes
 
             for note in await asyncio.to_thread(_tick):
                 await notify_admin(bot, note)
@@ -10873,28 +10882,43 @@ async def winback_preview(request: Request) -> dict:
     return {"enabled": WINBACK_ENABLED, "due_today": len(plan), "by_kind_and_step": counts}
 
 
+def _threads_token(account: str) -> str:
+    """Token of a Threads account (ru: THREADS_ACCESS_TOKEN, en: THREADS_ACCESS_TOKEN_EN),
+    the weekly-refreshed copy from app_kv when there is one. Never logged or returned."""
+    spec = threads_publisher.ACCOUNTS[threads_publisher.norm_account(account)]
+    token, _info = meta_stats.current_token(
+        spec["kind"], spec["env"], meta_stats.THREADS_REFRESH_URL,
+        "th_refresh_token", db_store.kv_get, db_store.kv_set,
+    )
+    return token
+
+
 @app.get("/api/threads/queue")
 async def threads_queue_get(request: Request) -> dict:
-    """Owner-only: what is queued / posted in Threads (no tokens)."""
+    """Owner-only: what is queued / posted in Threads (no tokens). Every item has
+    `account` ("ru" / "en"); ?account=en shows one account only."""
     if not _stats_key_ok(request):
         raise HTTPException(status_code=403, detail="forbidden")
     items = await asyncio.to_thread(threads_publisher.load, db_store.kv_get)
     out = threads_publisher.summary(items)
+    only = str(request.query_params.get("account") or "").strip()
+    if only:
+        out = [x for x in out if x["account"] == threads_publisher.norm_account(only)]
     links_day = str(request.query_params.get("links") or "").strip()
     if links_day:
         # ?links=YYYY-MM-DD: public links to that day's threads and replies, so the
         # owner can open them (permalinks only, never the token)
         def _links() -> None:
-            token, _info = meta_stats.current_token(
-                "threads", "THREADS_ACCESS_TOKEN", meta_stats.THREADS_REFRESH_URL,
-                "th_refresh_token", db_store.kv_get, db_store.kv_set,
-            )
+            tokens: dict[str, str] = {}
             for x in out:
                 if x.get("day") != links_day:
                     continue
+                acc = x["account"]
+                if acc not in tokens:
+                    tokens[acc] = _threads_token(acc)
                 for k in ("post_id", "reply_id", "reply2_id"):
-                    if x.get(k):
-                        x[k.replace("_id", "_link")] = threads_publisher.permalink(token, x[k])
+                    if x.get(k) and tokens[acc]:
+                        x[k.replace("_id", "_link")] = threads_publisher.permalink(tokens[acc], x[k])
         await asyncio.to_thread(_links)
     return {"items": out}
 
@@ -10902,7 +10926,9 @@ async def threads_queue_get(request: Request) -> dict:
 @app.post("/api/threads/queue")
 async def threads_queue_put(request: Request) -> dict:
     """Owner-only: the day's picked threads → scheduled into 3 pools.
-    Body: {"date": "YYYY-MM-DD", "items": [{tid, pool?, text, reply?, reply2?}], "cancel": false}"""
+    Body: {"date": "YYYY-MM-DD", "account": "ru"|"en" (default "ru"),
+           "items": [{tid, pool?, text, reply?, reply2?}], "cancel": false}
+    The date is the account's own calendar day (Moscow for ru, US Eastern for en)."""
     if not _stats_key_ok(request):
         raise HTTPException(status_code=403, detail="forbidden")
     try:
@@ -10910,19 +10936,29 @@ async def threads_queue_put(request: Request) -> dict:
         day = date.fromisoformat(str(body.get("date") or ""))
     except Exception:
         raise HTTPException(status_code=400, detail="need date YYYY-MM-DD and items")
+    raw_account = str(body.get("account") or "ru").strip().lower()
+    if raw_account not in threads_publisher.ACCOUNTS:
+        raise HTTPException(status_code=400, detail="account must be ru or en")
+    account = raw_account
     if body.get("cancel"):
-        n = await asyncio.to_thread(threads_publisher.cancel_day, db_store.kv_get, db_store.kv_set, day)
-        return {"cancelled": n}
+        n = await asyncio.to_thread(
+            threads_publisher.cancel_day, db_store.kv_get, db_store.kv_set, day, account
+        )
+        return {"account": account, "cancelled": n}
     items = body.get("items")
     if not isinstance(items, list) or not items:
         raise HTTPException(status_code=400, detail="items must be a non-empty list")
     try:
         queued = await asyncio.to_thread(
-            threads_publisher.put_day, db_store.kv_get, db_store.kv_set, day, items
+            threads_publisher.put_day, db_store.kv_get, db_store.kv_set, day, items, None, account
         )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)[:200])
-    return {"items": threads_publisher.summary(queued)}
+    token_set = bool(os.getenv(threads_publisher.ACCOUNTS[account]["env"], "").strip())
+    out: dict = {"account": account, "items": threads_publisher.summary(queued)}
+    if not token_set:
+        out["warning"] = f"{threads_publisher.ACCOUNTS[account]['env']} is not set in Railway: nothing will be posted"
+    return out
 
 
 @app.get("/api/stats/daily")

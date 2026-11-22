@@ -10,6 +10,10 @@ chain: `reply` (no link) under the thread, then `reply2` (with the link) under `
 The chain goes out once the thread has CHAIN_MIN_REPLIES comments, or CHAIN_AFTER
 after posting, whichever comes first.
 
+Two accounts (Anya, 22.11.2026): "ru" (the first one, Moscow pools) and "en" (@anyapnm,
+US Eastern pools 8-10, 12-14, 19-21). Every item carries `account` (missing = "ru"); a
+day of one account is queued, replaced and cancelled without touching the other.
+
 Nothing here logs or returns the token.
 """
 
@@ -21,6 +25,7 @@ import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -31,6 +36,27 @@ THREADS_BASE = "https://graph.threads.net/v1.0"
 MSK = timezone(timedelta(hours=3))
 POOLS = {"morning": (9, 0), "day": (13, 0), "evening": (19, 0)}
 POOL_ORDER = ("morning", "day", "evening")
+# account -> (zone, pools, Railway variable with its token, app_kv kind of the refreshed copy)
+ACCOUNTS: dict[str, dict[str, Any]] = {
+    "ru": {"tz": MSK, "pools": POOLS, "env": "THREADS_ACCESS_TOKEN", "kind": "threads"},
+    "en": {
+        "tz": ZoneInfo("America/New_York"),
+        "pools": {"morning": (8, 0), "day": (12, 0), "evening": (19, 0)},
+        "env": "THREADS_ACCESS_TOKEN_EN",
+        "kind": "threads_en",
+    },
+}
+DEFAULT_ACCOUNT = "ru"
+
+
+def norm_account(value: Any) -> str:
+    """'en' / 'ru'; anything else (or nothing) is the first account."""
+    v = str(value or "").strip().lower()
+    return v if v in ACCOUNTS else DEFAULT_ACCOUNT
+
+
+def account_of(item: dict) -> str:
+    return norm_account(item.get("account"))
 POOL_SIZE = 5
 SPACING_MIN, SPACING_MAX = 15, 25  # minutes between threads in a pool
 TIGHT_MIN, TIGHT_MAX = 10, 12  # evening pool that would run past 23:59 Moscow
@@ -90,10 +116,13 @@ def http_get(url: str, params: dict) -> Any:
 
 # ------------------------------------------------------------------ schedule
 def schedule(day: date, items: list[dict], now: datetime | None = None,
-             rng: random.Random | None = None) -> list[dict]:
+             rng: random.Random | None = None, account: str = DEFAULT_ACCOUNT) -> list[dict]:
     """Give each picked thread a pool and a time. Items may carry pool
-    (morning/day/evening); the rest fill pools in order, POOL_SIZE each."""
+    (morning/day/evening); the rest fill pools in order, POOL_SIZE each.
+    Times are in the account's own zone (Moscow for ru, US Eastern for en)."""
     now = now or _now()
+    account = norm_account(account)
+    zone, pools = ACCOUNTS[account]["tz"], ACCOUNTS[account]["pools"]
     rng = rng or random.Random()
     by_pool: dict[str, list[dict]] = {p: [] for p in POOL_ORDER}
     loose: list[dict] = []
@@ -106,16 +135,17 @@ def schedule(day: date, items: list[dict], now: datetime | None = None,
 
     out: list[dict] = []
     for pool in POOL_ORDER:
-        h, m = POOLS[pool]
-        start = datetime(day.year, day.month, day.day, h, m, tzinfo=MSK)
+        h, m = pools[pool]
+        start = datetime(day.year, day.month, day.day, h, m, tzinfo=zone)
         if start < now:
             # picks came in late: start this pool right away
             start = now + timedelta(minutes=2)
         todo = [it for it in by_pool[pool] if str(it.get("text") or "").strip()]
-        deadline = datetime(day.year, day.month, day.day, 23, 59, tzinfo=MSK) if pool == POOL_ORDER[-1] else None
+        deadline = datetime(day.year, day.month, day.day, 23, 59, tzinfo=zone) if pool == POOL_ORDER[-1] else None
         for it, at in zip(todo, _pool_times(start, len(todo), deadline, rng)):
             text = str(it.get("text") or "").strip()
             out.append({
+                "account": account,
                 "day": day.isoformat(),
                 "tid": str(it.get("tid") or it.get("id") or ""),
                 "pool": pool,
@@ -163,20 +193,27 @@ def _prune(items: list[dict], now: datetime) -> list[dict]:
     return [x for x in items if str(x.get("day") or "") >= cutoff]
 
 
-def put_day(kv_get, kv_set, day: date, picked: list[dict], now: datetime | None = None) -> list[dict]:
-    """Replace the not-yet-posted threads of `day` with a fresh schedule.
+def put_day(kv_get, kv_set, day: date, picked: list[dict], now: datetime | None = None,
+            account: str = DEFAULT_ACCOUNT) -> list[dict]:
+    """Replace the not-yet-posted threads of `day` (of this account) with a fresh schedule.
     Threads already posted (same tid) stay as they are and are not posted twice."""
     now = now or _now()
+    account = norm_account(account)
     with _lock:
         items = load(kv_get)
         d = day.isoformat()
+
+        def mine(x: dict) -> bool:
+            return x.get("day") == d and account_of(x) == account
+
         # resending the day re-queues what failed or was cancelled; posted stays posted
-        done = {x.get("tid") for x in items if x.get("day") == d and x.get("status") == "posted"}
-        keep = [x for x in items if x.get("day") != d or x.get("status") == "posted"]
+        done = {x.get("tid") for x in items if mine(x) and x.get("status") == "posted"}
+        keep = [x for x in items if not mine(x) or x.get("status") == "posted"]
         # threads already out don't get a slot: scheduling them and dropping them after
         # left 50-100 minute holes and pushed the evening into the night (21.11.2026)
         planned = schedule(
-            day, [p for p in picked if str(p.get("tid") or p.get("id") or "") not in done], now
+            day, [p for p in picked if str(p.get("tid") or p.get("id") or "") not in done], now,
+            account=account,
         )
         # a thread that went out without a chain gets one if the resend carries it
         # (Anya, 18.11.2026: under every thread - thread + reply + reply2);
@@ -190,7 +227,7 @@ def put_day(kv_get, kv_set, day: date, picked: list[dict], now: datetime | None 
         }
         slot = now
         for x in keep:
-            if x.get("day") != d or x.get("reply") or x.get("chain"):
+            if not mine(x) or x.get("reply") or x.get("chain"):
                 continue
             new = by_tid.get(x.get("tid"))
             if new and new.get("reply"):
@@ -201,16 +238,17 @@ def put_day(kv_get, kv_set, day: date, picked: list[dict], now: datetime | None 
         items = _prune(keep + fresh, now)
         if not kv_set(QUEUE_KEY, {"items": items}):
             raise RuntimeError("queue not saved (app_kv)")
-        return [x for x in items if x.get("day") == d]
+        return [x for x in items if mine(x)]
 
 
-def cancel_day(kv_get, kv_set, day: date) -> int:
+def cancel_day(kv_get, kv_set, day: date, account: str = DEFAULT_ACCOUNT) -> int:
+    account = norm_account(account)
     with _lock:
         items = load(kv_get)
         d = day.isoformat()
         n = 0
         for x in items:
-            if x.get("day") == d and x.get("status") == "queued":
+            if x.get("day") == d and account_of(x) == account and x.get("status") == "queued":
                 x["status"] = "cancelled"
                 n += 1
         kv_set(QUEUE_KEY, {"items": items})
@@ -278,18 +316,22 @@ def _reply_count(token: str, post_id: str, get: Getter = http_get) -> int:
 
 def run_once(kv_get, kv_set, token: str, now: datetime | None = None,
              post: Poster = http_post, get: Getter = http_get,
-             sleep: Callable[[float], None] | None = None) -> list[str]:
-    """One tick: post at most one due thread, then any chains that are due.
+             sleep: Callable[[float], None] | None = None,
+             account: str = DEFAULT_ACCOUNT) -> list[str]:
+    """One tick for one account: post at most one due thread, then any chains that are due.
     Returns short human notes for the owner (no secrets)."""
     now = now or _now()
+    account = norm_account(account)
     notes: list[str] = []
     if not token:
         return notes
+    tag = "" if account == DEFAULT_ACCOUNT else f" ({account})"
     with _lock:
         items = load(kv_get)
         changed = False
 
-        due = [x for x in items if x.get("status") == "queued" and (_parse(x.get("at")) or now) <= now]
+        due = [x for x in items if account_of(x) == account and x.get("status") == "queued"
+               and (_parse(x.get("at")) or now) <= now]
         due.sort(key=lambda x: str(x.get("at")))
         if due:
             it = due[0]
@@ -299,18 +341,21 @@ def run_once(kv_get, kv_set, token: str, now: datetime | None = None,
                 it["status"] = "posted"
                 it["posted_at"] = _iso(now)
                 it.pop("error", None)
-                log.info("threads published tid=%s day=%s pool=%s", it.get("tid"), it.get("day"), it.get("pool"))
+                log.info("threads published account=%s tid=%s day=%s pool=%s",
+                         account, it.get("tid"), it.get("day"), it.get("pool"))
             except Exception as e:
                 it["error"] = str(e)[:200]
                 if it["attempts"] >= MAX_ATTEMPTS:
                     it["status"] = "error"
-                    notes.append(f"⚠️ Тред {it.get('tid')} не вышел: {it['error']}")
+                    notes.append(f"⚠️ Тред{tag} {it.get('tid')} не вышел: {it['error']}")
                 else:
                     it["at"] = _iso(now + timedelta(minutes=5))
                 log.warning("threads publish failed tid=%s: %s", it.get("tid"), it["error"])
             changed = True
 
         for it in items:
+            if account_of(it) != account:
+                continue
             if it.get("status") != "posted" or not it.get("reply") or it.get("chain"):
                 continue
             posted = _parse(it.get("posted_at"))
@@ -343,7 +388,7 @@ def run_once(kv_get, kv_set, token: str, now: datetime | None = None,
                 it["chain_error"] = str(e)[:200]
                 if it["chain_attempts"] >= MAX_ATTEMPTS:
                     it["chain"] = "error"
-                    notes.append(f"⚠️ Ответ под тредом {it.get('tid')} не вышел: {it['chain_error']}")
+                    notes.append(f"⚠️ Ответ под тредом{tag} {it.get('tid')} не вышел: {it['chain_error']}")
             break  # at most one chain per tick
 
         if changed:
@@ -355,5 +400,6 @@ def summary(items: list[dict]) -> list[dict]:
     """What the owner may see: no tokens, short texts."""
     keys = ("day", "tid", "pool", "at", "status", "posted_at", "post_id", "chain", "chain_at",
             "reply_id", "reply2_id", "chain_not_before", "error", "chain_error")
-    return [{k: x.get(k) for k in keys if x.get(k) is not None} | {"text": str(x.get("text") or "")[:80]}
+    return [{k: x.get(k) for k in keys if x.get(k) is not None}
+            | {"account": account_of(x), "text": str(x.get("text") or "")[:80]}
             for x in items]

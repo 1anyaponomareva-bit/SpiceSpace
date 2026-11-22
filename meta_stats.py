@@ -331,6 +331,15 @@ def collect_all(kv_get, kv_set, http_get: Getter = _http_get) -> dict:
         out["threads"] = {"error": "THREADS_ACCESS_TOKEN не задан в Railway"}
     if th_token:
         out["threads_niche"] = _safe(lambda: search_threads_niche(th_token, http_get))
+    # second, English account (@anyapnm, 22.11.2026): its own numbers, never mixed with ru
+    en_token, en_info = current_token(
+        "threads_en", "THREADS_ACCESS_TOKEN_EN", THREADS_REFRESH_URL, "th_refresh_token",
+        kv_get, kv_set, http_get,
+    )
+    if en_token:
+        out["threads_en"] = {"token": en_info, **_safe(lambda: collect_threads(en_token, http_get))}
+    else:
+        out["threads_en"] = {"error": "THREADS_ACCESS_TOKEN_EN не задан в Railway"}
     out["instagram"] = _instagram_block(kv_get, kv_set, http_get)
     return out
 
