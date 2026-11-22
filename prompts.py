@@ -838,12 +838,86 @@ CURRENT_TIME_INSTRUCTION = """КРИТИЧЕСКИ ВАЖНО — время и 
 ЗАПРЕЩЕНО угадывать день недели. Если не уверена — не упоминай его."""
 
 
+# How to address the user in Russian (Anya, 22.11.2026): always «ты», never «вы»;
+# grammatical gender from the profile, else from the name, else no gendered forms.
+_RU_MALE_A = frozenset({
+    "илья", "никита", "фома", "кузьма", "лука", "миша", "дима", "паша", "коля", "ваня",
+    "ванька", "петя", "лёша", "леша", "алёша", "алеша", "костя", "вова", "гоша", "гриша",
+    "серёжа", "сережа", "лёва", "лева", "толя", "федя", "юра", "слава", "стёпа", "степа",
+    "тёма", "тема", "боря", "витя",
+})
+_RU_AMBIGUOUS = frozenset({"женя", "саша", "валя", "шура", "сева"})
+_LAT_MALE_A = frozenset({
+    "nikita", "ilya", "ilia", "foma", "kuzma", "luka", "luca", "misha", "dima", "pasha",
+    "kolya", "vanya", "petya", "lesha", "alesha", "kostya", "vova", "grisha", "seryozha",
+    "yura", "slava", "tema", "borya", "vitya", "joshua", "andrea", "ezra", "elijah",
+})
+_LAT_AMBIGUOUS = frozenset({"sasha", "zhenya", "zhenia", "valya", "jesse", "alex"})
+
+
+def user_gender(profile: dict | None) -> str | None:
+    """"female" / "male" from the profile, else guessed from the first name; None = unknown."""
+    if not isinstance(profile, dict):
+        return None
+    g = str(profile.get("gender") or "").strip().lower()
+    if g in ("female", "male"):
+        return g
+    words = str(profile.get("name") or "").strip().lower().replace("ё", "е").split()
+    if not words:
+        return None
+    w = re.sub(r"[^a-zа-я]", "", words[0])
+    if len(w) < 2:
+        return None
+    if re.fullmatch(r"[а-я]+", w):
+        if w in _RU_AMBIGUOUS:
+            return None
+        if w in {x.replace("ё", "е") for x in _RU_MALE_A}:
+            return "male"
+        if w.endswith(("а", "я")):
+            return "female"
+        if w.endswith("ь"):
+            return None  # Любовь, Игорь
+        return "male"
+    if re.fullmatch(r"[a-z]+", w):
+        if w in _LAT_AMBIGUOUS:
+            return None
+        if w in _LAT_MALE_A:
+            return "male"
+        if w.endswith("a"):
+            return "female"
+        return None
+    return None
+
+
+def address_rule(profile: dict | None) -> str:
+    """Russian only: «ты» and the right grammatical gender. Empty for other languages."""
+    if not _lang_of(profile).lower().startswith("ru"):
+        return ""
+    g = user_gender(profile)
+    head = "Обращение: всегда на «ты», никогда не на «вы»."
+    note = (
+        " Если в инструкциях о пользователе написано «она», «сделала» и т. п. - "
+        "это не подсказка про пол, род бери только отсюда."
+    )
+    if g == "female":
+        return head + " Пользователь - женщина: женский род («сделала», «готова»)."
+    if g == "male":
+        return head + " Пользователь - мужчина: только мужской род («сделал», «готов»)." + note
+    return (
+        head + " Пол неизвестен: обходись без форм рода - не «сделала» / «сделал», "
+        "а «получилось?», «удалось?», «как прошёл день»." + note
+    )
+
+
 def prepend_user_time(profile: dict | None, system: str) -> str:
-    """Append current time after the cacheable prefix."""
+    """Append current time (and the Russian address rule) after the cacheable prefix."""
     lang = _lang_of(profile)
     line = f"{time_label(lang)}: {get_current_time_for_user(profile)}"
     body = (system or "").strip()
     dynamic_bit = f"{line}\n\n{current_time_instruction(lang)}"
+    addr = address_rule(profile)
+    if addr:
+        dynamic_bit += f"\n\n{addr}"
     marker = "\n---DYNAMIC---\n"
     if marker in body:
         return body + "\n\n" + dynamic_bit

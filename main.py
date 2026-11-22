@@ -97,6 +97,8 @@ from prompts import (
     evening_message_prompt,
     evening_no_task_prompt,
     evening_opening,
+    address_rule,
+    user_gender,
     morning_message_prompt,
     morning_opening,
     prepend_user_time,
@@ -1160,7 +1162,7 @@ def _signals_text(signals: list[str]) -> str:
 
 def _morning_template(profile: dict) -> str:
     name = str(profile.get("name", "")).strip() or "ты"
-    gender = profile.get("gender", "neutral")
+    gender = user_gender(profile) or "neutral"
     if gender == "female":
         tail = "Напиши, когда будешь готова — подберу мягкое действие."
         tail_m = "Напиши, когда будешь готова — дам задачу."
@@ -3299,7 +3301,10 @@ async def _reengagement_message_text(
         if ru:
             return (
                 f"{name + ', ' if name else ''}я заметила, что тебя давно не было — и это окей. "
-                "Помню твою цель, когда будешь готова — я здесь."
+                + {
+                    "female": "Помню твою цель, когда будешь готова — я здесь.",
+                    "male": "Помню твою цель, когда будешь готов — я здесь.",
+                }.get(user_gender(profile) or "", "Помню твою цель. Как будет настроение — я здесь.")
             )
         return (
             f"{name + ', ' if name else ''}I noticed you've been away — and that's okay. "
@@ -5299,7 +5304,8 @@ async def _generate_weekly_recap_message(
 - Без слов «невозможно», «нереально», «провал»
 - Обращайся по имени {name}"""
         system = (
-            "Ты Спейс. Пишешь готовый итог недели. Только текст сообщения, без вопросов."
+            "Ты Спейс. Пишешь готовый итог недели. Только текст сообщения, без вопросов.\n"
+            + address_rule(profile)
         )
     else:
         prompt = f"""Write the closing recap for {name}'s week. Ready Telegram message — user only reads.
@@ -11486,7 +11492,7 @@ def get_milestone(
                 text = claude_generate(
                     mid,
                     [{"role": "user", "content": prompt}],
-                    system=_milestone_system(lang),
+                    system=(_milestone_system(lang) + "\n" + address_rule(fresh_profile)).strip(),
                     max_tokens=150,
                     lang=lang,
                     feature="milestone",
