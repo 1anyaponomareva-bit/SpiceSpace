@@ -371,3 +371,128 @@ def build_spice_stats(
             "в этот день (считается первый раз), в cohorts - сколько из пришедших в start_day дошли до шага",
         },
     }
+
+
+# ---- trial funnel by day (Anya, 23.11.2026: «Нам нужна воронка»)
+# Cohort = the day she finished onboarding (= day 1 of the trial, her own local day).
+# reply_dN: wrote Space at least once on trial day N (her local day); a press of the
+# done / partly / didn't button under the evening message counts too (it is saved as
+# her message). Day 1 counts only what came after onboarding ended (cycle_flags
+# "ob_done_at", from 23.11.2026; earlier people: the whole day 1).
+# got_morning_dN / got_evening_dN: Space sent that day's morning / evening message
+# (cycle_flags "got_<kind>_d<N>", from 23.11.2026; null for days before that).
+TRIAL_DAYS = 4
+TRIAL_MARKS_FROM = date(2026, 11, 23)
+
+
+def _empty_trial() -> dict:
+    out: dict = {"trial_n": 0}
+    for n in range(1, TRIAL_DAYS + 1):
+        out[f"reply_d{n}"] = 0
+        out[f"got_morning_d{n}"] = 0
+        out[f"got_evening_d{n}"] = 0
+    return out
+
+
+def _user_zone(name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(str(name or ""))
+    except Exception:
+        return _tz()
+
+
+def _parse_ts(ts: object) -> datetime | None:
+    s = str(ts or "").strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def build_trial_funnel(
+    people: dict[str, dict],
+    message_times: dict[str, list[str]],
+    report_day: date,
+) -> dict:
+    """people: uid -> {"start": date (trial day 1), "tz": zone name, "label": str,
+    "done_at": ISO or None, "flags": cycle_flags}. message_times: uid -> ISO times of
+    her messages. Returns {"day_by_label": {...}, "cohorts": [...]} with counts only."""
+    first_day = report_day - timedelta(days=COHORT_DAYS - 1)
+    day: dict[str, dict] = {}
+    cohorts: dict[tuple[str, str], dict] = {}
+    for uid, info in (people or {}).items():
+        start = info.get("start")
+        if not isinstance(start, date):
+            continue
+        zone = _user_zone(info.get("tz") or "")
+        done_at = _parse_ts(info.get("done_at"))
+        flags = info.get("flags") if isinstance(info.get("flags"), dict) else {}
+        label = str(info.get("label") or NO_LABEL)
+        replied: set[int] = set()
+        for ts in message_times.get(str(uid)) or []:
+            dt = _parse_ts(ts)
+            if dt is None:
+                continue
+            n = (dt.astimezone(zone).date() - start).days + 1
+            if not 1 <= n <= TRIAL_DAYS:
+                continue
+            if n == 1 and done_at is not None and dt <= done_at:
+                continue  # onboarding answers
+            replied.add(n)
+        got = {
+            (kind, n)
+            for kind in ("morning", "evening")
+            for n in range(1, TRIAL_DAYS + 1)
+            if flags.get(f"got_{kind}_d{n}")
+        }
+
+        def add(b: dict, n: int) -> None:
+            if n in replied:
+                b[f"reply_d{n}"] += 1
+            for kind in ("morning", "evening"):
+                if (kind, n) in got:
+                    b[f"got_{kind}_d{n}"] += 1
+
+        # events of report_day: trial day N fell on report_day
+        for n in range(1, TRIAL_DAYS + 1):
+            if start + timedelta(days=n - 1) != report_day:
+                continue
+            b = day.setdefault(label, _empty_trial())
+            if n == 1:
+                b["trial_n"] += 1
+            add(b, n)
+        if first_day <= start <= report_day:
+            c = cohorts.setdefault((start.isoformat(), label), _empty_trial())
+            c["trial_n"] += 1
+            for n in range(1, TRIAL_DAYS + 1):
+                add(c, n)
+
+    rows = []
+    for (start_iso, label), c in sorted(cohorts.items(), reverse=True):
+        start = date.fromisoformat(start_iso)
+        row = {"trial_day1": start_iso, "label": label, **c}
+        for n in range(1, TRIAL_DAYS + 1):
+            d = start + timedelta(days=n - 1)
+            if d > report_day:  # the day has not come yet
+                row[f"reply_d{n}"] = None
+            if d > report_day or d < TRIAL_MARKS_FROM:
+                row[f"got_morning_d{n}"] = None
+                row[f"got_evening_d{n}"] = None
+        rows.append(row)
+    return {"day_by_label": day, "cohorts": rows}
+
+
+TRIAL_FUNNEL_NOTE = (
+    "Воронка пробного периода (с 23.11.2026). trial_cohorts: когорта = trial_day1, день, когда "
+    "человек закончил знакомство (1-й день пробного периода), по его часовому поясу. trial_n - "
+    "сколько закончили знакомство в этот день; reply_d1..reply_d4 - сколько из них написали Спейс "
+    "хоть раз в 1-4-й день пробного периода (их местный день), нажатие «Выполнила / Частично / Не вышло» "
+    "тоже считается; в 1-й день - только после окончания знакомства (у закончивших до 23.11 - весь "
+    "1-й день). got_morning_dN / got_evening_dN - сколько получили утреннее / вечернее сообщение "
+    "в N-й день (отмечается с 23.11, раньше - null). null - день ещё не наступил. "
+    "В day_by_label: trial_n - закончили знакомство в report_day, reply_dN / got_*_dN - у кого "
+    "N-й день пробного пришёлся на report_day."
+)

@@ -3763,6 +3763,15 @@ async def _complete_onboarding(
     cycle.update(quiet_slots_after_onboarding(profile, datetime.now(tz)))
     profile.update(cycle)
     db.update_profile(cid, cycle)
+    # trial funnel (23.11.2026): when onboarding ended, so day 1 counts only later replies
+    flags = profile.get("cycle_flags") if isinstance(profile.get("cycle_flags"), dict) else {}
+    if new_trial and not flags.get("ob_done_at"):
+        try:
+            at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            db.mark_cycle_flag(cid, "ob_done_at", at)
+            profile["cycle_flags"] = {**flags, "ob_done_at": at}
+        except Exception as e:
+            log.warning("ob_done_at not saved cid=%s: %s", cid, e)
 
     name = profile.get("name", "")
     mt = profile.get("morning_time", "09:30")

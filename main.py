@@ -1407,13 +1407,36 @@ def _apply_flow_blob(cid: int, blob: object) -> None:
         _flow_save_muted = False
 
 
-async def _save_scheduled_turn(cid: int, text: str) -> None:
+async def _save_scheduled_turn(cid: int, text: str, kind: str = "") -> None:
     """Morning and evening messages go to the saved history too (21.11.2026): without it
     neither we nor the bot could see what she got before she went quiet or blocked."""
     try:
         await asyncio.to_thread(db_store.save_history_turn, cid, "model", str(text or "")[:4000])
     except Exception as e:
         log.warning("scheduled message not saved cid=%s: %s", cid, e)
+    if kind:
+        await asyncio.to_thread(_mark_trial_send, cid, kind)
+
+
+def _mark_trial_send(cid: int, kind: str) -> None:
+    """Trial funnel (23.11.2026): cycle_flags got_<morning|evening>_d<N> = when Space sent
+    the morning / evening message on trial day N (1-4), so the stats show if Space was silent."""
+    try:
+        prof = user_profiles.get(str(cid)) or db_store.get_profile(cid) or {}
+        day_n = _trial_day(prof) if isinstance(prof, dict) and prof else None
+        if day_n is None or not 1 <= day_n <= spice_stats.TRIAL_DAYS:
+            return
+        key = f"got_{kind}_d{day_n}"
+        flags = prof.get("cycle_flags") if isinstance(prof.get("cycle_flags"), dict) else {}
+        if flags.get(key):
+            return
+        at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        db_store.mark_cycle_flag(cid, key, at)
+        cf = dict(flags)
+        cf[key] = at
+        prof["cycle_flags"] = cf
+    except Exception as e:
+        log.warning("trial send mark failed cid=%s %s: %s", cid, kind, e)
 
 
 TZ_FIX_KV = "tz_fix_2111"
@@ -1591,11 +1614,15 @@ def _webapp_keyboard(
     ])
 
 
+def _done_word(profile: dict) -> str:
+    return {"female": "Выполнила", "male": "Выполнил"}.get(user_gender(profile) or "", "Получилось")
+
+
 def _task_completion_callback_label(callback_data: str, profile: dict) -> str:
     lang = str(profile.get("language_code") or "en")
     ru = lang.lower().startswith("ru")
     labels = {
-        "task_done": "Выполнила ✅" if ru else "Done ✅",
+        "task_done": f"{_done_word(profile)} ✅" if ru else "Done ✅",
         "task_partial": "Частично 🌓" if ru else "Partly 🌓",
         "task_missed": "Не вышло ❌" if ru else "Didn't ❌",
     }
@@ -1639,7 +1666,7 @@ def _evening_message_keyboard(cid: int, profile: dict) -> InlineKeyboardMarkup:
     if _today_has_task(cid, profile):
         rows.append([
             InlineKeyboardButton(
-                "✅ Выполнила" if ru else "✅ Done",
+                f"✅ {_done_word(profile)}" if ru else "✅ Done",
                 callback_data="task_done",
             ),
             InlineKeyboardButton(
@@ -7052,7 +7079,7 @@ async def _deliver_scheduled_morning(
             text=sanitize_bot_reply(text),
             reply_markup=_webapp_keyboard(cid, ulang),
         )
-        await _save_scheduled_turn(cid, text)
+        await _save_scheduled_turn(cid, text, "morning")
         pending_morning[cid] = {
             "task": _yesterday_unfinished_task(cid, profile),
             "text": text,
@@ -10376,7 +10403,7 @@ async def _bootstrap_bot() -> None:
                                 histories.setdefault(cid, []).append(
                                     {"role": "model", "parts": [evening_text]}
                                 )
-                                await _save_scheduled_turn(cid, evening_text)
+                                await _save_scheduled_turn(cid, evening_text, "evening")
                                 await _maybe_send_trial_evening_message(
                                     bot, cid, profile, today_date, user_profiles
                                 )
@@ -10760,9 +10787,15 @@ async def admin_stats(request: Request) -> dict:
         raise HTTPException(status_code=403, detail="forbidden")
 
     now = datetime.now(timezone.utc)
-    today = now.strftime("%Y-%m-%d")
-    week_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d")
-    day3_ago = (now - timedelta(days=3)).strftime("%Y-%m-%d")
+    # days by the owner's clock (Saigon), not UTC (Anya, 23.11.2026)
+    owner_now = now.astimezone(spice_stats._tz())
+    today = owner_now.strftime("%Y-%m-%d")
+    week_ago = (owner_now - timedelta(days=7)).strftime("%Y-%m-%d")
+    day3_ago = (owner_now - timedelta(days=3)).strftime("%Y-%m-%d")
+    day_start_utc = (
+        owner_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        .astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    )
 
     profiles = db_store.load_all_profiles()
     message_counts: dict[str, int] = {}
@@ -10771,7 +10804,7 @@ async def admin_stats(request: Request) -> dict:
     if getattr(db_store, "_use_supabase", False):
         rows = db_store._request(
             "GET",
-            f"conversation_history?role=eq.user&created_at=gte.{today}T00:00:00&select=user_id",
+            f"conversation_history?role=eq.user&created_at=gte.{day_start_utc}&select=user_id",
         ) or []
         for r in rows:
             if isinstance(r, dict):
@@ -10812,7 +10845,10 @@ async def admin_stats(request: Request) -> dict:
                 "has_goal": bool(prof.get("main_goal")),
                 "onboarding_done": bool(prof.get("name") and prof.get("main_goal")),
                 "active_today": last_active == today,
-                "replied_today": uid_str in replied_today,
+                # people still in onboarding are not counted as «replied»
+                "replied_today": uid_str in replied_today
+                and bool(prof.get("name") and prof.get("main_goal"))
+                and not onboarding.get(int(uid_str) if uid_str.lstrip("-").isdigit() else 0),
                 "messages_today": message_counts.get(uid_str, 0),
                 "messages_total": total_message_counts.get(uid_str, 0),
                 "active_week": last_active >= week_ago if last_active else False,
@@ -10863,6 +10899,45 @@ def _stats_key_ok(request: Request) -> bool:
     if expected and given and hmac.compare_digest(given.encode(), expected.encode()):
         return True
     return _is_admin_request(request)
+
+
+def _add_trial_funnel(spice: dict, profiles: dict, msg_rows: list[dict], report_day: date) -> None:
+    """Trial funnel by day (Anya, 23.11.2026): counts only, merged into the daily stats."""
+    people: dict[str, dict] = {}
+    for uid, p in (profiles or {}).items():
+        if not isinstance(p, dict):
+            continue
+        flags = p.get("cycle_flags") if isinstance(p.get("cycle_flags"), dict) else {}
+        if not (spice_stats._onboarded(p) or flags.get("ob_time")):
+            continue  # still in onboarding: no trial yet
+        raw = str(p.get("trial_start_date") or p.get("cycle_start_date") or "").strip()[:10]
+        try:
+            start = date.fromisoformat(raw)
+        except ValueError:
+            continue
+        people[str(uid)] = {
+            "start": start,
+            "tz": resolve_user_timezone(p),
+            "label": spice_stats.profile_label(p),
+            "done_at": flags.get("ob_done_at") if isinstance(flags.get("ob_done_at"), str) else None,
+            "flags": flags,
+        }
+    times: dict[str, list[str]] = {}
+    for r in msg_rows or []:
+        uid = str(r.get("user_id") or "")
+        if uid in people and r.get("created_at"):
+            times.setdefault(uid, []).append(str(r["created_at"]))
+    funnel = spice_stats.build_trial_funnel(people, times, report_day)
+    day = spice.setdefault("day_by_label", {})
+    totals = spice.setdefault("day_totals", {})
+    for label, counts in funnel["day_by_label"].items():
+        b = day.setdefault(label, spice_stats._empty_counts())
+        for k, v in counts.items():
+            b[k] = b.get(k, 0) + v
+    for k in spice_stats._empty_trial():
+        totals[k] = sum(int(b.get(k) or 0) for b in day.values())
+    spice["trial_cohorts"] = funnel["cohorts"]
+    spice.setdefault("notes", {})["trial_funnel"] = spice_stats.TRIAL_FUNNEL_NOTE
 
 
 def _message_days_by_user(rows: list[dict]) -> dict[str, set]:
@@ -10989,6 +11064,7 @@ async def stats_daily(request: Request) -> dict:
     spice = spice_stats.build_spice_stats(
         profiles, _message_days_by_user(msg_rows), payments, report_day
     )
+    _add_trial_funnel(spice, profiles, msg_rows, report_day)
     out: dict = {
         "date": report_day.isoformat(),
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
