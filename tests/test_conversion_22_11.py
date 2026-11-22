@@ -190,3 +190,17 @@ class OptionsOffer(unittest.TestCase):
         for key in ("weekly_dialog_opening", "new_week_morning_nudge"):
             self.assertIn(ob.OPTIONS_OFFER_RU, ob.ob_text(key, "ru"))
             self.assertIn(ob.OPTIONS_OFFER_EN, ob.ob_text(key, "en"))
+
+
+class OptionsOfferFormatting(unittest.TestCase):
+    def test_screenshot_22_11(self):
+        t = ("Хорошо, спорт и тело. Что ты хочешь, чтобы через 12 недель стало по-другому: чтобы ты "
+             "регулярно двигалась, стала сильнее и выносливее, или что-то другое? Если пока не знаешь, "
+             "можно начать с простого: например, 3 тренировки в неделю, которые тебе нравятся.")
+        out = ob.with_options_offer(t, "ru")
+        paras = out.split("\n\n")
+        self.assertEqual(paras[0], "Хорошо, спорт и тело.")
+        self.assertTrue(paras[1].endswith("или что-то другое?"))
+        self.assertEqual(paras[2], ob.OPTIONS_OFFER_RU)
+        self.assertNotIn("3 тренировки", out)
+        self.assertEqual(ob.with_options_offer(out, "ru"), out)

@@ -58,6 +58,7 @@ Never name the type of her message ('this is a request for help'). Never tell he
 If she gave a result and a deadline or a time budget, that is enough: do not ask what, how or why.
 Ask one question at most, only if the card would be wrong without the answer. A reply without a question is fine.
 If she says she does not know, offer 2-3 concrete options built from what she already said.
+Never add your own 'if you don't know yet…' line or examples to a question: the system adds a fixed offer of options.
 If she says everything is fine, do not dig for problems: ask what she would like to grow, start or add in her life now.
 Never say or hint that a goal is unrealistic, impossible, won't happen or can't work, and never comment on its size before the card; put in the card the result she can reach by week 12.
 A side question (tool, platform, language): answer it in one line and return; it is not a change of goal.
@@ -1378,19 +1379,38 @@ OPTIONS_OFFER_EN = "If you're not sure yet, I can suggest a few options."
 _LIST_LINE_RE = re.compile(r"(?m)^\s*(\d+[.)]|[-•–])\s+\S")
 
 
+_SENT_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
+# the model's own «если не знаешь…» sentence: replaced by Anya's exact wording
+_OWN_OFFER_RE = re.compile(
+    r"^(если (ты )?(пока |сейчас )?(ещё |еще )?(не знаешь|не уверена|сложно|трудно)|"
+    r"if you(?:'re| are)? ?(not sure|don't know|do not know))",
+    re.I,
+)
+
+
 def with_options_offer(text: str, lang: str = "en") -> str:
     """Anya, 22.11.2026: every question about the 12-week or the weekly goal ends with
-    «Если пока не знаешь, могу предложить несколько вариантов.» Not under a goal card,
-    not when options are already listed, not twice."""
-    t = str(text or "").rstrip()
-    if not t.endswith("?") or card_keyboard(t, lang) is not None:
+    «Если пока не знаешь, могу предложить несколько вариантов.», and the question is
+    its own paragraph (one solid block was hard to read). Not under a goal card, not
+    when options are already listed; the model's own «если не знаешь…» sentence is
+    replaced by the exact wording."""
+    t = str(text or "").strip()
+    if not t or card_keyboard(t, lang) is not None or _LIST_LINE_RE.search(t):
         return text
-    low = t.lower()
-    if any(k in low for k in ("могу предложить", "предложу несколько", "i can suggest", "suggest a few")):
+    offer = OPTIONS_OFFER_RU if _is_ru(lang) else OPTIONS_OFFER_EN
+    paras = [p.strip() for p in re.split(r"\n\s*\n", t) if p.strip()]
+    sents: list[str] = []
+    for para in paras:
+        if offer in para:
+            continue
+        sents.extend(x.strip() for x in _SENT_SPLIT_RE.split(para) if x.strip())
+    sents = [x for x in sents if not _OWN_OFFER_RE.match(x)]
+    q_idx = [i for i, x in enumerate(sents) if x.endswith("?")]
+    if not q_idx:
         return text
-    if _LIST_LINE_RE.search(t):
-        return text
-    return t + "\n\n" + (OPTIONS_OFFER_RU if _is_ru(lang) else OPTIONS_OFFER_EN)
+    first, last = q_idx[0], q_idx[-1]
+    blocks = [" ".join(sents[:first]), " ".join(sents[first:last + 1]), " ".join(sents[last + 1:])]
+    return "\n\n".join(b for b in blocks if b) + "\n\n" + offer
 
 
 def _offer_in_last_turn(turns: list | None, reply: str) -> None:
