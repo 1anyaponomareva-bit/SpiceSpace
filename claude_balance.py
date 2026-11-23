@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 KV_KEY = "claude_balance"
 WARN_DAYS = 7
+PACE_DAYS = 2  # the forecast looks at the last 48 hours: the week hid the growth (23.11.2026)
 
 
 def parse_ts(value: object) -> datetime | None:
@@ -38,8 +39,9 @@ def summarize(rows: list[dict], stored: dict | None, now: datetime, tz: ZoneInfo
     since the stored balance moment. stored: {"balance_usd", "at"} or None."""
     day_start = now.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = now - timedelta(days=7)
+    pace_start = now - timedelta(days=PACE_DAYS)
     at = parse_ts((stored or {}).get("at"))
-    spent_today = spent_7d = spent_since = 0.0
+    spent_today = spent_7d = spent_pace = spent_since = 0.0
     first: datetime | None = None
     for r in rows or []:
         if not isinstance(r, dict):
@@ -52,14 +54,16 @@ def summarize(rows: list[dict], stored: dict | None, now: datetime, tz: ZoneInfo
             spent_today += c
         if t >= week_start:
             spent_7d += c
+            if t >= pace_start:
+                spent_pace += c
             first = t if first is None or t < first else first
         if at is not None and t >= at:
             spent_since += c
     # average over the days we actually have, at least one day
-    span_days = 7.0
+    span_days = float(PACE_DAYS)
     if first is not None:
-        span_days = min(7.0, max(1.0, (now - first).total_seconds() / 86400))
-    per_day = spent_7d / span_days if spent_7d else 0.0
+        span_days = min(float(PACE_DAYS), max(1.0, (now - first).total_seconds() / 86400))
+    per_day = spent_pace / span_days if spent_pace else 0.0
 
     out = {
         "spent_today_usd": round(spent_today, 2),

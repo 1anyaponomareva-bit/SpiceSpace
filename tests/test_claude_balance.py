@@ -31,10 +31,17 @@ class Balance(unittest.TestCase):
         out = claude_balance.summarize(rows, stored, NOW, TZ)
         self.assertEqual(out["spent_since_set_usd"], 3.0)  # 48h, 24h and now
         self.assertEqual(out["balance_usd"], 7.0)
-        self.assertAlmostEqual(out["per_day_usd"], 1.17, places=2)
+        self.assertAlmostEqual(out["per_day_usd"], 1.5, places=2)  # now, 24 and 48 h ago over 2 days
         self.assertTrue(out["warn"])  # about 6 days left
         out = claude_balance.summarize(rows, {"balance_usd": 50, "at": stored["at"]}, NOW, TZ)
         self.assertFalse(out["warn"])
+
+    def test_forecast_follows_growth(self):
+        rows = [row(150, 0.1), row(100, 0.1), row(30, 6.0), row(5, 4.0)]
+        stored = {"balance_usd": 20, "at": (NOW - timedelta(hours=1)).isoformat()}
+        out = claude_balance.summarize(rows, stored, NOW, TZ)
+        self.assertEqual(out["per_day_usd"], 5.0)
+        self.assertEqual(out["days_left"], 4.0)
 
     def test_negative_balance_warns(self):
         stored = {"balance_usd": 2, "at": (NOW - timedelta(hours=2)).isoformat()}

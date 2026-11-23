@@ -183,7 +183,7 @@
         if (c.warn) {
           w.textContent = c.balance_usd != null && c.balance_usd <= 0
             ? "Деньги на Claude, похоже, закончились — пополни счёт, иначе бот перестанет отвечать"
-            : `Денег осталось меньше чем на 7 дней (~${money(c.per_day_usd)} в день) — пора пополнить`;
+            : `Денег осталось меньше чем на 7 дней (~${money(c.per_day_usd)} в день за последние 2 дня) - пора пополнить`;
           w.style.display = "block";
         } else {
           w.style.display = "none";
