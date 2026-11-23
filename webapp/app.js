@@ -303,6 +303,29 @@
     return end >= today;
   }
 
+  // The plan cards are a choice (Anya, 23.11.2026: «тыкала, думала это 2 кнопки»)
+  let selectedPlan = '3m';
+
+  function renderSelectedPlan() {
+    document.querySelectorAll('#subscription-plans .plan-card').forEach((el) => {
+      el.setAttribute('aria-checked', String(el.dataset.plan === selectedPlan));
+    });
+    const btn = document.getElementById('sub-subscribe');
+    const price = document.getElementById(`sub-price-${selectedPlan}`)?.textContent || '';
+    if (btn) {
+      btn.textContent = t('sub_subscribe_plan')
+        .replace('{plan}', t(`sub_plan_${selectedPlan}`))
+        .replace('{price}', price);
+    }
+  }
+
+  function selectPlan(plan) {
+    if (!plan || plan === selectedPlan) return;
+    selectedPlan = plan;
+    haptic('light');
+    renderSelectedPlan();
+  }
+
   function renderSubscriptionStatus(prof) {
     const statusEl = document.getElementById('sub-status');
     const daysEl = document.getElementById('sub-days');
@@ -316,6 +339,7 @@
     const p3 = document.getElementById('sub-price-3m');
     if (p1 && sub.price_1m) p1.textContent = sub.price_1m;
     if (p3 && sub.price_3m) p3.textContent = sub.price_3m;
+    renderSelectedPlan();
     const active = sub.active ?? profilePremiumActive(prof);
     const until = sub.until || prof?.subscription_end || '';
     if (active && until) {
@@ -357,7 +381,11 @@
     const btn = document.getElementById('sub-subscribe');
     if (btn) btn.disabled = true;
     try {
-      const resp = await apiFetch('/api/subscribe', { method: 'POST' });
+      const resp = await apiFetch('/api/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan: selectedPlan }),
+      });
       if (!resp.ok) {
         alert(t('sub_invoice_error'));
         return;
@@ -444,6 +472,9 @@
     });
     document.getElementById('sub-back')?.addEventListener('click', () => {
       closeSubscriptionScreen();
+    });
+    document.querySelectorAll('#subscription-plans .plan-card').forEach((el) => {
+      el.addEventListener('click', () => selectPlan(el.dataset.plan));
     });
     document.getElementById('sub-subscribe')?.addEventListener('click', () => {
       startSubscriptionCheckout();

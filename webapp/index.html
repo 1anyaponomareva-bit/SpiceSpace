@@ -15,7 +15,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&family=Geologica:wght@300;400;500&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,600;1,700&family=Marck+Script&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=20261121lang" />
+  <link rel="stylesheet" href="./styles.css?v=20261123plans" />
   <link rel="stylesheet" href="./season.css?v=20261109s6" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="./season.js?v=20261109s6"></script>
@@ -149,16 +149,18 @@
         <div class="sub-days" id="sub-days"></div>
       </header>
 
-      <div class="plans" id="subscription-plans">
-        <div class="plan-card">
-          <div class="plan-name" data-i18n="sub_plan_1m">1 месяц</div>
-          <div class="plan-price" id="sub-price-1m">590 ₽</div>
-        </div>
-        <div class="plan-card popular">
-          <div class="plan-badge" data-i18n="sub_popular">Выгоднее</div>
-          <div class="plan-name" data-i18n="sub_plan_3m">3 месяца</div>
-          <div class="plan-price" id="sub-price-3m">1490 ₽</div>
-        </div>
+      <div class="plans" id="subscription-plans" role="radiogroup">
+        <button type="button" class="plan-card" data-plan="1m" role="radio" aria-checked="false">
+          <span class="plan-check" aria-hidden="true"></span>
+          <span class="plan-name" data-i18n="sub_plan_1m">1 месяц</span>
+          <span class="plan-price" id="sub-price-1m">590 ₽</span>
+        </button>
+        <button type="button" class="plan-card" data-plan="3m" role="radio" aria-checked="true">
+          <span class="plan-badge" data-i18n="sub_popular">Выгоднее</span>
+          <span class="plan-check" aria-hidden="true"></span>
+          <span class="plan-name" data-i18n="sub_plan_3m">3 месяца</span>
+          <span class="plan-price" id="sub-price-3m">1490 ₽</span>
+        </button>
       </div>
 
       <button type="button" class="primary-btn" id="sub-subscribe" data-i18n="sub_subscribe_btn">💳 Оформить подписку</button>
@@ -223,7 +225,7 @@
 
 </div>
 
-<script src="./i18n.js?v=20261123trial"></script>
-<script src="./app.js?v=20261123trial"></script>
+<script src="./i18n.js?v=20261123plans"></script>
+<script src="./app.js?v=20261123plans"></script>
 </body>
 </html>

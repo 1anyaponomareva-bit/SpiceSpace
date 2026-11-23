@@ -11347,9 +11347,17 @@ async def subscribe_endpoint(
         if not telegram_app or not telegram_app.bot:
             raise HTTPException(status_code=503, detail="bot unavailable")
         prof = _resolve_user_profile(tid)
-        await _lava_send_start(
-            telegram_app.bot, int(tid), prof if isinstance(prof, dict) else {}
-        )
+        prof = prof if isinstance(prof, dict) else {}
+        plan = (body.plan if body else "").strip()
+        if plan in lava_pay.PLANS:
+            # chosen on the Mini App card: no second «choose a period» step in the chat
+            with suppress(Exception):
+                await lava_pay.load_offers()
+            if plan in lava_pay.available_plans():
+                _pay_mark(int(tid), "open", prof)
+                await _lava_choose(telegram_app.bot, int(tid), prof, plan)
+                return {"ok": True, "chat": True}
+        await _lava_send_start(telegram_app.bot, int(tid), prof)
         return {"ok": True, "chat": True}
     if not SUBSCRIPTIONS_ENABLED:
         raise HTTPException(status_code=503, detail="subscriptions disabled")
