@@ -28,6 +28,30 @@ class Knowledge(unittest.TestCase):
         self.assertGreater(t.index("НЕЛЬЗЯ:"), t.index("ЕДА НА КАЖДЫЙ ДЕНЬ"))
 
 
+class Calories(unittest.TestCase):
+    def test_mifflin_example(self):
+        # the numbers in the rule: a woman, 53 kg, 165 cm, 35
+        base = 10 * 53 + 6.25 * 165 - 5 * 35 - 161
+        self.assertAlmostEqual(base * 1.4, 1715, delta=5)
+        self.assertAlmostEqual(base * 1.55, 1900, delta=5)
+        self.assertLess(53 / 1.65 ** 2, 20)  # low normal weight: no deficit by the rule
+
+    def test_rule_in_both_languages(self):
+        ru, e = prompts.FITNESS_NUTRITION_INSTRUCTION, en.FITNESS_NUTRITION_INSTRUCTION_EN
+        for part in ("- 161", "6,25", "1,55", "дефицит не предлагай", "ниже 18,5", "не меньше 1200"):
+            self.assertIn(part, ru)
+        for part in ("- 161", "6.25", "1.55", "do not suggest a deficit", "under 18.5", "never below 1200", "lb / 2.2"):
+            self.assertIn(part, e)
+
+    def test_old_formula_is_gone(self):
+        import pathlib
+        import re
+        root = pathlib.Path(prompts.__file__).parent
+        for f in root.glob("*.py"):
+            t = f.read_text(encoding="utf-8")
+            self.assertIsNone(re.search(r"(22-24|26-28)\s*(ккал|kcal)|(вес|weight)\s*[×xх]\s*2[2-8]", t), f.name)
+
+
 class Tone(unittest.TestCase):
     def test_rules_in_both_languages(self):
         self.assertIn("можно начать с «нет»", main.COACH_STYLE_INSTRUCTION)
