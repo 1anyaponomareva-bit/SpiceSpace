@@ -10831,7 +10831,9 @@ async def admin_stats(request: Request) -> dict:
         last_morning = str(prof.get("last_morning_sent_date") or "")
         last_evening = str(prof.get("last_evening_sent_date") or "")
         last_active = max(last_morning, last_evening) if (last_morning or last_evening) else ""
-        created = str(prof.get("created_at") or "")[:10]
+        # the day she came, by the owner's clock (Saigon), like «today» (Anya, 23.11.2026)
+        created_day = spice_stats.local_day(prof.get("created_at"))
+        created = created_day.isoformat() if created_day else ""
         users.append(
             {
                 "created": created,
