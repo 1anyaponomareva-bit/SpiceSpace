@@ -85,8 +85,8 @@ const translations = {
     sub_cancel_failed: 'Не получилось отменить. Попробуй ещё раз чуть позже.',
     sub_renews: 'Продлится автоматически',
     sub_ends: 'Автопродление отключено',
-    sub_trial_until: '🎁 Бесплатно до {date} включительно',
-    sub_free_now: 'Сейчас Спейс доступна бесплатно',
+    sub_trial_until: '🎁 Пробный период до {date} включительно',
+    sub_free_now: 'Сейчас у тебя открыт полный доступ',
     sub_unavailable: 'Оплата скоро будет доступна 💳',
     sub_invoice_error: 'Не удалось открыть оплату. Попробуй ещё раз.',
     bot_stopped: 'Бот остановлен. Напиши /start чтобы возобновить.',
@@ -101,8 +101,8 @@ const translations = {
     welcome_title: 'Привет, я Спейс',
     welcome_desc:
       'Помогаю не сливаться с целей. Помню что ты говорила вчера. Мягко тыкаю если забываешь про себя.',
-    welcome_btn: 'Начать бесплатно →',
-    welcome_trial: '3 дня бесплатно · потом от 2 000 ⭐️',
+    welcome_btn: 'Начать пробный период →',
+    welcome_trial: 'Пробный период 3 дня, дальше по подписке',
   },
   en: {
     greeting_morning: 'Good morning,',
@@ -190,8 +190,8 @@ const translations = {
     sub_cancel_failed: "Couldn't cancel. Please try again a bit later.",
     sub_renews: 'Renews automatically',
     sub_ends: 'Auto-renewal is off',
-    sub_trial_until: '🎁 Free through {date}',
-    sub_free_now: 'Space is free for you right now',
+    sub_trial_until: '🎁 Trial through {date}',
+    sub_free_now: 'You have full access right now',
     sub_unavailable: 'Payments coming soon 💳',
     sub_invoice_error: 'Could not open payment. Try again.',
     bot_stopped: 'Bot stopped. Send /start to resume.',
@@ -206,8 +206,8 @@ const translations = {
     welcome_title: "Hi, I'm Space",
     welcome_desc:
       "I help you stay on track with your goals. I remember what you said yesterday. I gently nudge you when you forget about yourself.",
-    welcome_btn: 'Start free →',
-    welcome_trial: '3 days free · then from 2,000 ⭐️',
+    welcome_btn: 'Start the trial →',
+    welcome_trial: '3-day trial, then a subscription',
   },
 };
 
