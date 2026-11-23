@@ -5712,6 +5712,10 @@ async def _coach_reply(
         model_names = requested_models  # a hard moment always gets the full model
     if extra_rule:
         turn_parts.append(extra_rule)
+    if not (support_mode or safety.in_crisis_window(chat_id) or safety.detect_distress(user_text or "")):
+        night = _night_talk_rule(prof, user_text)
+        if night:
+            turn_parts.append(night)
     goal_text = f"{prof.get('main_goal') or ''} {prof.get('weekly_goal') or ''}"
     # A block that comes from her goal is the same in every message: it goes into the
     # system prompt, read from cache. One that only this message asked for stays in the
@@ -5857,6 +5861,38 @@ async def _coach_reply(
 
 
 _VISION_MODEL = "claude-sonnet-5-5"
+
+
+_GOING_TO_BED_RE = re.compile(
+    r"(?<!\w)(?:спокойной ночи|доброй ночи|сладких снов|я спать|иду спать|пошла спать|пош[её]л спать|"
+    r"ложусь|ложимся|буду спать|спать хочу|хочу спать|до завтра|пока-пока|"
+    r"good ?night|going to (?:bed|sleep)|off to bed|see you tomorrow)(?!\w)",
+    re.I,
+)
+
+
+def _night_talk_rule(profile: dict, user_text: str, now_local: datetime | None = None) -> str:
+    """21:00-06:00: she is still talking, so talk (Anya, 24.11.2026: «постоянно меня
+    отправляет куда-то»). The rule sits in the message: the one in the system prompt was
+    outweighed by the clock. Nothing is added when she herself is going to bed."""
+    now_local = now_local or datetime.now(_zone_or_default(_profile_timezone_name(profile)))
+    if 6 <= now_local.hour < 21:
+        return ""
+    if _GOING_TO_BED_RE.search((user_text or "").replace("ё", "е")):
+        return ""
+    if str(profile.get("language_code") or "en").lower().startswith("ru"):
+        return (
+            "Сейчас поздно, но человек не прощается. Ответь на его слова полностью, как днём. "
+            "Не пиши про поздний час («поздно», «за полночь», «ночь»), не отправляй спать или отдыхать, "
+            "не откладывай ответ на завтра («подумаем завтра», «всё это на завтра») и не подводи итог "
+            "разговора. Дела на сейчас не предлагай; план на завтра составляй, если о нём просят."
+        )
+    return (
+        "It is late, but the person is not saying goodbye. Answer in full, as in the daytime. "
+        "Do not mention the late hour, do not send them to bed or to rest, do not put the answer off "
+        "until tomorrow and do not wrap the conversation up. Suggest no chores for right now; "
+        "plan tomorrow only if they ask."
+    )
 
 
 async def _coach_reply_photo(
