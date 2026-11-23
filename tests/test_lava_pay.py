@@ -368,7 +368,7 @@ class SubscriptionInfoTests(unittest.TestCase):
         ns = {
             "lava_pay": lava_pay,
             "SUBSCRIPTIONS_ENABLED": enabled,
-            "TRIAL_DAYS": 4,
+            "trial": __import__("trial"),
             "PAYMENTS_START_DATE": "2026-11-13",
             "date": date,
             "timedelta": _td,

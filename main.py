@@ -44,6 +44,7 @@ import meta_stats
 import threads_publisher
 import onboarding_flow as ob
 import safety
+import trial
 import tz_guess
 import ed_guard
 import memory_context
@@ -139,7 +140,6 @@ DATA_DIR = Path(__file__).resolve().parent
 WEBAPP_DIR = DATA_DIR / "webapp"
 load_dotenv(DATA_DIR / ".env")
 ADMIN_TELEGRAM_ID = 8412438788
-TRIAL_DAYS = 4
 # Paid access starts on this date (YYYY-MM-DD). Everyone who started earlier gets
 # their free days counted from it. Empty = paywall off. Needs lava configured too.
 PAYMENTS_START_DATE = os.getenv("PAYMENTS_START_DATE", "2026-11-13").strip()[:10]
@@ -3522,7 +3522,7 @@ def _profile_in_trial(profile: dict, today: date) -> bool:
         start = date.fromisoformat(start_raw)
     except ValueError:
         return True
-    return (today - start).days < TRIAL_DAYS
+    return (today - start).days < trial.days_for(start_raw)
 
 
 def _profile_has_daily_access(profile: dict, today: date) -> bool:
@@ -3574,7 +3574,7 @@ _TRIAL_TEXTS = {
     "ru": {
         # Anya, 21.11.2026: no «бесплатный» in the trial texts, « - » instead of a long dash
         "intro": (
-            "Первые 4 дня со мной - пробный период: утренние и вечерние сообщения, чат "
+            "Первые 3 дня со мной - пробный период: утренние и вечерние сообщения, чат "
             "и мини-приложение. Дальше - по подписке. Я заранее напомню 💚"
         ),
         "announce": (
@@ -3584,7 +3584,7 @@ _TRIAL_TEXTS = {
         ),
         # Anya, 22.11.2026: day 3 starts with her own 3 days, then the price
         "day3": (
-            "{name}, вот наши первые 3 дня 🌙\n\n{facts}\n"
+            "{name}, вот наши первые {d} дня 🌙\n\n{facts}\n"
             "Завтра последний день пробного периода. "
             "Чтобы продолжить - {p1} в месяц или {p3} за 3 месяца.{lock}"
         ),
@@ -3596,7 +3596,7 @@ _TRIAL_TEXTS = {
         "fact_done": "✅ Сделано шагов: {k}\n",
         "fact_next": "👣 Дальше на этой неделе: «{weekly}»\n",
         "day4": (
-            "{name}, пробные 4 дня закончились 🌙 Спасибо за эти дни вместе. "
+            "{name}, пробные {n} дня закончились 🌙 Спасибо за эти дни вместе. "
             "{goal_line}Оформи подписку, и завтра утром я напишу как обычно.{lock}"
         ),
         "goal_line": "Я помню твою цель - «{goal}» - и хочу идти к ней с тобой дальше. ",
@@ -3609,7 +3609,7 @@ _TRIAL_TEXTS = {
     },
     "en": {
         "intro": (
-            "Your first 4 days with me are a trial: morning and evening messages, chat "
+            "Your first 3 days with me are a trial: morning and evening messages, chat "
             "and the mini app. After that it's a subscription. I'll remind you in advance 💚"
         ),
         "announce": (
@@ -3618,7 +3618,7 @@ _TRIAL_TEXTS = {
             "Everything works as before, and I'll remind you near the end."
         ),
         "day3": (
-            "{name}, here are our first 3 days 🌙\n\n{facts}\n"
+            "{name}, here are our first {d} days 🌙\n\n{facts}\n"
             "Tomorrow is the last day of your trial. "
             "To keep going - {p1} a month or {p3} for 3 months.{lock}"
         ),
@@ -3630,7 +3630,7 @@ _TRIAL_TEXTS = {
         "fact_done": "✅ Steps done: {k}\n",
         "fact_next": "👣 Next this week: «{weekly}»\n",
         "day4": (
-            "{name}, your 4-day trial is over 🌙 Thank you for these days together. "
+            "{name}, your {n}-day trial is over 🌙 Thank you for these days together. "
             "{goal_line}Subscribe, and tomorrow morning I'll write as usual.{lock}"
         ),
         "goal_line": "I remember your goal - «{goal}» - and I want to keep going toward it with you. ",
@@ -3688,7 +3688,7 @@ def _trial_facts(cid: int, profile: dict, lang: str, today: date) -> str:
     except (TypeError, ValueError):
         start = None
     if start is not None:
-        for i in range(TRIAL_DAYS - 1):
+        for i in range(trial.days_for(start.isoformat()) - 1):
             d = start + timedelta(days=i)
             if d > today:
                 break
@@ -3721,14 +3721,14 @@ async def _maybe_send_payments_announcement(
     if own and own >= day_before:
         return  # new user (incl. the day before): told about the free days at onboarding
     day = _trial_day(profile, today)
-    if day is None or day < 1 or day > TRIAL_DAYS - 2:
+    if day is None or day < 1 or day > trial.OLD_DAYS - 2:
         return
     flag_key = f"payments_announce_{PAYMENTS_START_DATE}"
     if db_store.cycle_flag_sent(profile, flag_key):
         return
     lang = ui_lang(profile)
     name = str(profile.get("name") or "").strip() or ob._friend_word(lang)
-    last_day = date.fromisoformat(_trial_start_raw(profile)) + timedelta(days=TRIAL_DAYS - 1)
+    last_day = date.fromisoformat(_trial_start_raw(profile)) + timedelta(days=trial.OLD_DAYS - 1)
     try:
         await bot.send_message(
             chat_id=cid,
@@ -3745,15 +3745,17 @@ async def _maybe_send_payments_announcement(
 async def _maybe_send_trial_evening_message(
     bot, cid: int, profile: dict, today: date, user_profiles: dict[str, dict]
 ) -> None:
-    """After the evening message: day 3 — tomorrow is the last free day; day 4 — free days are over."""
+    """After the evening message: the day before the last («day3») and the last day («day4»)
+    of the trial; its length depends on when she started (trial.py)."""
     if not SUBSCRIPTIONS_ENABLED:
         return
     if _profile_is_premium_active(profile, today):
         return
     day = _trial_day(profile, today)
-    if day == TRIAL_DAYS - 1:
+    n_days = trial.days_for(_trial_start_raw(profile))
+    if day == n_days - 1:
         key = "day3"
-    elif day == TRIAL_DAYS:
+    elif day == n_days:
         key = "day4"
     else:
         return
@@ -3771,7 +3773,7 @@ async def _maybe_send_trial_evening_message(
         with suppress(Exception):
             await lava_pay.load_offers()
     text = _trial_text(
-        lang, text_key, name=name, goal_line=goal_line, facts=facts, **_trial_prices(lang, today)
+        lang, text_key, name=name, goal_line=goal_line, facts=facts, d=n_days - 1, n=n_days, **_trial_prices(lang, today)
     )
     try:
         await bot.send_message(
@@ -3792,12 +3794,13 @@ _trial_pause_sent: set[str] = set()
 async def _maybe_send_trial_pause(
     bot, cid: int, profile: dict, today: date, user_profiles: dict[str, dict]
 ) -> None:
-    """Mornings of days 5-7: a short note instead of silence, with the tariff buttons
+    """Three mornings after the trial: a short note instead of silence, with the tariff buttons
     (Anya, 22.11.2026). Never after /stop, a blocked bot, under 18 or in a crisis window."""
     if not SUBSCRIPTIONS_ENABLED or _profile_is_premium_active(profile, today):
         return
     day = _trial_day(profile, today)
-    if day is None or not (TRIAL_DAYS + 1 <= day <= TRIAL_DAYS + 3):
+    n_days = trial.days_for(_trial_start_raw(profile))
+    if day is None or not (n_days + 1 <= day <= n_days + 3):
         return
     if profile_is_blocked(profile) or not _profile_daily_enabled(profile) or _age_blocked(profile):
         return
@@ -3806,7 +3809,7 @@ async def _maybe_send_trial_pause(
     ):
         return
     start_raw = _trial_start_raw(profile)
-    n = day - TRIAL_DAYS
+    n = day - n_days
     flag_key = f"trial_pause{n}_{start_raw}"
     if not start_raw or flag_key + str(cid) in _trial_pause_sent:
         return
@@ -3892,7 +3895,7 @@ def _subscription_paywall_text(profile: dict, lang: str) -> str:
     today = _profile_local_date(profile)
     days = _days_since_trial_start(profile, today)
     lock = _trial_prices(lang, today)["lock"]
-    if days is not None and days >= TRIAL_DAYS and not _profile_is_premium_active(
+    if days is not None and days >= trial.days_for(_trial_start_raw(profile)) and not _profile_is_premium_active(
         profile, today
     ):
         return ob.ob_text("trial_expired_offer", lang, name=name) + lock
@@ -9965,7 +9968,7 @@ def _subscription_info(profile: dict) -> dict:
         start_raw = _trial_start_raw(profile)
         if start_raw:
             try:
-                last = date.fromisoformat(start_raw) + timedelta(days=TRIAL_DAYS - 1)
+                last = date.fromisoformat(start_raw) + timedelta(days=trial.days_for(start_raw) - 1)
                 info["trial"] = True
                 info["trial_until"] = last.isoformat()
             except ValueError:

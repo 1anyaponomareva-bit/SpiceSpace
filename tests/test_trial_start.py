@@ -19,7 +19,7 @@ def _ns(start: str) -> dict:
         {"_trial_start_raw", "_profile_in_trial", "_trial_day"},
         {
             "PAYMENTS_START_DATE": start,
-            "TRIAL_DAYS": 4,
+            "trial": __import__("trial"),
             "date": date,
             "_profile_local_date": lambda p: date(2026, 12, 1),
         },

@@ -393,7 +393,7 @@ _EN_USER_OVERRIDE = (
 
 # 21.11.2026: asked «сколько стоит?» mid-onboarding, the model said «я бесплатная».
 PRICE_RULE_EN = (
-    "If she asks what Space costs or whether it is free: the first 4 days are a trial (call "
+    "If she asks what Space costs or whether it is free: the first 3 days are a trial (call "
     "it a trial period, never use the word free), then a subscription of 590 RUB a "
     "month or 1490 RUB for 3 months (write it as ₽ in Russian), paid in the mini app. Say it "
     "plainly in one or two sentences, never say Space is free, don't push, then go back to "

@@ -11,6 +11,8 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import trial
+
 OWNER_TZ = os.getenv("OWNER_TZ", "Asia/Saigon").strip() or "Asia/Saigon"
 COHORT_DAYS = 14
 NO_LABEL = "none"
@@ -381,7 +383,7 @@ def build_spice_stats(
 # "ob_done_at", from 23.11.2026; earlier people: the whole day 1).
 # got_morning_dN / got_evening_dN: Space sent that day's morning / evening message
 # (cycle_flags "got_<kind>_d<N>", from 23.11.2026; null for days before that).
-TRIAL_DAYS = 4
+TRIAL_DAYS = 4  # the longest one; new people have 3 (trial.py), their day 4 is null
 TRIAL_MARKS_FROM = date(2026, 11, 23)
 
 
@@ -437,7 +439,7 @@ def build_trial_funnel(
             if dt is None:
                 continue
             n = (dt.astimezone(zone).date() - start).days + 1
-            if not 1 <= n <= TRIAL_DAYS:
+            if not 1 <= n <= trial.days_for(start):
                 continue
             if n == 1 and done_at is not None and dt <= done_at:
                 continue  # onboarding answers
@@ -458,7 +460,7 @@ def build_trial_funnel(
 
         # events of report_day: trial day N fell on report_day
         for n in range(1, TRIAL_DAYS + 1):
-            if start + timedelta(days=n - 1) != report_day:
+            if start + timedelta(days=n - 1) != report_day or n > trial.days_for(start):
                 continue
             b = day.setdefault(label, _empty_trial())
             if n == 1:
@@ -467,18 +469,20 @@ def build_trial_funnel(
         if first_day <= start <= report_day:
             c = cohorts.setdefault((start.isoformat(), label), _empty_trial())
             c["trial_n"] += 1
-            for n in range(1, TRIAL_DAYS + 1):
+            for n in range(1, trial.days_for(start) + 1):
                 add(c, n)
 
     rows = []
     for (start_iso, label), c in sorted(cohorts.items(), reverse=True):
         start = date.fromisoformat(start_iso)
-        row = {"trial_day1": start_iso, "label": label, **c}
+        length = trial.days_for(start)
+        row = {"trial_day1": start_iso, "label": label, "trial_days": length, **c}
         for n in range(1, TRIAL_DAYS + 1):
             d = start + timedelta(days=n - 1)
-            if d > report_day:  # the day has not come yet
+            no_day = d > report_day or n > length  # not come yet, or not in a 3-day trial
+            if no_day:
                 row[f"reply_d{n}"] = None
-            if d > report_day or d < TRIAL_MARKS_FROM:
+            if no_day or d < TRIAL_MARKS_FROM:
                 row[f"got_morning_d{n}"] = None
                 row[f"got_evening_d{n}"] = None
         rows.append(row)
@@ -492,7 +496,8 @@ TRIAL_FUNNEL_NOTE = (
     "хоть раз в 1-4-й день пробного периода (их местный день), нажатие «Выполнила / Частично / Не вышло» "
     "тоже считается; в 1-й день - только после окончания знакомства (у закончивших до 23.11 - весь "
     "1-й день). got_morning_dN / got_evening_dN - сколько получили утреннее / вечернее сообщение "
-    "в N-й день (отмечается с 23.11, раньше - null). null - день ещё не наступил. "
+    "в N-й день (отмечается с 23.11, раньше - null). null - день ещё не наступил или его нет: у начавших с 24.11.2026 "
+    "пробный 3 дня (trial_days = 3, reply_d4 всегда null), у более ранних 4. "
     "В day_by_label: trial_n - закончили знакомство в report_day, reply_dN / got_*_dN - у кого "
     "N-й день пробного пришёлся на report_day."
 )
