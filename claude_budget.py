@@ -7,6 +7,9 @@ import re
 from typing import Any
 
 DYNAMIC_MARKER = "\n---DYNAMIC---\n"
+# ends a piece that is the same for many people (food block, a step's rules): it gets its
+# own cache entry (23.11.2026)
+SHARED_MARKER = "\n---SHARED---\n"
 CHAT_HISTORY_LIMIT = 12
 _EMPTY_DIALOG = {"нет предыдущих сообщений", "no previous messages"}
 PLAIN_CHAT_CLAUDE_CALLS = 1
@@ -16,11 +19,12 @@ REMINDER_CLAUDE_CALLS = 0
 
 _USAGE: dict[str, dict[str, int]] = {}
 
-# USD per 1M tokens: input, output, cache read, cache write (5-minute TTL = 1.25x input).
+# USD per 1M tokens: input, output, cache read, cache write (5-minute TTL = 1.25x input;
+# a 1-hour write is 2x input). Checked on platform.claude.com/docs pricing 23.11.2026.
 MODEL_PRICES: dict[str, dict[str, float]] = {
     "claude-sonnet-4-5": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 3.75},
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_read": 0.10, "cache_write": 1.25},
-    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cache_read": 0.10, "cache_write": 2.50},
     "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125},
 }
 
@@ -32,8 +36,11 @@ def usage_cost_usd(
     output_tokens: int = 0,
     cache_read_input_tokens: int = 0,
     cache_creation_input_tokens: int = 0,
+    cache_creation_1h_tokens: int = 0,
 ) -> float:
     """Dollar cost of one call; 0.0 for a model missing from MODEL_PRICES.
+
+    cache_creation_1h_tokens: how many of cache_creation_input_tokens have the 1-hour TTL.
 
     The API may report a dated id (claude-haiku-4-5-20251001); the date suffix is ignored.
     """
@@ -46,6 +53,8 @@ def usage_cost_usd(
         + int(output_tokens or 0) * prices["output"]
         + int(cache_read_input_tokens or 0) * prices["cache_read"]
         + int(cache_creation_input_tokens or 0) * prices["cache_write"]
+        + min(int(cache_creation_1h_tokens or 0), int(cache_creation_input_tokens or 0))
+        * (2 * prices["input"] - prices["cache_write"])
     ) / 1_000_000
 
 

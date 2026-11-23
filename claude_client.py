@@ -14,6 +14,7 @@ import spend_budget
 
 from claude_budget import (
     DYNAMIC_MARKER,
+    SHARED_MARKER,
     is_billing_error,
     record_usage,
     usage_cost_usd,
@@ -169,31 +170,43 @@ def _caller_label() -> str:
     return "unknown"
 
 
+def long_cache(feature: str) -> bool:
+    """Frequent prompts shared by everyone keep their common part for an hour: with the
+    5-minute TTL it was paid for again ~100 times in two days (23.11.2026)."""
+    return feature in ("chat", "photo") or str(feature).startswith("onb_")
+
+
 def _system_blocks(
-    system: str, *, cache_core: bool, cache_dynamic: bool = False
+    system: str, *, cache_core: bool, cache_dynamic: bool = False, hour: bool = False
 ) -> list[dict] | str:
+    """Up to 3 blocks: common rules, a shared piece (SHARED_MARKER, on either side of
+    DYNAMIC_MARKER), the rest. hour: the common pieces get the 1-hour TTL (they come
+    before any 5-minute block, as the API requires)."""
     if not system:
         return ""
     if not cache_core:
         # never send the marker itself to the model
-        return system.replace(DYNAMIC_MARKER, "\n\n")
+        return system.replace(DYNAMIC_MARKER, "\n\n").replace(SHARED_MARKER, "\n\n")
     if DYNAMIC_MARKER in system:
+        shared_cc = {"type": "ephemeral", "ttl": "1h"} if hour else {"type": "ephemeral"}
         static, dynamic = system.split(DYNAMIC_MARKER, 1)
-        blocks: list[dict] = []
-        if static.strip():
-            blocks.append(
-                {
-                    "type": "text",
-                    "text": static,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            )
+        shared = [p for p in static.split(SHARED_MARKER) if p.strip()]
+        step_shared = SHARED_MARKER in dynamic
+        if step_shared:
+            head, dynamic = dynamic.split(SHARED_MARKER, 1)
+            dynamic = dynamic.replace(SHARED_MARKER, "\n\n")
+            if head.strip():
+                shared.append(head.strip())
+        blocks: list[dict] = [
+            {"type": "text", "text": p, "cache_control": dict(shared_cc)} for p in shared
+        ]
         if dynamic.strip():
             block: dict = {"type": "text", "text": dynamic.strip()}
             if cache_dynamic:
                 block["cache_control"] = {"type": "ephemeral"}
             blocks.append(block)
         return blocks or ""
+    system = system.replace(SHARED_MARKER, "\n\n")
     return [
         {
             "type": "text",
@@ -257,6 +270,7 @@ def generate(
             system,
             cache_core=cache_core,
             cache_dynamic=cache_history if cache_dynamic is None else cache_dynamic,
+            hour=long_cache(feature),
         )
     t0 = time.perf_counter()
     try:
@@ -271,10 +285,13 @@ def generate(
         raise
     log.info("claude_time feature=%s model=%s s=%.1f", feature, model_id, time.perf_counter() - t0)
     usage = getattr(response, "usage", None)
-    read = created = input_tokens = output_tokens = 0
+    read = created = created_1h = input_tokens = output_tokens = 0
     if usage:
         read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
         created = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+        by_ttl = getattr(usage, "cache_creation", None)
+        created_1h = getattr(by_ttl, "ephemeral_1h_input_tokens", 0) if by_ttl is not None else 0
+        created_1h = created_1h if isinstance(created_1h, int) else 0
         input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
         output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
     system_tokens = estimate_tokens(system)
@@ -300,6 +317,7 @@ def generate(
         output_tokens=output_tokens,
         cache_read_input_tokens=read,
         cache_creation_input_tokens=created,
+        cache_creation_1h_tokens=created_1h,
     )
     spend_budget.record(user_id, cost)
     persist_usage(

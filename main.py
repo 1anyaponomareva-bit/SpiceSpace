@@ -5714,8 +5714,6 @@ async def _coach_reply(
     # system prompt, read from cache. One that only this message asked for stays in the
     # message (22.11.2026).
     goal_topic = specialty_instructions("", lang=lang, goal_text=goal_text)
-    if goal_topic:
-        extra_parts.append(goal_topic)
     topic = specialty_instructions(user_text, lang=lang)
     if goal_topic and topic:
         topic = topic.replace(goal_topic, "").strip()
@@ -5776,6 +5774,7 @@ async def _coach_reply(
             stable_today,
             extra=extra,
             coach_style=coach_style_for(lang, COACH_STYLE_INSTRUCTION),
+            shared=goal_topic,
         ),
     )
     log.info(

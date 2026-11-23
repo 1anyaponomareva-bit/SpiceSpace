@@ -16,7 +16,7 @@ from telegram.ext import ContextTypes
 
 import db
 from bot_typing import typing_while
-from claude_budget import DYNAMIC_MARKER
+from claude_budget import DYNAMIC_MARKER, SHARED_MARKER
 from safety import SAFETY_RULE_EN
 from goal_change import (
     build_change_12w_state,
@@ -2405,9 +2405,9 @@ async def _claude_vision_dialog(
                 text, model_text = generate_json_reply(
                     mid,
                     _messages_with_lang(messages, lang),
-                    system=_system_with_lang(system, lang),
+                    # the whole step prompt is the same for everyone: cached as shared
+                    system=_system_with_lang(system, lang) + SHARED_MARKER,
                     feature="onb_why_dig",
-                    cache_dynamic=True,
                 )
                 parsed = _parse_vision_dialog_json(text)
                 if parsed:

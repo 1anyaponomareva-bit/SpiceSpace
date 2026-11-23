@@ -8,7 +8,7 @@ from datetime import datetime
 
 import pytz
 
-from claude_budget import CHAT_OUTPUT_RULE_EN, CHAT_OUTPUT_RULE_RU, DYNAMIC_MARKER
+from claude_budget import CHAT_OUTPUT_RULE_EN, CHAT_OUTPUT_RULE_RU, DYNAMIC_MARKER, SHARED_MARKER
 from lang_context import (
     TIME_LINE_RE,
     current_time_instruction,
@@ -273,11 +273,11 @@ If she did not understand your question, say your wording was off and ask it sim
 A refusal is a limit: do not pitch that path again.
 Do not retell her words in nicer words. Do not explain her to herself. At most one question. At most 3 short sentences, except for the card.
 
+Return JSON: {{"message": "...", "goal": "...", "ready": true/false}}
+---SHARED---
 Her vision: {vision}
 Recent normal chat (keep the limits from here; this is not the active goal): {prior_dialog}
-This goal dialog so far: {dialog_history}
-
-Return JSON: {{"message": "...", "goal": "...", "ready": true/false}}"""
+This goal dialog so far: {dialog_history}"""
 
 
 GOAL_POLISH_PROMPT_RU = """Пользователь написал свою цель своими словами: "{raw_goal}"
@@ -361,12 +361,12 @@ When she clearly agrees to a concrete formulation, set ready=true and weekly_goa
 Never write "saved", "let's go", "see you", or anything that ends the talk; the system saves the goal. Never ask her to rephrase a goal she already wrote. Do not re-ask numbers, platforms or details already in the dialog.
 At most 3 short sentences.
 
+Return JSON: {{"message": "...", "weekly_goal": "...", "ready": true/false}}
+weekly_goal only when ready=true.
+---SHARED---
 main_goal: {main_goal}
 What she said now: {user_message}
-Dialog so far: {dialog_history}
-
-Return JSON: {{"message": "...", "weekly_goal": "...", "ready": true/false}}
-weekly_goal only when ready=true."""
+Dialog so far: {dialog_history}"""
 
 
 MORNING_MESSAGE_PROMPT_RU = """Ты — Спейс, тёплая подруга с памятью. Пиши утреннее сообщение.
@@ -942,7 +942,10 @@ def build_chat_system(
     today_summary: dict | None = None,
     extra: str = "",
     coach_style: str = "",
+    shared: str = "",
 ) -> str:
+    """shared: text many people get word for word (the food block from the goal); it goes
+    right after the common rules, before anything personal, so one cached copy serves all."""
     lang = str(profile.get("language_code") or "en")
     ru = lang.lower().startswith("ru")
 
@@ -1047,6 +1050,8 @@ def build_chat_system(
         CHAT_OUTPUT_RULE_RU if ru else CHAT_OUTPUT_RULE_EN,
     ]
     static = "\n\n".join(part for part in static_parts if part)
+    if shared:
+        static += SHARED_MARKER + shared
     dynamic = "\n".join(lines)
     return prepend_user_time(profile, static + DYNAMIC_MARKER + dynamic)
 
