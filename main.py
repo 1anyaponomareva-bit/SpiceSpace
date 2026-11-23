@@ -2092,6 +2092,12 @@ def _reminder_time_match(raw: str) -> tuple[str, int, int] | None:
         hhmm = _to_24h(int(m.group(1)), int(m.group(2)), "")
         if hhmm:
             return hhmm, m.start(), m.end()
+    # «напомни в 12-30» (23.11.2026); only after «в», so «10-15 минут» is not a time
+    m = re.search(r"(?i)(?<![а-яё])в\s+(\d{1,2})-(\d{2})(?!\d)(?!\s*(?:мин|раз|кг|шт))", text)
+    if m:
+        hhmm = _to_24h(int(m.group(1)), int(m.group(2)), "")
+        if hhmm:
+            return hhmm, m.start(), m.end()
     return None
 
 
@@ -2591,6 +2597,9 @@ async def _last_dialog_messages(chat_id: int, *, ru: bool, limit: int = 5) -> st
     bot_l = "Спейс" if ru else "Space"
     empty = "нет предыдущих сообщений" if ru else "no previous messages"
     lines: list[str] = []
+    prof = user_profiles.get(str(chat_id))
+    prof = prof if isinstance(prof, dict) else {}
+    tz_name = resolve_user_timezone(prof)
     for turn in hist[-limit:]:
         role = turn.get("role")
         parts = turn.get("parts") or []
@@ -2599,8 +2608,20 @@ async def _last_dialog_messages(chat_id: int, *, ru: bool, limit: int = 5) -> st
         if not text:
             continue
         label = user_l if role == "user" else bot_l
+        # the day of each line: «завтра» said yesterday must not be taken as tomorrow
+        day = memory_context.turn_local_date(turn, tz_name)
+        if day:
+            label += f" ({memory_context._fmt_day(day, 'ru' if ru else 'en')})"
         lines.append(f"{label}: {text[:400]}")
-    return "\n".join(lines) if lines else empty
+    if not lines:
+        return empty
+    note = (
+        "\n(В скобках день сообщения: «завтра» и «сегодня» в нём считай от этого дня, "
+        "уже сделанное не предлагай заново.)"
+        if ru
+        else "\n(The day of each message is in brackets: its «tomorrow» / «today» count from that day.)"
+    )
+    return "\n".join(lines) + note
 
 
 def _morning_message_fallback(chat_id: int, profile: dict) -> str:
@@ -2740,6 +2761,12 @@ async def _morning_message_text_base(
             + f"{name_instruction}"
         )
         user_content = f"Напиши утреннее сообщение для {display_name}."
+        if datetime.now(_zone_or_default(_profile_timezone_name(profile))).hour >= 17:
+            morning_body += (
+                "\n\nСейчас у человека вечер: это первое сообщение за день, но не утреннее. "
+                "Не спрашивай про завтрак и планы на сегодня, не предлагай дневных дел. "
+                "Спроси, как прошёл день, или предложи один шаг на завтра."
+            )
     else:
         morning_body = (
             f"{_morning_personal_system(lang)}\n\n"
@@ -2899,9 +2926,15 @@ async def _evening_message_text(
     today_iso = today.isoformat()
     if not evening_needs_model(str(profile.get("last_user_message_date") or ""), today_iso):
         log.info("evening template cid=%s: no dialog today", chat_id)
-        return evening_opening(has_task=has_task, lang=lang)
+        return evening_opening(
+            has_task=has_task, lang=lang, task=task,
+            name=str(profile.get("name") or ""), weekly=str(profile.get("weekly_goal") or ""),
+        )
     if not summary_text and not today_context:
-        return evening_opening(has_task=has_task, lang=lang)
+        return evening_opening(
+            has_task=has_task, lang=lang, task=task,
+            name=str(profile.get("name") or ""), weekly=str(profile.get("weekly_goal") or ""),
+        )
     need_summary = not summary_text
 
     name = str(profile.get("name", "")).strip()
@@ -3048,7 +3081,10 @@ async def _evening_message_text(
                 raise
             except Exception as e:
                 log.warning("evening personal message %s: %s", mid, e)
-        return evening_opening(has_task=has_task, lang=lang)
+        return evening_opening(
+            has_task=has_task, lang=lang, task=task,
+            name=str(profile.get("name") or ""), weekly=str(profile.get("weekly_goal") or ""),
+        )
 
     return await asyncio.to_thread(call)
 
@@ -3765,7 +3801,9 @@ async def _maybe_send_trial_pause(
         return
     if profile_is_blocked(profile) or not _profile_daily_enabled(profile) or _age_blocked(profile):
         return
-    if safety.in_crisis_window(cid):
+    if safety.in_crisis_window(cid) or _crisis_recent(
+        profile.get("cycle_flags"), datetime.now(timezone.utc), 7
+    ):
         return
     start_raw = _trial_start_raw(profile)
     n = day - TRIAL_DAYS
@@ -6281,11 +6319,13 @@ def _structured_flow_reply_matches(
         )
     if kind == "midday_reminder":
         low = raw.strip().lower()
-        return _user_declined(low) or bool(
-            _extract_hhmm_from_text(raw) or _parse_daily_time(raw.strip())
+        return bool(
+            (_user_declined(low) and len(low.split()) <= 4)
+            or _midday_hhmm(raw)
+            or _asks_current_time(raw)
         )
     if kind == "natural_reminder":
-        return len(raw.strip()) >= 2
+        return len(raw.strip()) >= 2 and raw.strip().lower().strip(" .!") not in ("нет", "no")
     return True
 
 
@@ -6357,18 +6397,25 @@ async def _try_flow_escape(
         flow_mismatch_streak.pop(cid, None)
         return False
 
+    low = re.sub(r"[^\w\s]", "", (raw or "").strip().lower()).strip()
+    if low in ("нет", "no", "nope", "nothing") and structured != "natural_reminder":
+        return False  # an ordinary answer, not «stop» (23.11.2026: «Нет» got «оставим это»)
+
     if _user_wants_flow_escape(raw):
         await _exit_flow_and_reply(update, cid, raw, prof)
         return True
 
-    if structured and structured != "time_setup":
-        # the time question is the last step of onboarding: an answer we can't read
-        # gets asked again, it must not throw her out with everything she told us
+    if structured == "midday_reminder":
+        # not a time and not «no»: she has moved on - drop our question, answer her words
+        pending_morning.pop(cid, None)
+    elif structured in ("returning", "change_12w_choice"):
         streak = flow_mismatch_streak.get(cid, 0) + 1
         flow_mismatch_streak[cid] = streak
         if streak >= 2:
-            await _exit_flow_and_reply(update, cid, raw, prof)
-            return True
+            # she has moved on: no «оставим это», the chat answers what she wrote
+            _clear_flow_state(cid)
+    # time_setup / goal_confirm: an answer we can't read gets asked again by the onboarding,
+    # it must not throw her out with everything she told us
     return False
 
 
@@ -6561,14 +6608,26 @@ async def _winback_send(bot, item: dict, model_names: list[str]) -> bool:
     import winback
 
     cid, kind, n, prof, lang = item["cid"], item["kind"], item["n"], item["profile"], item["lang"]
-    name = str(prof.get("name") or "").strip()
+    flags = prof.get("cycle_flags") if isinstance(prof.get("cycle_flags"), dict) else {}
+    now_utc = datetime.now(timezone.utc)
+    if _crisis_recent(flags, now_utc, winback.CRISIS_DAYS):
+        reason = "crisis"
+    else:
+        turns = await asyncio.to_thread(db_store.load_history, cid, 60)
+        reason = winback.quiet_reason(
+            turns, now_utc, prof.get("last_user_message_date"), safety.detect_crisis
+        )
+    if reason:
+        log.info("winback not sent cid=%s: %s", cid, reason)
+        return True  # counted as done, so it is not checked again every 20 minutes
+    name = winback.clean_name(prof.get("name"))
     goal = str(prof.get("main_goal") or "").strip()
     markup = None
     if kind == "onb":
         flow = await asyncio.to_thread(db_store.load_flow_blob, cid) or {}
         st = flow.get("onboarding") if isinstance(flow, dict) else None
         if isinstance(st, dict):
-            name = str(st.get("name") or name).strip()
+            name = winback.clean_name(st.get("name")) or name
             goal = str(st.get("main_goal") or goal).strip()
         text = winback.onb_text(n, lang, name, goal)
     elif kind == "lapsed":
@@ -7185,6 +7244,14 @@ async def cmd_reonboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _bot_reply(update.message, opening)
 
 
+def _crisis_recent(flags: object, now_utc: datetime, days: int) -> bool:
+    raw = flags.get("crisis_at") if isinstance(flags, dict) else None
+    try:
+        return now_utc - datetime.fromisoformat(str(raw)) < timedelta(days=days)
+    except (TypeError, ValueError):
+        return False
+
+
 async def _handle_crisis_message(
     update: Update, cid: int, raw: str, prof: object
 ) -> None:
@@ -7195,6 +7262,16 @@ async def _handle_crisis_message(
     reply = safety.crisis_reply(lang, repeat=repeat)
     # Plain reply_text: the vetted text must not go through the outgoing rewriters.
     await update.message.reply_text(reply)
+    if prof_d:
+        try:  # after the reply: saving must never delay it
+            saved = await asyncio.to_thread(
+                db_store.mark_cycle_flag, cid, "crisis_at",
+                datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            )
+            if isinstance(saved, dict):
+                user_profiles[str(cid)] = saved
+        except Exception as e:
+            log.warning("crisis mark not saved cid=%s: %s", cid, e)
     _append_history_turn(cid, raw, reply)
     pending_morning.pop(cid, None)
     pending_evening.pop(cid, None)
@@ -7623,6 +7700,27 @@ async def _handle_language_switch(update: Update, cid: int, raw: str, prof: dict
     return False
 
 
+_GENDER_SAID_RE = re.compile(
+    r"^\s*(?:вообще-то\s+)?я\s*[-—–]?\s*(?:же\s+|вообще-то\s+)?"
+    r"(мужчина|парень|мужик|женщина|девушка)\s*[.!)]*\s*$",
+    re.I,
+)
+
+
+def _note_gender_said(cid: int, raw: str, prof: object) -> None:
+    """«Я - мужчина»: remembered, so the endings stay right (23.11.2026)."""
+    m = _GENDER_SAID_RE.match(raw or "")
+    if not m or not isinstance(prof, dict) or not prof:
+        return
+    g = "female" if m.group(1).lower() in ("женщина", "девушка") else "male"
+    try:
+        saved = db_store.mark_cycle_flag(cid, "gender_said", g)
+        if isinstance(saved, dict):
+            user_profiles[str(cid)] = saved
+    except Exception as e:
+        log.warning("gender not saved cid=%s: %s", cid, e)
+
+
 def _tz_confirmed(prof: dict | None) -> bool:
     flags = prof.get("cycle_flags") if isinstance(prof, dict) else None
     return bool(isinstance(flags, dict) and flags.get("tz_set"))
@@ -7665,20 +7763,35 @@ def _past_slots_today(prof: dict, now_local: datetime) -> dict:
 async def _handle_city_timezone(update: Update, cid: int, raw: str, prof: dict | None) -> bool:
     """After onboarding said «по Москве, напиши свой город»: a short message that is just
     a city sets her time zone (21.11.2026). The times stay the same on her clock."""
-    if not isinstance(prof, dict) or not prof or _tz_confirmed(prof):
+    if not isinstance(prof, dict) or not prof:
         return False
     if cid in onboarding or not str(prof.get("main_goal") or "").strip():
         return False
-    hit = tz_guess.city_timezone(raw)
+    # a bare city once her zone is known may be about anything
+    hit = None if _tz_confirmed(prof) else tz_guess.city_timezone(raw)
+    if not hit:
+        # «я живу в Томске», «у меня 11:08», «разница с Москвой 2 часа» (23.11.2026)
+        hit = tz_guess.message_timezone(
+            raw, datetime.now(timezone.utc), resolve_user_timezone(prof)
+        )
     if not hit:
         return False
     tz_name, label = hit
+    if tz_name == str(prof.get("timezone") or "") and _tz_confirmed(prof):
+        return False
+    prof["cycle_flags"] = {
+        **(prof.get("cycle_flags") if isinstance(prof.get("cycle_flags"), dict) else {}),
+        "tz_said_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
     await asyncio.to_thread(_confirm_timezone, cid, prof, tz_name)
     log.info("timezone set from city cid=%s -> %s", cid, tz_name)
+    if len(raw) > 45 or "?" in raw:
+        return False  # there is more in the message: the chat answers, now with the right time
     mt = _normalize_profile_hm(prof.get("morning_time") or prof.get("daily_time"), "09:30")
     et = _normalize_profile_hm(prof.get("evening_time"), "21:00")
     if ui_lang(prof) == "ru":
-        text = f"Поняла, теперь пишу по времени {label}: утром в {mt}, вечером в {et} 🤍"
+        by = f"по времени {label}" if label else "по твоему времени"
+        text = f"Поняла, теперь пишу {by}: утром в {mt}, вечером в {et} 🤍"
     else:
         text = f"Got it, I'll go by your local time now: mornings at {mt}, evenings at {et} 🤍"
     _append_history_turn(cid, raw, text)
@@ -7779,6 +7892,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     prof_early = user_profiles.get(str(cid)) or db_store.get_profile(cid)
     if isinstance(prof_early, dict):
         _touch_user_message_date(cid, prof_early)
+        flags_early = prof_early.get("cycle_flags")
+        if isinstance(flags_early, dict):
+            safety.restore_crisis(cid, flags_early.get("crisis_at"))
 
     if safety.detect_crisis(raw):
         # Before onboarding and chat: a crisis message gets vetted text, not a model reply.
@@ -7793,6 +7909,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if await _handle_language_switch(update, cid, raw, prof_early):
         return
+
+    _note_gender_said(cid, raw, prof_early)
 
     if await _handle_city_timezone(update, cid, raw, prof_early):
         return
@@ -7960,7 +8078,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             now_rem = datetime.now(
                 _zone_or_default(_profile_timezone_name(prof_rem))
             )
-            parsed = _extract_hhmm_from_text(raw) or _parse_daily_time(raw.strip())
+            parsed = _midday_hhmm(raw)
             if not parsed and _asks_current_time(raw):
                 msg = ui_text(
                     "reminder_now_time",
@@ -8052,6 +8170,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                         saved_task = _commit_morning_task(cid, prof_d, carried)
                     else:
                         log.info("morning confirm skipped: task not in morning text cid=%s", cid)
+                elif reply_type == "new_task" and _not_a_task_reply(raw):
+                    log.info("morning new_task skipped cid=%s: request, question or other day", cid)
                 elif reply_type == "new_task":
                     weekly = str(prof_d.get("weekly_goal") or "").strip()
                     task = _sanitize_today_task(
@@ -8763,6 +8883,23 @@ _ASKS_TIME_MARKERS = (
 )
 
 
+def _midday_hhmm(raw: str) -> str | None:
+    """A time as the answer to «во сколько напомнить?»: 12:30, «напомни в 12-30», «в 15», «16»."""
+    hit = _extract_hhmm_from_text(raw) or _parse_daily_time(raw.strip())
+    if hit:
+        return hit
+    m = re.fullmatch(
+        r"(?:напомни(?:\s+мне)?[\s,]*)?(?:в\s+)?(\d{1,2})(?:[-\sч]+(\d{2}))?\s*(?:час\w*)?(?:\s*(утра|дня|вечера))?",
+        (raw or "").strip().lower().rstrip(".!"),
+    )
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2) or 0)
+    if m.group(3) in ("дня", "вечера") and h < 12:
+        h += 12
+    return f"{h:02d}:{mi:02d}" if h <= 23 and mi <= 59 else None
+
+
 def _asks_current_time(raw: str) -> bool:
     low = (raw or "").lower().replace("ё", "е")
     return any(m in low for m in _ASKS_TIME_MARKERS)
@@ -8799,6 +8936,19 @@ async def _ask_midday_reminder(bot, chat_id: int, profile: dict, task: str) -> N
         log.warning("midday reminder ask failed cid=%s: %s", chat_id, e)
         return
     pending_morning[chat_id] = {"task": task, "awaiting_reminder": True}
+
+
+def _not_a_task_reply(raw: str) -> bool:
+    """Never «Записала - на сегодня» for a question, a request to Space or another day."""
+    low = (raw or "").lower().replace("ё", "е")
+    return bool(
+        "?" in low
+        or re.search(r"(?<!\w)(завтра|послезавтра|вчера|tomorrow|yesterday)(?!\w)", low)
+        or re.search(
+            r"(?<!\w)(составь|составить (?:мне |план|меню)|напиши|распиши|подскажи|посоветуй|"
+            r"предложи|давай нач\w+|давай с)(?!\w)", low,
+        )
+    )
 
 
 def _yesterday_unfinished_task(chat_id: int, profile: dict) -> str:
@@ -8856,8 +9006,12 @@ async def _classify_morning_user_reply(
             "Определи тип ответа:\n"
             "- confirm — подтверждает старую/вчерашнюю задачу без изменений "
             "(да, всё в силе, ok, продолжаем, оставляем)\n"
-            "- new_task — называет новую задачу на сегодня\n"
-            "- chat — приветствие, болтовня, вопрос не про задачу, неясный ответ\n\n"
+            "- new_task — ясно говорит, какое дело СДЕЛАЕТ СЕГОДНЯ, и берёт его как задачу "
+            "(«сегодня схожу в зал», «беру прогулку 30 минут»)\n"
+            "- chat — всё остальное: приветствие, вопрос, просьба к боту (составь, давай начнём, "
+            "напиши), рассказ, что уже съедено или будет съедено, выбор блюда, распорядок дня, "
+            "самочувствие, уже сделанное дело, план на завтра или другой день, короткий ответ на вопрос "
+            "(«с завтрака», «скоро пойду»), неясный ответ. Если сомневаешься — chat\n\n"
             "Верни ТОЛЬКО JSON без markdown:\n"
             '{"type": "confirm|new_task|chat", '
             '"task": "текст задачи только если type=new_task, иначе пустая строка"}'
@@ -8871,8 +9025,10 @@ async def _classify_morning_user_reply(
             "Classify the reply:\n"
             "- confirm — confirms the existing/yesterday task unchanged "
             "(yes, still on track, ok, keep it)\n"
-            "- new_task — states a new task for today\n"
-            "- chat — greeting, small talk, off-topic, unclear\n\n"
+            "- new_task — clearly says what they WILL DO TODAY and takes it as the task\n"
+            "- chat — everything else: greeting, question, a request to the bot, what they ate or "
+            "will eat, daily schedule, how they feel, something already done, a plan for tomorrow, "
+            "a short answer to a question, unclear. If in doubt — chat\n\n"
             "If type=new_task, the task field MUST be in English.\n\n"
             "Return ONLY JSON, no markdown:\n"
             '{"type": "confirm|new_task|chat", '
@@ -9521,16 +9677,21 @@ def _in_weekly_special_flow(cid: int, profile: dict | None = None, today: str = 
     return int(st.get("step") or -1) == ob.OB_CHANGE_WEEKLY
 
 
+def _sane_morning(hm: str) -> str:
+    """«Доброе утро» at 02:00 is a mis-read answer («2»): never before 04:00."""
+    return "09:00" if hm < "04:00" else hm
+
+
 def _morning_slot_due_now(profile: dict, now_local: datetime) -> bool:
     """True if scheduled morning for today has not been sent and window is open."""
     today = now_local.strftime("%Y-%m-%d")
     if _daily_slot_sent_today(profile, "last_morning_sent_date", today):
         return False
     now_hm = now_local.strftime("%H:%M")
-    morning_time = _normalize_profile_hm(
+    morning_time = _sane_morning(_normalize_profile_hm(
         profile.get("morning_time") or profile.get("daily_time"),
         "09:30",
-    )
+    ))
     mins_after = _minutes_after_target(morning_time, now_hm)
     if mins_after is None:
         return False
@@ -10107,10 +10268,10 @@ async def _bootstrap_bot() -> None:
                 now_hm = now_local.strftime("%H:%M")
                 today = now_local.strftime("%Y-%m-%d")
 
-                morning_time = _normalize_profile_hm(
+                morning_time = _sane_morning(_normalize_profile_hm(
                     profile.get("morning_time") or profile.get("daily_time"),
                     "09:30",
-                )
+                ))
                 evening_time = _normalize_profile_hm(
                     profile.get("evening_time"), "21:00"
                 )
@@ -11459,6 +11620,12 @@ def patch_profile_timezone_endpoint(
 
     if str(profile.get("timezone") or "") == new_tz and _tz_confirmed(profile):
         return {"ok": True}  # sent on every Mini App open; skip the write when unchanged
+    flags = profile.get("cycle_flags")
+    said = flags.get("tz_said_at") if isinstance(flags, dict) else None
+    if said and str(profile.get("timezone") or "") != new_tz:
+        with suppress(ValueError, TypeError):
+            if datetime.now(timezone.utc) - datetime.fromisoformat(str(said)) < timedelta(days=30):
+                return {"ok": True}  # she told us herself; a wrong phone zone must not undo it
     _confirm_timezone(int(tid), profile, new_tz)  # the phone's zone beats our guess
     return {"ok": True, "profile": _enrich_profile_for_api(profile, tid)}
 

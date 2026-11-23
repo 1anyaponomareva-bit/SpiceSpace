@@ -3220,6 +3220,11 @@ def parse_time_nl(raw: str, context: str = "morning") -> str | None:
     return None
 
 
+def _strange_morning(hm: str) -> bool:
+    """«2» or «22» for the morning: asked once more before it is saved (23.11.2026)."""
+    return hm < "04:00" or hm >= "15:00"
+
+
 def _is_weekly_goal_agreement(raw: str) -> bool:
     low = (raw or "").strip().lower()
     if not low:
@@ -4530,6 +4535,9 @@ async def handle_onboarding_turn(
 
     if step == OB_MORNING_TIME:
         parsed = parse_time_nl(raw, "morning")
+        if parsed and _strange_morning(parsed) and st.get("odd_morning") != parsed:
+            st["odd_morning"] = parsed  # the same answer again is taken as is
+            parsed = None
         if not parsed:
             await msg.reply_text(ob_text("time_morning_unclear", lang))
             return

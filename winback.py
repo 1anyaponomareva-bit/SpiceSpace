@@ -16,6 +16,7 @@ Pure functions; main.py reads profiles and sends.
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -150,9 +151,52 @@ def after_send(state: dict, anchor: date, today: date, kind: str = "onb") -> dic
     return {"anchor": anchor.isoformat(), "n": n + 1, "last": today.isoformat()}
 
 
+_HARD_STOP = {"стоп", "stop", "хватит", "enough", "отмена", "cancel", "отстань", "отстаньте", "не пиши", "не пишите"}
+CRISIS_DAYS = 30
+
+
+def is_hard_stop(text: str) -> bool:
+    low = re.sub(r"[^\w\s]", "", str(text or "").lower()).strip()
+    words = low.split()
+    return low in _HARD_STOP or (
+        0 < len(words) <= 4 and any(w in ("стоп", "stop", "хватит", "отстань", "отстаньте") for w in words)
+    )
+
+
+def quiet_reason(turns: list[dict], now: datetime, last_message_date: object, detect_crisis) -> str:
+    """Why not to write (23.11.2026): «crisis» in the last 30 days, or her last word was «стоп»."""
+    users = [t for t in turns or [] if t.get("role") == "user"]
+
+    def when(t: dict) -> datetime | None:
+        try:
+            dt = datetime.fromisoformat(str(t.get("ts") or "").replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    def text(t: dict) -> str:
+        return str((t.get("parts") or [""])[0] or "")
+
+    for t in users:
+        at = when(t)
+        if (at is None or now - at < timedelta(days=CRISIS_DAYS)) and detect_crisis(text(t)):
+            return "crisis"
+    if users and is_hard_stop(text(users[-1])):
+        at, last = when(users[-1]), _d(last_message_date)
+        # onboarding answers are not in the history: a later day means she came back
+        if at is None or last is None or last <= at.date() + timedelta(days=1):
+            return "stop"
+    return ""
+
+
+def clean_name(name: object) -> str:
+    n = str(name or "").strip()
+    return "" if n.lower() in ("none", "null", "undefined", "-") else n
+
+
 def onb_text(n: int, lang: str, name: str = "", goal: str = "") -> str:
     ru = _ru(lang)
-    name = (name or "").strip()
+    name = clean_name(name)
     goal = (goal or "").strip()[:120]
     i = min(n, 3)
     if not name:
@@ -168,6 +212,7 @@ def lapsed_text(n: int, lang: str, name: str = "", goal: str = "") -> str:
     goal_q = ""
     if goal:
         goal_q = f" Как дела с целью «{goal}»?" if ru else f" How's your goal «{goal}» going?"
+    name = clean_name(name)
     text = (LAPSED_RU if ru else LAPSED_EN)[n % 2].format(name=name.strip() or "{name}", goal_q=goal_q)
     if not name.strip():
         # no name: drop the "{name}, " lead-in

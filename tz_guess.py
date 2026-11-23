@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 MOSCOW = "Europe/Moscow"
 _MOSCOW_LANGS = ("ru", "uk", "be")
@@ -33,10 +35,11 @@ _CITIES: tuple[tuple[str, str, str], ...] = (
     (r"казан|нижн\w* новгород|нижн\w*|воронеж|ростов|краснодар|сочи|волгоград|ярославл|тул[аеу]\b|рязан|твер|калуг|владимир|смоленск|брянск|курск|белгород|липецк|тамбов|пенз|ставропол|махачкал|грозн|крым|симферопол|севастопол|мурманск|архангельск|вологд|кострома|иванов|чебоксар|йошкар|саранск", MOSCOW, "Москвы"),
     (r"самар(?!канд)|саратов|ульяновск|ижевск|астрахан|тольятти", "Europe/Samara", "Самары"),
     (r"калининград", "Europe/Kaliningrad", "Калининграда"),
-    (r"екатеринбург|екб\b|ебург|челябинск|тюмен|перм|уф[аеу]\b|оренбург|курган|сургут|магнитогорск", "Asia/Yekaterinburg", "Екатеринбурга"),
+    (r"екатеринбург|екб\b|ебург|челябинск|тюмен|перм(?:ь|и|ью)?\b|уф[аеуы]\b|оренбург|курган|сургут|магнитогорск|нижневартовск|ханты|новый уренгой|ноябрьск", "Asia/Yekaterinburg", "Екатеринбурга"),
     (r"омск", "Asia/Omsk", "Омска"),
-    (r"новосибирск|новосиб|нск\b|барнаул|томск", "Asia/Novosibirsk", "Новосибирска"),
-    (r"красноярск|кемерово|новокузнецк|абакан", "Asia/Krasnoyarsk", "Красноярска"),
+    (r"томск", "Asia/Tomsk", "Томска"),
+    (r"новосибирск|новосиб|нск\b|барнаул", "Asia/Novosibirsk", "Новосибирска"),
+    (r"красноярск|кемеров|новокузнецк|абакан|норильск", "Asia/Krasnoyarsk", "Красноярска"),
     (r"иркутск|улан[- ]?удэ|братск", "Asia/Irkutsk", "Иркутска"),
     (r"якутск|чит[аеу]\b", "Asia/Yakutsk", "Якутска"),
     (r"владивосток|хабаровск|благовещенск", "Asia/Vladivostok", "Владивостока"),
@@ -45,7 +48,7 @@ _CITIES: tuple[tuple[str, str, str], ...] = (
     (r"минск|беларус|белорус|гомел|брест|гродн|витебск|могил[её]в", "Europe/Minsk", "Минска"),
     (r"киев|київ|харьков|харків|одесс|днепр|дніпр|львов|львів|запорож|украин|україн", "Europe/Kiev", "Киева"),
     (r"кишин[её]в|молдов", "Europe/Chisinau", "Кишинёва"),
-    (r"алмат|астан|казахстан|шымкент|караганд", "Asia/Almaty", "Алматы"),
+    (r"алмат|астан(?!а\w)|казахстан|шымкент|караганд|талдык|павлодар|костанай|актобе|атырау|актау", "Asia/Almaty", "Алматы"),
     (r"ташкент|узбекистан|самарканд", "Asia/Tashkent", "Ташкента"),
     (r"бишкек|киргиз|кыргыз", "Asia/Bishkek", "Бишкека"),
     (r"тбилиси|грузи|батуми", "Asia/Tbilisi", "Тбилиси"),
@@ -55,13 +58,13 @@ _CITIES: tuple[tuple[str, str, str], ...] = (
     (r"дуба|оаэ|эмират|dubai", "Asia/Dubai", "Дубая"),
     (r"израил|тель[- ]?авив|иерусалим|хайф", "Asia/Jerusalem", "Израиля"),
     (r"кипр|лимассол|никоси|ларнак", "Asia/Nicosia", "Кипра"),
-    (r"берлин|герман|мюнхен|варшав|польш|прага|чехи|вен[аеу]\b|австри|париж|франци|рим\b|итали|мадрид|барселон|испани|амстердам|нидерланд|сербия|белград|черногор|будва", "Europe/Berlin", "Европы (Берлин)"),
+    (r"берлин|герман|мюнхен|штутгарт|гамбург|кельн|франкфурт|дюссельдорф|варшав|польш|прага|чехи|вен[аеу]\b|австри|париж|франци|рим\b|итали|мадрид|барселон|испани|амстердам|нидерланд|сербия|белград|черногор|будва", "Europe/Berlin", "Европы (Берлин)"),
     (r"лондон|англи|британи|london", "Europe/London", "Лондона"),
     (r"таиланд|тайланд|пхукет|бангкок|паттай", "Asia/Bangkok", "Таиланда"),
     (r"вьетнам|нячанг|хошимин|ханой|дананг|фукуок", "Asia/Ho_Chi_Minh", "Вьетнама"),
     (r"бали|индонези", "Asia/Makassar", "Бали"),
     (r"нью[- ]?йорк|майами|флорид", "America/New_York", "Нью-Йорка"),
-    (r"лос[- ]?анджелес|калифорни", "America/Los_Angeles", "Лос-Анджелеса"),
+    (r"лос[- ]?анджелес|калифорни|сиэтл|сан[- ]?франциско|портленд", "America/Los_Angeles", "Лос-Анджелеса"),
     # English names (22.11.2026, English Threads test): US first, then big cities elsewhere
     (r"new york|nyc\b|ny\b|brooklyn|manhattan|boston|massachusetts|philadelphia|pennsylvania|"
      r"miami|orlando|tampa|florida|atlanta|washington,? ?d\.?c|\bdc\b|baltimore|maryland|"
@@ -158,6 +161,118 @@ def city_timezone(text: str) -> tuple[str, str] | None:
                 return None
         return tz, label
     return None
+
+
+# ---- the zone from an ordinary phrase (23.11.2026): «я живу в Томске, у меня 11:08» used to
+# get an apology and nothing was saved
+_PLACE_CUE = re.compile(
+    r"(?<!\w)(?:жив\w+|диву|нахожусь|я\s+(?:сейчас\s+)?в(?:о)?|мы\s+(?:сейчас\s+)?в(?:о)?|(?:мой\s+)?город|"
+    r"другое время|часовой пояс|время по|по времени|i live in|i'?m in|i am in|we live in)(?!\w)"
+)
+_NOT_HOME = re.compile(
+    r"(?<!\w)(?:хочу|хотела|хотел|мечт\w*|переех\w*|переезж\w*|поед\w*|еду|едем|лечу|летим|отпуск\w*|был|была|были|"
+    r"раньше|жила|жил|летом|скоро|если|мама|муж|подруга|сестра|работала|училась|не живу|not|used to|want|"
+    r"moving|was|lived|my mom|visit\w*)(?!\w)"
+)
+_MSK_DIFF = re.compile(
+    r"(?:разниц\w*|плюс|минус|больше|меньше|впереди|позади)\D{0,25}(?:москв\w*|мск)\D{0,12}?"
+    r"(?P<a>\d{1,2}|один|час|два|три|четыре|пять|шесть|семь)(?!\w)|"
+    r"(?:москв\w*|мск)\s*(?P<sign>[+\-])\s*(?P<b>\d{1,2})"
+)
+_NUM = {"один": 1, "час": 1, "два": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7}
+_CLOCK = re.compile(
+    r"(?:у\s+(?:меня|нас)\s+(?:сейчас\s+)?(?:уже\s+)?(?:время\s+)?|"
+    r"(?:здесь|тут)\s+(?:сейчас|уже)\s+|"
+    r"^(?:сейчас|время)\s+(?:сейчас\s+)?(?:у\s+(?:меня|нас)\s+)?|"
+    r"(?:сейчас|время)\s+у\s+(?:меня|нас)\s+)"
+    r"(?:(?P<h>\d{1,2})[:.](?P<m>\d{2})(?=\s*(?:$|[.,!?;)]))|без\s+четверти\s+(?P<q>\d{1,2})(?!\d)|"
+    r"(?P<e>\d{1,2})\s+(?P<part>утра|вечера|дня|ночи)(?=\s*(?:$|[.,!?;)])))"
+)
+_ZONE_BY_HOURS = {
+    2: "Europe/Kaliningrad", 3: MOSCOW, 4: "Europe/Samara", 5: "Asia/Yekaterinburg", 6: "Asia/Omsk",
+    7: "Asia/Novosibirsk", 8: "Asia/Irkutsk", 9: "Asia/Yakutsk", 10: "Asia/Vladivostok",
+    11: "Asia/Magadan", 12: "Asia/Kamchatka",
+}
+
+
+def _zone_for_hours(hours: int) -> str:
+    if hours in _ZONE_BY_HOURS:
+        return _ZONE_BY_HOURS[hours]
+    return f"Etc/GMT{'-' if hours > 0 else '+'}{abs(hours)}" if hours else "Etc/GMT"
+
+
+def _offset_hours(tz_name: str, now_utc: datetime) -> float | None:
+    try:
+        return now_utc.astimezone(ZoneInfo(tz_name)).utcoffset().total_seconds() / 3600
+    except Exception:
+        return None
+
+
+def _clock_hours(text: str, now_utc: datetime, current: float) -> int | None:
+    """Whole-hour UTC offset from «у меня сейчас 11:08», the one closest to what we have now."""
+    m = _CLOCK.search(text)
+    if not m:
+        return None
+    minute: int | None
+    if m.group("q"):
+        hour, minute = int(m.group("q")) - 1, 45
+    elif m.group("e"):
+        hour, minute = int(m.group("e")), None
+        if m.group("part") in ("вечера", "дня") and hour < 12:
+            hour += 12
+        if m.group("part") == "ночи" and hour == 12:
+            hour = 0
+    else:
+        hour, minute = int(m.group("h")), int(m.group("m"))
+    if not 0 <= hour <= 23 or (minute is not None and minute > 59):
+        return None
+    best: int | None = None
+    ambiguous = bool(m.group("q")) and hour < 12
+    for h in ((hour, hour + 12) if ambiguous else (hour,)):
+        diff = h * 60 + (now_utc.minute if minute is None else minute) - (now_utc.hour * 60 + now_utc.minute)
+        hours = round(diff / 60)
+        if minute is not None and abs(diff - hours * 60) > 6:
+            continue  # not a clock reading
+        for x in (hours - 24, hours, hours + 24):
+            if -11 <= x <= 13 and (best is None or abs(x - current) < abs(best - current)):
+                best = x
+    return best
+
+
+def message_timezone(text: str, now_utc: datetime, current_tz: str) -> tuple[str, str] | None:
+    """(zone, label or "") when she says where she lives or what time it is for her."""
+    t = re.sub(r"\s+", " ", str(text or "").lower().replace("ё", "е").replace("’", "'")).strip()
+    if not t or len(t) > 200:
+        return None
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    cities: dict[str, str] = {}
+    if not _NOT_HOME.search(t):
+        for cue in _PLACE_CUE.finditer(t):
+            near = re.split(r"[.!?;]", t[cue.end(): cue.end() + 30])[0]
+            for rx, tz, label in _CITY_RES:
+                m = rx.search(near)
+                if m and m.start() <= 12 and len(m.group(0)) >= 4 and m.group(0) not in (
+                    "central", "eastern", "mountain", "pacific",
+                ):
+                    cities.setdefault(tz, label)
+                    break
+    if len(cities) == 1:
+        return next(iter(cities.items()))
+    if cities:
+        return None
+    m = _MSK_DIFF.search(t)
+    if m:
+        raw = m.group("a") or m.group("b")
+        n = int(raw) if raw.isdigit() else _NUM[raw]
+        minus = m.group("sign") == "-" or bool(re.search(r"минус|меньше|позади", m.group(0)))
+        if 0 < n <= 9:
+            return _zone_for_hours(3 + (-n if minus else n)), ""
+    current = _offset_hours(current_tz, now_utc)
+    hours = _clock_hours(t, now_utc, 3 if current is None else current)
+    if hours is None or hours == current:
+        return None
+    return _zone_for_hours(hours), ""
 
 
 def zone_label(tz: str) -> str:

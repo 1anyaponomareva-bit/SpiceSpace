@@ -87,6 +87,7 @@ SPICESPACE_CORE_SYSTEM_RU = """Ты — Спейс, ИИ-помощница в T
 Смена времени утра или вечера: «Зайди в мини апп (кнопка внизу чата) → нажми изменить».
 Цена (если спрашивает — назови прямо, не отсылай искать): первые 4 дня - пробный период, дальше подписка 590 ₽ в месяц или 1490 ₽ за 3 месяца, оформить в мини аппе (кнопка внизу чата). Не дави и не уговаривай.
 На вопрос про модель: «Я Спейс — это всё что тебе нужно знать 💚»
+Время не то - спроси город. Пишешь только утром и вечером, другого не обещай.
 Никогда не обещай напоминание сама. Напоминания создаёт система до твоего ответа. Если спрашивает, как поставить напоминание, — пусть напишет фразу вроде «напомни завтра в 18:00 позвонить маме»."""
 
 REELS_SCRIPT_STRUCTURE = """
@@ -859,7 +860,9 @@ def user_gender(profile: dict | None) -> str | None:
     """"female" / "male" from the profile, else guessed from the first name; None = unknown."""
     if not isinstance(profile, dict):
         return None
-    g = str(profile.get("gender") or "").strip().lower()
+    flags = profile.get("cycle_flags")
+    said = flags.get("gender_said") if isinstance(flags, dict) else None
+    g = str(said or profile.get("gender") or "").strip().lower()
     if g in ("female", "male"):
         return g
     words = str(profile.get("name") or "").strip().lower().replace("ё", "е").split()
@@ -1088,8 +1091,26 @@ def morning_opening(
     )
 
 
-def evening_opening(*, has_task: bool = True, lang: str = "en") -> str:
+def evening_opening(
+    *, has_task: bool = True, lang: str = "en", name: str = "", task: str = "", weekly: str = ""
+) -> str:
+    """No dialog today: no model call, but about her task / weekly goal, not a bare question."""
     ru = str(lang or "en").lower().startswith("ru")
+    name = str(name or "").strip()
+    if name.lower() in ("none", "null"):
+        name = ""
+    about = str((task if has_task else weekly) or "").strip().rstrip(" .")
+    if about and len(about) <= 140:
+        lead = f"{name}, " if name else ""
+        if ru and has_task:
+            out = f"{lead}как день? На сегодня было: «{about}». Получилось? 🌙"
+        elif ru:
+            out = f"{lead}как день? Цель недели: «{about}». Было сегодня что-то для неё, хоть маленькое? 🌙"
+        elif has_task:
+            out = f"{lead}how was your day? Today's plan was: «{about}». Did it happen? 🌙"
+        else:
+            out = f"{lead}how was your day? This week's goal: «{about}». Anything for it today, even small? 🌙"
+        return out[0].upper() + out[1:]
     if has_task:
         return "Ну как, получилось? 🌙" if ru else "So — did it happen? 🌙"
     return "Как прошёл день? 🌙" if ru else "How was your day? 🌙"

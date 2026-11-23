@@ -616,7 +616,8 @@ def _cycle_flags_for_row(p: dict) -> dict:
     if isinstance(cf, dict):
         for k, v in cf.items():
             if v:
-                out[str(k)] = True
+                # keep times / words (ob_done_at, crisis_at, gender_said), the rest is a tick
+                out[str(k)] = v if isinstance(v, str) else True
     for k, v in p.items():
         if (
             k.startswith("weekly_sent_day_")
@@ -631,7 +632,7 @@ def _apply_cycle_flags_to_profile(p: dict) -> None:
     raw = p.pop("cycle_flags", None)
     if not isinstance(raw, dict):
         raw = {}
-    p["cycle_flags"] = {str(k): bool(v) for k, v in raw.items() if v}
+    p["cycle_flags"] = {str(k): (v if isinstance(v, str) else True) for k, v in raw.items() if v}
     for flag_key, shown in p["cycle_flags"].items():
         if shown:
             p[flag_key] = True

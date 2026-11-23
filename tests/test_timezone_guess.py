@@ -28,7 +28,7 @@ class Cities(unittest.TestCase):
     def test_city_answers(self):
         for raw, tz in (
             ("Казань", "Europe/Moscow"), ("я в Казани", "Europe/Moscow"), ("живу в Екб", "Asia/Yekaterinburg"),
-            ("у меня Минск", "Europe/Minsk"), ("Омск", "Asia/Omsk"), ("Томск", "Asia/Novosibirsk"),
+            ("у меня Минск", "Europe/Minsk"), ("Омск", "Asia/Omsk"), ("Томск", "Asia/Tomsk"),
             ("Самара", "Europe/Samara"), ("Самарканд", "Asia/Tashkent"), ("в питере", "Europe/Moscow"),
             ("Пхукет", "Asia/Bangkok"), ("я из Киева", "Europe/Kiev"),
         ):

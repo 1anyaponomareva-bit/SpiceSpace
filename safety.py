@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -164,6 +165,16 @@ def note_crisis(cid: int, now: float | None = None) -> bool:
     prev = _last_crisis_at.get(cid)
     _last_crisis_at[cid] = now
     return prev is not None and now - prev < REPEAT_WINDOW_SECONDS
+
+
+def restore_crisis(cid: int, iso: object) -> None:
+    """The last crisis message from the profile: memory alone forgot it on every deploy."""
+    if cid in _last_crisis_at or not isinstance(iso, str):
+        return
+    try:
+        _last_crisis_at[cid] = datetime.fromisoformat(iso).timestamp()
+    except ValueError:
+        pass
 
 
 def in_crisis_window(cid: int, now: float | None = None) -> bool:
