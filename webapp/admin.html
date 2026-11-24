@@ -81,6 +81,7 @@
     .claude .warnline { color: #FF7E7E; font-weight: 700; margin-top: 10px; }
     .claude form { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
     .claude input { width: 120px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: #1A1A1A; color: var(--text); font: inherit; }
+    .claude select { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: #1A1A1A; color: var(--text); font: inherit; }
     .claude button { padding: 8px 12px; border-radius: 8px; border: 0; background: var(--accent); color: #1A1A1A; font: inherit; font-weight: 700; cursor: pointer; }
   </style>
 </head>
@@ -103,6 +104,17 @@
         <input id="cl-input" inputmode="decimal" placeholder="например 25.40" />
         <button type="submit">Сохранить</button>
         <span class="small" id="cl-saved"></span>
+      </form>
+    </div>
+    <div class="claude" id="lava">
+      <h2>lava.top: деньги на счёте</h2>
+      <div class="row" id="lv-row"><div class="small">Загружаю…</div></div>
+      <form id="lv-form">
+        <span class="small">После вывода впиши, сколько осталось на lava</span>
+        <input id="lv-input" inputmode="decimal" placeholder="например 0" />
+        <select id="lv-cur"><option value="RUB">₽</option><option value="USD">$</option><option value="EUR">€</option></select>
+        <button type="submit">Сохранить</button>
+        <span class="small" id="lv-saved"></span>
       </form>
     </div>
     <div class="cards" id="cards"></div>
@@ -213,6 +225,50 @@
         } catch (e) { saved.textContent = "не сохранилось: " + (e.message || e); }
       });
 
+      function cash(v, cur) {
+        const n = Number(v || 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
+        return cur === "RUB" ? `${n} ₽` : cur === "USD" ? `$${n}` : cur === "EUR" ? `€${n}` : `${n} ${esc(cur)}`;
+      }
+      function renderLava(d) {
+        const row = document.getElementById("lv-row");
+        const list = d.currencies || [];
+        if (!list.length) { row.innerHTML = '<div class="small">Оплат пока нет</div>'; return; }
+        row.innerHTML = list.map((c) => {
+          const note = c.set_at
+            ? `${cash(c.set_value, c.currency)} на ${new Date(c.set_at).toLocaleDateString()} плюс новые оплаты ${cash(c.since_set, c.currency)}`
+            : `оплат: ${Number(c.count)}, на ${cash(c.gross, c.currency)}, комиссия lava ${cash(c.fee, c.currency)}. Выводы и возвраты не учтены`;
+          return `<div><div class="big">≈ ${cash(c.balance, c.currency)}</div><div class="small">${note}</div></div>
+            <div class="small">сегодня<br><b>${cash(c.net_today, c.currency)}</b></div>
+            <div class="small">за месяц<br><b>${cash(c.net_month, c.currency)}</b></div>`;
+        }).join("");
+      }
+      async function loadLava() {
+        try {
+          const r = await fetch("/api/admin/lava_balance", { cache: "no-store", headers: authHeaders() });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          renderLava(await r.json());
+        } catch (e) {
+          document.getElementById("lv-row").innerHTML = '<div class="small">lava.top сейчас не отвечает</div>';
+        }
+      }
+      document.getElementById("lv-form").addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const saved = document.getElementById("lv-saved");
+        const raw = document.getElementById("lv-input").value.trim().replace(",", ".");
+        if (!raw || isNaN(Number(raw))) { saved.textContent = "введи число"; return; }
+        try {
+          const r = await fetch("/api/admin/lava_balance", {
+            method: "POST",
+            headers: { ...authHeaders(), "Content-Type": "application/json" },
+            body: JSON.stringify({ value: Number(raw), currency: document.getElementById("lv-cur").value }),
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          saved.textContent = "сохранено";
+          document.getElementById("lv-input").value = "";
+          loadLava();
+        } catch (e) { saved.textContent = "не сохранилось: " + (e.message || e); }
+      });
+
       function renderStats(stats) {
         const items = [
           ["Новые сегодня 🆕", stats.new_today || 0],
@@ -268,6 +324,8 @@
 
       loadStats();
       loadClaude();
+      loadLava();
+      setInterval(loadLava, 600000);
       setInterval(() => { loadStats(); loadClaude(); }, 60000);
     })();
   </script>

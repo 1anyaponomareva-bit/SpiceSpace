@@ -254,6 +254,31 @@ async def get_contract(contract_id: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+async def list_invoices(max_pages: int = 20) -> list[dict]:
+    """All invoices of the account, first payments and renewals (admin panel)."""
+    key = api_key()
+    if not key:
+        raise LavaError(0, "no api key")
+    out: list[dict] = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for page in range(1, max_pages + 1):
+            r = await client.get(
+                f"{LAVA_BASE_URL}/api/v1/invoices",
+                params=[("page", page), ("size", 50), ("invoiceTypes", "ONE_TIME"),
+                        ("invoiceTypes", "RECURRING"), ("invoiceStatuses", "COMPLETED")],
+                headers={"X-Api-Key": key, "Accept": "application/json"},
+            )
+            if r.status_code >= 400:
+                raise LavaError(r.status_code, r.text[:300])
+            data = r.json()
+            items = data.get("items") if isinstance(data, dict) else None
+            out.extend(i for i in items or [] if isinstance(i, dict))
+            pages = int(data.get("pages") or data.get("totalPages") or 1) if isinstance(data, dict) else 1
+            if page >= pages or not items:
+                break
+    return out
+
+
 def webhook_secret_set() -> bool:
     return bool(os.getenv("LAVA_WEBHOOK_KEY", "").strip())
 

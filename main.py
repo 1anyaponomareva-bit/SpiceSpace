@@ -10986,6 +10986,45 @@ async def admin_claude_balance_set(request: Request) -> dict:
     return {"ok": True, **rec}
 
 
+@app.get("/api/admin/lava_balance")
+async def admin_lava_balance(request: Request) -> dict:
+    """Earned on lava.top after its fee (amounts only, no buyers)."""
+    if not _is_admin_request(request):
+        raise HTTPException(status_code=403, detail="forbidden")
+    import lava_balance
+
+    stored = await asyncio.to_thread(db_store.kv_get, lava_balance.KV_KEY)
+    try:
+        invoices = await lava_pay.list_invoices()
+    except Exception as e:
+        log.warning("lava invoices not read: %s", e)
+        raise HTTPException(status_code=502, detail="lava unavailable") from e
+    return lava_balance.summarize(invoices, stored, datetime.now(timezone.utc), spice_stats._tz())
+
+
+@app.post("/api/admin/lava_balance")
+async def admin_lava_balance_set(request: Request) -> dict:
+    """The owner types the balance she sees in lava (after a withdrawal, say)."""
+    if not _is_admin_request(request):
+        raise HTTPException(status_code=403, detail="forbidden")
+    import lava_balance
+
+    try:
+        body = await request.json()
+        code = str(body.get("currency") or "").upper()
+        value = round(float(str(body.get("value")).replace(",", ".")), 2)
+    except Exception:
+        raise HTTPException(status_code=400, detail="value")
+    if code not in lava_balance.CURRENCIES or not (0 <= value <= 100_000_000):
+        raise HTTPException(status_code=400, detail="value")
+    stored = await asyncio.to_thread(db_store.kv_get, lava_balance.KV_KEY)
+    stored = dict(stored) if isinstance(stored, dict) else {}
+    stored[code] = {"value": value, "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    if not await asyncio.to_thread(db_store.kv_set, lava_balance.KV_KEY, stored):
+        raise HTTPException(status_code=500, detail="not saved")
+    return {"ok": True}
+
+
 @app.get("/api/admin/stats")
 async def admin_stats(request: Request) -> dict:
     if not _is_admin_request(request):
