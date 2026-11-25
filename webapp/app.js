@@ -66,6 +66,79 @@
     } catch (_) {}
   }
 
+  // What was on the screen last time, shown at once while fresh data loads (25.11.2026).
+  // Only what the home screen draws; per person, kept 14 days, removed on reset or sign-in trouble.
+  const SNAP_FIELDS = [
+    'name', 'main_goal', 'final_goal', 'raw_goal', 'weekly_goal', 'current_week', 'weekly_score',
+    'week_cycle_days', 'today_task', 'task_completed', 'today_completed', 'program_day', 'streak',
+    'display_streak', 'cycle_start_date', 'morning_time', 'evening_time', 'daily_time',
+    'language_code', 'timezone',
+  ];
+  const SNAP_TODAY = ['today_task', 'task_completed', 'today_completed', 'week_cycle_days', 'program_day'];
+
+  function snapshotKey() {
+    const uid = tg?.initDataUnsafe?.user?.id || getTelegramId();
+    return uid ? `spicespace_snapshot_v1_${uid}` : null;
+  }
+
+  function saveSnapshot() {
+    const key = snapshotKey();
+    if (!key || !profile) return;
+    const p = {};
+    SNAP_FIELDS.forEach((k) => { if (profile[k] !== undefined) p[k] = profile[k]; });
+    try {
+      localStorage.setItem(key, JSON.stringify({
+        day: localISODate(), at: Date.now(), profile: p, tasks, calendar: calendarData,
+      }));
+    } catch (_) {}
+  }
+
+  function clearSnapshot() {
+    const key = snapshotKey();
+    try { if (key) localStorage.removeItem(key); } catch (_) {}
+  }
+
+  function loadSnapshot() {
+    const key = snapshotKey();
+    if (!key) return null;
+    try {
+      const snap = JSON.parse(localStorage.getItem(key) || 'null');
+      if (!snap?.profile?.name || Date.now() - snap.at > 14 * 86400000) return null;
+      snap.today = snap.day === localISODate();
+      if (!snap.today) {
+        SNAP_TODAY.forEach((k) => delete snap.profile[k]); // yesterday's step is not today's
+        snap.tasks = [];
+        snap.calendar = null;
+      }
+      return snap;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function paintSnapshot(tgUser) {
+    const snap = loadSnapshot();
+    if (!snap) return false;
+    try {
+      profile = snap.profile;
+      tasks = Array.isArray(snap.tasks) ? snap.tasks : [];
+      calendarData = snap.calendar;
+      applyLanguageFromProfile(profile);
+      showMain();
+      renderAll(tgUser);
+      if (!snap.today) document.getElementById('task-list').innerHTML = '';
+      if (calendarData && typeof renderCalendar === 'function') renderCalendar(calendarData);
+      return true;
+    } catch (e) {
+      console.error('snapshot failed:', e);
+      clearSnapshot();
+      profile = null;
+      tasks = [];
+      calendarData = null;
+      return false;
+    }
+  }
+
   function appendTelegramIdQuery(url) {
     if (tg?.initData || url.includes('telegram_id=')) return url;
     const tid = BACKEND_TELEGRAM_ID || getTelegramId();
@@ -552,7 +625,6 @@
   }
 
   function setCanEditTimes(enabled) {
-    console.log('setCanEditTimes called with:', enabled, new Error().stack);
     const btn = document.getElementById('edit-times-btn');
     if (btn) btn.hidden = !enabled;
   }
@@ -1633,6 +1705,7 @@
           alert(t('save_failed') || 'Could not reset. Try again.');
           return;
         }
+        clearSnapshot();
         if (tg) tg.close();
       } catch (e) {
         console.error('reset failed:', e);
@@ -1695,9 +1768,19 @@
       return;
     }
 
-    const result = await loadProfile();
+    const painted = paintSnapshot(tgUser);
+    // everything is asked for at once; before, tasks and the calendar waited for the profile
+    const tasksP = fetchTasks().catch(() => []);
+    const calendarP = fetchCalendar().catch(() => null);
+    const result = await loadProfile(painted ? { skipRender: true } : {});
 
     if (!result.ok) {
+      if (result.status === 401 || result.status === 404) clearSnapshot();
+      else if (painted) {
+        showSyncBanner('err_load'); // no connection: what was there last time stays
+        return;
+      }
+      profile = null;
       applyFallbackI18n();
       if (shouldShowWelcomeScreen(result.status)) {
         showWelcomeScreen(result.status);
@@ -1718,10 +1801,6 @@
 
     applyLanguageFromProfile(profile);
     showMain();
-    // All follow-up requests start at once; before, tasks and the calendar waited
-    // for the milestone and streak calls one after another.
-    const tasksP = fetchTasks().catch(() => []);
-    const calendarP = fetchCalendar().catch(() => null);
     const streakP = markStreakOnOpen();
     checkMilestone();
     tasks = await tasksP;
@@ -1741,6 +1820,7 @@
       renderCalendar(calendarData);
     }
     await streakP;
+    saveSnapshot();
     syncTimezone();
     syncLanguageCode();
     bindLanguageSwitch(() => {

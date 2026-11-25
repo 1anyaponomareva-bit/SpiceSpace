@@ -11,6 +11,8 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
+import threading
+
 import httpx
 
 log = logging.getLogger("coach_bot")
@@ -233,6 +235,48 @@ def _headers() -> dict[str, str]:
     }
 
 
+_http_lock = threading.Lock()
+_read_client: httpx.Client | None = None
+_ssl_ctx = None
+
+
+def _http_ssl():
+    global _ssl_ctx
+    if _ssl_ctx is None:
+        _ssl_ctx = httpx.create_ssl_context()
+    return _ssl_ctx
+
+
+def _reader() -> httpx.Client:
+    """One client for all reads: a new connection for each one cost up to a second
+    (25.11.2026, the Mini App opened slowly). httpx.Client is safe to share between threads."""
+    global _read_client
+    with _http_lock:
+        if _read_client is None:
+            _read_client = httpx.Client(
+                timeout=30.0,
+                verify=_http_ssl(),
+                limits=httpx.Limits(
+                    max_connections=40, max_keepalive_connections=10, keepalive_expiry=60.0
+                ),
+            )
+        return _read_client
+
+
+def _send(method: str, url: str, **kwargs) -> httpx.Response:
+    if method == "GET":
+        try:
+            return _reader().request(method, url, **kwargs)
+        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError):
+            # the server closed an idle connection; a read is safe to repeat
+            return _reader().request(method, url, **kwargs)
+    # writes are never repeated, so they keep a connection of their own
+    with _http_lock:
+        ctx = _http_ssl()
+    with httpx.Client(timeout=30.0, verify=ctx) as client:
+        return client.request(method, url, **kwargs)
+
+
 def _request(method: str, path: str, **kwargs) -> list[dict] | dict | None:
     if not _use_supabase:
         return None
@@ -240,20 +284,14 @@ def _request(method: str, path: str, **kwargs) -> list[dict] | dict | None:
         extra_headers = kwargs.pop("headers", {})
         merged_headers = {**_headers(), **extra_headers}
         url = f"{_base_url}/rest/v1/{path.lstrip('/')}"
-        with httpx.Client(timeout=30.0) as client:
-            r = client.request(
-                method,
-                url,
-                headers=merged_headers,
-                **kwargs,
-            )
-            if r.status_code >= 400:
-                log.warning("Supabase %s %s -> %s %s", method, path, r.status_code, r.text[:200])
-                return None
-            if not r.content:
-                return []
-            data = r.json()
-            return data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+        r = _send(method, url, headers=merged_headers, **kwargs)
+        if r.status_code >= 400:
+            log.warning("Supabase %s %s -> %s %s", method, path, r.status_code, r.text[:200])
+            return None
+        if not r.content:
+            return []
+        data = r.json()
+        return data if isinstance(data, list) else [data] if isinstance(data, dict) else []
     except Exception as e:
         log.exception("Supabase request %s %s: %s", method, path, e)
         return None

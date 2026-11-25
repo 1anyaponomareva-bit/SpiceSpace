@@ -11128,7 +11128,13 @@ async def _no_cache_middleware(request: Request, call_next):
         or path.endswith(".html")
         or path.endswith(".css")
     ):
-        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        # ?v=... changes with every release, so such a file never needs to be asked about again
+        if request.query_params.get("v") and response.status_code == 200 and not path.endswith(".html"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    elif path.startswith("/webapp/assets/") and response.status_code == 200:
+        response.headers["Cache-Control"] = "public, max-age=604800"
     return response
 
 
