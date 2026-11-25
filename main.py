@@ -148,6 +148,9 @@ SUBSCRIPTIONS_ENABLED = bool(PAYMENTS_START_DATE) and bool(os.getenv("LAVA_API_K
 # win-back messages (winback.py); WINBACK=0 switches them off without a deploy
 WINBACK_ENABLED = os.getenv("WINBACK", "1").strip() != "0"
 WINBACK_PER_RUN = 25
+# question after the trial (survey.py): nothing is sent until SURVEY_SEND=1 is set in Railway
+SURVEY_SEND = os.getenv("SURVEY_SEND", "0").strip() == "1"
+SURVEY_PER_RUN = 10
 
 SUBSCRIPTION_PLANS = {
     "4weeks": {
@@ -2105,6 +2108,14 @@ def _reminder_time_match(raw: str) -> tuple[str, int, int] | None:
         hhmm = _to_24h(int(m.group(1)), int(m.group(2)), "")
         if hhmm:
             return hhmm, m.start(), m.end()
+    # «в пятницу в 12»: a bare hour; 1-6 could be day or night, so those are asked again
+    m = re.search(
+        r"(?i)(?<![а-яё])в\s+([7-9]|1\d|2[0-3])(?![\d:.\-])(?!\s*(?:числ|мин|раз|кг|шт|класс|"
+        r"кабинет|квартир|дом|этаж|лет|год))(?:\s+час(?:а|ов)?)?(?![а-яё])",
+        text,
+    )
+    if m:
+        return f"{int(m.group(1)):02d}:00", m.start(), m.end()
     return None
 
 
@@ -2161,10 +2172,13 @@ def _parse_natural_reminder(text: str, profile: dict | None) -> dict | None:
         return None
     if not _looks_like_reminder_command(raw):
         return None
+    import reminder_dates
+
     low = raw.lower()
     tz_name = _profile_timezone_name(profile)
     tz = _zone_or_default(tz_name)
-    today = datetime.now(tz=tz).date()
+    now_local = datetime.now(tz=tz)
+    today = now_local.date()
 
     remind = 0
     if "за 30" in low or "за тридцать" in low:
@@ -2182,17 +2196,28 @@ def _parse_natural_reminder(text: str, profile: dict | None) -> dict | None:
     elif "каждый день" in low or "ежедневно" in low:
         repeat = "daily"
         days = []
+    elif reminder_dates.EVERY.search(raw):  # «каждую пятницу», «every friday»
+        repeat = "weekly"
+        days = [k for k in (reminder_dates.weekday_key(m["day"])
+                            for m in reminder_dates.EVERY.finditer(raw)) if k]
     else:
         repeat = "none"
         days = []
 
-    # По умолчанию — сегодня, разово; иначе завтра / послезавтра
-    if "послезавтра" in low or "day after tomorrow" in low:
-        target = _shift_calendar_day(today, 2)
-    elif "завтра" in low or re.search(r"\btomorrow\b", low):
-        target = _shift_calendar_day(today, 1)
-    else:
-        target = today
+    # The day, in words or as a date; one not understood is never replaced by today.
+    target = today
+    if repeat == "none":
+        status, day, without_day = reminder_dates.find(raw, today)
+        hit = _reminder_time_match(without_day)
+        passed = bool(hit) and hit[0] <= f"{now_local.hour:02d}:{now_local.minute:02d}"
+        if passed:
+            status, day, without_day = reminder_dates.find(raw, today, True)
+        if status in (reminder_dates.UNKNOWN, reminder_dates.PAST):
+            return {"_day_problem": status}
+        if status == reminder_dates.OK:
+            target, raw = day, without_day
+        elif passed:
+            target = _shift_calendar_day(today, 1)  # no day named and the hour is over
 
     # время: 18:00, 18.00, 6pm, 6:30 pm, «в 6 вечера», «в 7 часов вечера»
     time_hit = _reminder_time_match(raw)
@@ -6089,6 +6114,11 @@ async def _try_handle_natural_reminder(
         await _bot_reply(message, msg)
         _append_history_turn(cid, raw, msg)
         return True
+    if parsed.get("_day_problem"):
+        msg = ui_text(f"reminder_day_{parsed['_day_problem']}", profile=prof_d)
+        await _bot_reply(message, msg)
+        _append_history_turn(cid, raw, msg)
+        return True
     need_title = bool(parsed.pop("_need_title", False)) or not (
         parsed.get("title") or ""
     ).strip()
@@ -6609,11 +6639,155 @@ async def handle_channel_post_id(update: Update, context: ContextTypes.DEFAULT_T
         log.info("channel post chat_id=%s title=%s", post.chat.id, post.chat.title)
 
 
+_survey_lock = threading.Lock()
+
+
+def _survey_update(cid: int, fields: dict) -> bool:
+    """Merge fields into one person's survey record. False when it could not be saved."""
+    import survey
+
+    with _survey_lock:
+        state = dict(db_store.kv_get_strict(survey.KV_KEY))
+        entry = state.get(str(cid))
+        state[str(cid)] = {**(entry if isinstance(entry, dict) else {}), **fields}
+        return bool(db_store.kv_set(survey.KV_KEY, state))
+
+
+def _survey_plan(now: datetime, *, check_hour: bool = True) -> list[dict]:
+    """Who gets the question after the trial (see survey.py). Reads only."""
+    import survey
+    import winback
+
+    if not SUBSCRIPTIONS_ENABLED:
+        return []
+    payments = db_store.lava_payments_all()
+    if payments is None:
+        return []  # cannot tell who paid: nobody is asked
+    paid = {
+        str(r.get("telegram_id") or "") for r in payments
+        if isinstance(r, dict) and spice_stats._paid_status(r)
+    }
+    state = db_store.kv_get_strict(survey.KV_KEY)
+    since = datetime.combine(
+        date.fromisoformat(PAYMENTS_START_DATE) - timedelta(days=2), datetime.min.time(), tzinfo=timezone.utc
+    ).isoformat(timespec="seconds")
+    times: dict[str, list[str]] = {}
+    for r in db_store.user_message_times_since(since):
+        times.setdefault(str(r.get("user_id") or ""), []).append(str(r.get("created_at") or ""))
+    out: list[dict] = []
+    for uid, prof in (db_store.load_all_profiles() or {}).items():
+        uid = str(uid)
+        if not isinstance(prof, dict) or not uid.isdigit() or uid in state or uid in paid:
+            continue
+        if not ui_lang(prof).startswith("ru") or not ob.profile_onboarding_complete(prof):
+            continue
+        if profile_is_blocked(prof) or _age_blocked(prof) or not _profile_daily_enabled(prof):
+            continue
+        if _profile_truthy(prof.get("is_premium")) or str(prof.get("subscription_end") or "").strip():
+            continue
+        local = winback.local_now(prof, "ru", now, ob._default_timezone())
+        today = local.date()
+        if _profile_has_daily_access(prof, today):
+            continue
+        if check_hour and not survey.good_moment(local, prof.get("morning_time") or prof.get("daily_time")):
+            continue
+        try:
+            start = date.fromisoformat(_trial_start_raw(prof))
+        except ValueError:
+            continue
+        if not survey.replied_day_2_4(times.get(uid) or [], start, local.tzinfo):
+            continue
+        if _crisis_recent(prof.get("cycle_flags"), now, winback.CRISIS_DAYS):
+            continue
+        out.append({"cid": int(uid), "profile": prof})
+    return out
+
+
+async def _survey_send(bot, item: dict) -> bool:
+    import survey
+    import winback
+
+    cid, prof = item["cid"], item["profile"]
+    now_utc = datetime.now(timezone.utc)
+    turns = await asyncio.to_thread(db_store.load_history, cid, 60)
+    if winback.quiet_reason(turns, now_utc, prof.get("last_user_message_date"), safety.detect_crisis):
+        return False
+    stamp = now_utc.isoformat(timespec="seconds")
+    # saved first: whatever happens next, the same person is never asked twice
+    if not await asyncio.to_thread(_survey_update, cid, {"sent": stamp}):
+        return False
+    rows = [[InlineKeyboardButton(text, callback_data=f"survey:{code}")] for code, text in survey.OPTIONS]
+    try:
+        await bot.send_message(chat_id=cid, text=survey.TEXT, reply_markup=InlineKeyboardMarkup(rows))
+    except Exception as e:
+        log.warning("survey failed cid=%s: %s", cid, type(e).__name__)
+        await asyncio.to_thread(_survey_update, cid, {"failed": True})
+        if is_telegram_block_error(e):
+            _mark_telegram_blocked(cid, prof)
+        return False
+    histories.setdefault(cid, []).append({"role": "model", "parts": [survey.TEXT]})
+    with suppress(Exception):
+        await asyncio.to_thread(db_store.save_history_turn, cid, "model", survey.TEXT)
+    return True
+
+
+async def handle_survey_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    import survey
+
+    query = update.callback_query
+    if not query or not query.data or not query.message:
+        return
+    await query.answer()
+    cid = query.message.chat_id
+    code = query.data.split(":", 1)[1]
+    with suppress(Exception):
+        await query.edit_message_reply_markup(reply_markup=None)
+    state = await asyncio.to_thread(db_store.kv_get, survey.KV_KEY) or {}
+    entry = state.get(str(cid))
+    if not isinstance(entry, dict) or entry.get("answer") or code not in survey.CODES:
+        return
+    await asyncio.to_thread(
+        _survey_update, cid,
+        {"answer": code, "answer_at": datetime.now(timezone.utc).isoformat(timespec="seconds")},
+    )
+    await context.bot.send_message(chat_id=cid, text=survey.THANKS)
+    histories.setdefault(cid, []).append({"role": "model", "parts": [survey.THANKS]})
+
+
+_SURVEY_WANTS_PAY_RE = re.compile(r"оплат|подписк|тариф|купить|продлить|продолжить|сколько стоит", re.I)
+
+
+async def _survey_take_text(update: Update, cid: int, profile: dict, text: str) -> bool:
+    """Her answer in words, instead of «нужна подписка». Once; only after the survey went out."""
+    import survey
+
+    if not SUBSCRIPTIONS_ENABLED or not text.strip() or not isinstance(profile, dict):
+        return False
+    if onboarding.get(cid) is not None or _profile_has_daily_access(profile, _profile_local_date(profile)):
+        return False
+    if safety.in_crisis_window(cid) or safety.detect_distress(text) or _SURVEY_WANTS_PAY_RE.search(text):
+        return False
+    state = await asyncio.to_thread(db_store.kv_get, survey.KV_KEY) or {}
+    now = datetime.now(timezone.utc)
+    if not survey.waits_for_text(state.get(str(cid)), now):
+        return False
+    with suppress(Exception):
+        await asyncio.to_thread(_survey_update, cid, {"text_at": now.isoformat(timespec="seconds")})
+    msg = update.message or update.effective_message
+    await _bot_reply(msg, survey.THANKS_TEXT)
+    for role, part in (("user", text), ("model", survey.THANKS_TEXT)):
+        histories.setdefault(cid, []).append({"role": role, "parts": [part]})
+        with suppress(Exception):
+            await asyncio.to_thread(db_store.save_history_turn, cid, role, part)
+    return True
+
+
 def _winback_plan(now: datetime, *, check_hour: bool = True) -> list[dict]:
     """Who gets a win-back message now (see winback.py). Reads profiles, flows and app_kv."""
     import winback
 
     state = db_store.kv_get(winback.KV_KEY) or {}
+    asked = db_store.kv_get("survey") or {}
     out: list[dict] = []
     for uid, prof in (db_store.load_all_profiles() or {}).items():
         if not isinstance(prof, dict):
@@ -6636,6 +6810,9 @@ def _winback_plan(now: datetime, *, check_hour: bool = True) -> list[dict]:
         if check_hour and not (winback.SEND_FROM <= local.hour < winback.SEND_TO):
             continue
         today = local.date()
+        sent = spice_stats.local_day((asked.get(str(cid)) or {}).get("sent")) if asked else None
+        if sent is not None and (today - sent).days <= 0:
+            continue  # the question after the trial went out today: one message is enough
         if not ob.profile_onboarding_complete(prof):
             kind = "onb"
         elif _profile_has_daily_access(prof, today):
@@ -8135,6 +8312,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     prof_access = prof_d or user_profiles.get(str(cid)) or db_store.get_profile(cid)
     if isinstance(prof_access, dict):
         user_profiles[str(cid)] = prof_access
+        if await _survey_take_text(update, cid, prof_access, raw):
+            return
         if await _reply_subscription_paywall_if_needed(update, cid, prof_access, raw):
             return
 
@@ -10216,6 +10395,11 @@ def _register_telegram_handlers(app_: Application) -> None:
     )
     app_.add_handler(
         CallbackQueryHandler(
+            handle_survey_callback, pattern=r"^survey:(forgot|steps|many|price|other)$"
+        )
+    )
+    app_.add_handler(
+        CallbackQueryHandler(
             handle_safety_callback,
             pattern=r"^safety:(pause|keep|resume)$",
         )
@@ -10798,6 +10982,23 @@ async def _bootstrap_bot() -> None:
         except Exception as e:
             log.exception("winback_job crashed: %s", e)
 
+    async def survey_job() -> None:
+        try:
+            plan = await asyncio.to_thread(_survey_plan, datetime.now(timezone.utc))
+            for item in plan[:SURVEY_PER_RUN]:
+                await _survey_send(bot, item)
+        except Exception as e:
+            log.exception("survey_job crashed: %s", e)
+
+    if SURVEY_SEND:
+        scheduler.add_job(
+            survey_job,
+            IntervalTrigger(minutes=20, timezone=tz),
+            id="survey_job",
+            misfire_grace_time=300,
+            replace_existing=True,
+        )
+
     if WINBACK_ENABLED:
         scheduler.add_job(
             winback_job,
@@ -11367,6 +11568,9 @@ async def stats_daily(request: Request) -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "spice": spice,
     }
+    import survey
+
+    out["survey"] = survey.stats(await asyncio.to_thread(db_store.kv_get, survey.KV_KEY))
     if want_meta:
         out.update(
             await asyncio.to_thread(meta_stats.collect_all, db_store.kv_get, db_store.kv_set)

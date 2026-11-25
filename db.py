@@ -1710,6 +1710,19 @@ def kv_get(key: str) -> dict | None:
     return None
 
 
+def kv_get_strict(key: str) -> dict:
+    """Like kv_get, but a failed read raises instead of looking like an empty record."""
+    from urllib.parse import quote
+
+    if _use_supabase:
+        rows = _request("GET", f"app_kv?key=eq.{quote(key)}&select=value&limit=1")
+        if rows is None:
+            raise RuntimeError(f"kv read failed: {key}")
+        val = rows[0].get("value") if rows else None
+        return val if isinstance(val, dict) else {}
+    return kv_get(key) or {}
+
+
 def kv_set(key: str, value: dict) -> bool:
     if not _use_supabase:
         data = _load_json(APP_KV_PATH, {})

@@ -98,7 +98,7 @@ class ParseReminderTests(unittest.TestCase):
         cases = {
             "напомни завтра в 18:00 позвонить маме": (TOMORROW, "18:00", "позвонить маме"),
             "напомни завтра в 6 вечера позвонить маме": (TOMORROW, "18:00", "позвонить маме"),
-            "напомни в 8 утра выпить таблетки": (TODAY, "08:00", "выпить таблетки"),
+            "напомни в 8 утра выпить таблетки": (TOMORROW, "08:00", "выпить таблетки"),
             "напомни завтра в 7 часов вечера купить хлеб": (TOMORROW, "19:00", "купить хлеб"),
             "напомни позвонить маме завтра в 18:00": (TOMORROW, "18:00", "позвонить маме"),
             "напомни в 18:00 продукты купить": (TODAY, "18:00", "продукты купить"),
@@ -121,8 +121,8 @@ class ParseReminderTests(unittest.TestCase):
             "Can you remind me tomorrow at 18:00 to buy tomatoes?": (
                 TOMORROW, "18:00", "buy tomatoes",
             ),
-            "remind me at 7am to drink water": (TODAY, "07:00", "drink water"),
-            "remind me at 12am to sleep": (TODAY, "00:00", "sleep"),
+            "remind me at 7am to drink water": (TOMORROW, "07:00", "drink water"),
+            "remind me at 12am to sleep": (TOMORROW, "00:00", "sleep"),
         }
         for text, (day, hhmm, title) in cases.items():
             with self.subTest(text=text):

@@ -72,6 +72,26 @@ _UI: dict[str, dict[str, str]] = {
             "For example: \"remind me tomorrow at 6pm to call mom\"."
         ),
     },
+    "reminder_day_unknown": {
+        "ru": (
+            "Не поняла, на какой день поставить напоминание, поэтому пока не записала. "
+            "Напиши с датой и временем, например: «напомни 3 декабря в 10:00 позвонить маме»."
+        ),
+        "en": (
+            "I'm not sure which day you mean, so I haven't saved it yet. "
+            "Write the date and time, for example: \"remind me on December 3 at 10am to call mom\"."
+        ),
+    },
+    "reminder_day_past": {
+        "ru": (
+            "Это время уже прошло, поэтому пока не записала. "
+            "На какой день и время поставить? Например: «напомни завтра в 10:00 позвонить маме»."
+        ),
+        "en": (
+            "That time has already passed, so I haven't saved it yet. "
+            "Which day and time? For example: \"remind me tomorrow at 10am to call mom\"."
+        ),
+    },
     "tomorrow_saved": {
         "ru": "Записала ✨ На завтра: {task}",
         "en": "Saved ✨ For tomorrow: {task}",
