@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import names
 import json
 import logging
 import os
@@ -927,6 +928,8 @@ def s(key: str, lang: str = "en", **kwargs: object) -> str:
     """Get string in correct language."""
     lang_key = "ru" if _is_ru(lang) else "en"
     text = STRINGS[lang_key].get(key) or STRINGS["en"].get(key) or key
+    if "name" in kwargs:
+        return names.fill(str(text), kwargs.pop("name"), **kwargs)
     if kwargs:
         return str(text).format(**kwargs)
     return str(text)
@@ -1316,8 +1319,7 @@ def _wants_adjust_reply(raw: str) -> bool:
 
 
 def greeting_after_name(name: str, lang: str = "en") -> str:
-    n = (name or "").strip() or _friend_word(lang)
-    return f"{n}, {s('nice_to_meet', lang)}"
+    return names.lead(name, s("nice_to_meet", lang))
 
 
 def vision_question_message(lang: str = "en") -> str:
@@ -1648,7 +1650,7 @@ async def say_as_friend(
         prev_goal = str(
             profile.get("main_goal") or profile.get("final_goal") or ""
         ).strip()
-        name = str(profile.get("name") or "").strip()
+        name = names.real_name(profile.get("name"))
     returning = bool(prev_goal)
     system = RETURNING_ONBOARDING_SYSTEM if returning else VARY_PHRASE_SYSTEM
     parts: list[str] = []
@@ -1678,9 +1680,9 @@ async def generate_first_pain_question(
     *,
     profile: dict | None = None,
 ) -> str:
-    n = (name or "").strip() or _friend_word(lang)
-    if isinstance(profile, dict) and str(profile.get("name") or "").strip():
-        n = str(profile.get("name") or "").strip()
+    n = names.real_name(name)
+    if isinstance(profile, dict) and names.real_name(profile.get("name")):
+        n = names.real_name(profile.get("name"))
     fallback = vision_question_message(lang)
     previous_goal = ""
     if isinstance(profile, dict):
@@ -1698,9 +1700,9 @@ async def generate_first_pain_question(
             + "запустил скрипт заново."
         )
         user = (
-            f"Имя: {n}\nПредыдущая цель: {previous_goal}"
+            f"Имя: {n or '—'}\nПредыдущая цель: {previous_goal}"
             if _is_ru(lang)
-            else f"Name: {n}\nPrevious goal: {previous_goal}"
+            else f"Name: {n or '-'}\nPrevious goal: {previous_goal}"
         )
         return await _claude_plain_text(
             system,
@@ -2456,7 +2458,7 @@ async def _claude_weekly_recap_dialog(
     if extra_user_hint:
         messages.append({"role": "user", "content": extra_user_hint})
 
-    name = str(profile.get("name") or _friend_word(lang)).strip()
+    name = names.real_name(profile.get("name")) or ("не указано" if _is_ru(lang) else "not given")
     system = _system_with_lang(
         WEEKLY_RECAP_DIALOG_SYSTEM.format(
             name=name,

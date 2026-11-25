@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import names
 import re
 from datetime import datetime
 
@@ -152,7 +153,7 @@ FITNESS_NUTRITION_INSTRUCTION = """
 ПРЕЖДЕ ВСЕГО: при признаках расстройства пищевого поведения (голодание сутками, рвота, слабительные или мочегонные для веса, «отработка» еды, сильная вина после еды, цель ниже здорового веса или быстрее ~1% веса в неделю) правило безопасности выше важнее всего этого блока: никаких шагов к похудению.
 
 ПИТАНИЕ:
-Если просят меню или план питания:
+Если просят меню или план питания (при болезни, беременности, кормлении, лекарствах, РПП сейчас или в прошлом - не это, а правило «МЕДИЦИНСКИЕ ЦЕЛИ»):
 1. Если вес, цель и режим уже названы - сразу составляй меню. Спрашивай только то, без чего меню будет случайным, и только одним вопросом: вес, рост, возраст, активность, цель (похудеть/поддержать/набрать), сколько раз в день ест
 2. Калории примерно: поддержание по Миффлину, для женщины 10 × вес (кг) + 6,25 × рост (см) - 5 × возраст - 161, для мужчины + 5 вместо - 161, затем умножь на активность: 1,2 почти без движения, 1,4 обычный день и немного ходьбы, 1,55 тренировки 3-5 раз в неделю. Называй диапазоном и говори, что точнее покажет вес за 2-3 недели. Нет роста, возраста, активности или пола - спроси одним вопросом. Для похудения минус 10-15% от поддержания, для женщин не меньше 1200 ккал. Если вес у нижней границы нормы (ИМТ примерно до 20) или ниже, дефицит не предлагай: еда около поддержания, белок, силовые. При ИМТ ниже 18,5 похудение не считай вообще - правило РПП
 3. Простое меню на день из обычных продуктов, по возможности из того, что есть дома
@@ -203,7 +204,7 @@ FITNESS_NUTRITION_INSTRUCTION = """
 - Сил нет: 5 минут разминки засчитываются, дальше по желанию.
 
 НЕЛЬЗЯ: диеты при болезнях, лекарства и препараты для похудения, БАДы, расчёты при беременности и кормлении, советы подросткам по похудению - это к врачу, коротко скажи почему. Жёсткие диеты меньше 1200 ккал. Медицинские диагнозы.
-НЕ НАДО: «я не могу составить меню»; общие советы без конкретики.
+НЕ НАДО: «я не могу составить меню», кроме правила «МЕДИЦИНСКИЕ ЦЕЛИ»; общие советы без конкретики.
 """
 
 
@@ -888,7 +889,7 @@ def user_gender(profile: dict | None) -> str | None:
     g = str(said or profile.get("gender") or "").strip().lower()
     if g in ("female", "male"):
         return g
-    words = str(profile.get("name") or "").strip().lower().replace("ё", "е").split()
+    words = names.real_name(profile.get("name")).lower().replace("ё", "е").split()
     if not words:
         return None
     w = re.sub(r"[^a-zа-я]", "", words[0])
@@ -1019,10 +1020,16 @@ def build_chat_system(
     lines.append(f"language_code: {lang}")
     n_trial = trial.days_of_profile(profile)
     lines.append(f"Пробный период: {n_trial} дня" if ru else f"Trial: {n_trial} days")
-    if profile.get("name"):
-        user_name = str(profile["name"]).strip()
+    user_name = names.real_name(profile.get("name"))
+    if user_name:
         lines.append(f"{'Имя' if ru else 'Name'}: {user_name}")
         lines.append(name_rule)
+    else:
+        lines.append(
+            "Имя: не указано. Обращайся без имени, не называй её подругой."
+            if ru
+            else "Name: not given. Use no name, do not call her «friend»."
+        )
     if profile.get("vision"):
         lines.append(f"{vision_l}: {profile['vision']}")
     if profile.get("main_goal"):
@@ -1090,11 +1097,10 @@ def morning_opening(
     lang: str = "en",
 ) -> str:
     ru = str(lang or "en").lower().startswith("ru")
-    n = (name or "").strip() or ("подруга" if ru else "friend")
     week = (
         weekly_goal or main_goal or ("твоя цель на неделю" if ru else "your goal this week")
     ).strip()
-    base = f"{n}, {'доброе утро' if ru else 'good morning'} ☀️"
+    base = names.lead(name, f"{'доброе утро' if ru else 'good morning'} ☀️")
     if key_detail and key_detail.strip():
         base += f" {key_detail.strip()}"
     why = ""
@@ -1126,9 +1132,7 @@ def evening_opening(
 ) -> str:
     """No dialog today: no model call, but about her task / weekly goal, not a bare question."""
     ru = str(lang or "en").lower().startswith("ru")
-    name = str(name or "").strip()
-    if name.lower() in ("none", "null"):
-        name = ""
+    name = names.real_name(name)
     about = str((task if has_task else weekly) or "").strip().rstrip(" .")
     if about and len(about) <= 140:
         lead = f"{name}, " if name else ""

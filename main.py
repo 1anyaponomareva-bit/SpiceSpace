@@ -17,6 +17,7 @@ Optional .env:
 from __future__ import annotations
 
 import asyncio
+import names
 import time
 import base64
 import hashlib
@@ -1167,7 +1168,8 @@ def _signals_text(signals: list[str]) -> str:
 
 
 def _morning_template(profile: dict) -> str:
-    name = str(profile.get("name", "")).strip() or "ты"
+    name = names.real_name(profile.get("name"))
+    hello = f"Доброе утро, {name} ✨" if name else "Доброе утро ✨"
     gender = user_gender(profile) or "neutral"
     if gender == "female":
         tail = "Напиши, когда будешь готова — подберу мягкое действие."
@@ -1186,7 +1188,7 @@ def _morning_template(profile: dict) -> str:
     if goal_type == "qualitative":
         focus = raw_goal or "твоё состояние"
         return (
-            f"Доброе утро, {name} ✨\n\n"
+            f"{hello}\n\n"
             f"Сегодня не надо становиться идеальной версией себя.\n"
             f"Держим фокус на твоём состоянии: {focus}.\n\n"
             "Один маленький шаг — и уже не ноль.\n\n"
@@ -1195,7 +1197,7 @@ def _morning_template(profile: dict) -> str:
 
     goal = final_goal or raw_goal or "свою цель"
     return (
-        f"Доброе утро, {name} ✨\n\n"
+        f"{hello}\n\n"
         f"У тебя есть цель — {goal}.\n"
         "Сегодня нужен один маленький шаг.\n\n"
         f"{tail_m}"
@@ -1993,8 +1995,7 @@ def _mark_task_last_sent(task_id: str) -> None:
 def _reminder_display_name(profile: dict | None) -> str:
     if not isinstance(profile, dict):
         return ""
-    name = str(profile.get("name") or "").strip()
-    return name
+    return names.real_name(profile.get("name"))
 
 
 def _format_task_reminder_text(profile: dict | None, title: str) -> str:
@@ -2529,16 +2530,18 @@ async def _restore_history_from_db(cid: int, purpose: str) -> None:
 
 
 def _exact_name_prompt_instruction(profile: dict, chat_id: int | None = None) -> str:
-    name = str(profile.get("name", "")).strip()
+    name = names.real_name(profile.get("name"))
     lang = str(profile.get("language_code") or "en")
     ru = lang.lower().startswith("ru")
     if not name:
         return (
             "Имя в профиле не указано — не выдумывай и не сокращай имя. "
+            "Обращайся без имени, не называй её подругой. "
             "ЗАПРЕЩЕНО начинать сообщение с запятой."
             if ru
             else (
                 "Name not in profile — do not invent or shorten. "
+                "Use no name and do not call her «friend». "
                 "FORBIDDEN to start a message with a comma."
             )
         )
@@ -2633,27 +2636,26 @@ async def _last_dialog_messages(chat_id: int, *, ru: bool, limit: int = 5) -> st
 def _morning_message_fallback(chat_id: int, profile: dict) -> str:
     lang = str(profile.get("language_code") or "en")
     ru = lang.lower().startswith("ru")
-    name = str(profile.get("name", "")).strip()
-    display_name = name or ("подруга" if ru else "friend")
+    name = names.real_name(profile.get("name"))
     yesterday_date = _profile_local_date(profile) - timedelta(days=1)
     yesterday = db_store.get_daily_summary(chat_id, yesterday_date) or {}
     yesterday_task = str(yesterday.get("task") or "").strip()
     yesterday_done = yesterday.get("completed") is True
     if yesterday_task and not yesterday_done:
         if ru:
-            return (
-                f"{display_name}, доброе утро 🌅\n\n"
+            return names.lead(
+                name, "доброе утро 🌅\n\n"
                 f"Вчера ты говорила про: {yesterday_task}\n\n"
                 f"Всё в силе или хочешь поменять?"
             )
-        return (
-            f"{display_name}, good morning 🌅\n\n"
+        return names.lead(
+            name, "good morning 🌅\n\n"
             f"Yesterday you mentioned: {yesterday_task}\n\n"
             f"Still on track or want to change it?"
         )
     if ru:
-        return f"{display_name}, доброе утро 🌅\n\nЧто планируешь сегодня?"
-    return f"{display_name}, good morning 🌅\n\nWhat are you planning for today?"
+        return names.lead(name, "доброе утро 🌅\n\nЧто планируешь сегодня?")
+    return names.lead(name, "good morning 🌅\n\nWhat are you planning for today?")
 
 
 def _task_words(task: str) -> list[str]:
@@ -2736,8 +2738,8 @@ async def _morning_message_text_base(
 ) -> str:
     lang = str(profile.get("language_code") or "en")
     ru = lang.lower().startswith("ru")
-    name = str(profile.get("name", "")).strip()
-    display_name = name or ("подруга" if ru else "friend")
+    name = names.real_name(profile.get("name"))
+    display_name = name or ("человека (имя не указано)" if ru else "the user (no name)")
     last_messages = await _last_dialog_messages(chat_id, ru=ru, limit=5)
     today = _profile_local_date(profile)
     yesterday = (today - timedelta(days=1)).isoformat()
@@ -2792,7 +2794,7 @@ async def _morning_message_text_base(
             + f"{name_instruction}"
         )
         user_content = f"Write the morning message for {display_name}."
-    morning_system = prepend_user_time(profile, morning_body)
+    morning_system = prepend_user_time(profile, f"{morning_body}\n\n{safety.medical_rule(lang)}")
     if not ru:
         morning_system = (
             "CRITICAL: Write ONLY in English. Not a single Russian word.\n\n"
@@ -2934,17 +2936,17 @@ async def _evening_message_text(
         log.info("evening template cid=%s: no dialog today", chat_id)
         return evening_opening(
             has_task=has_task, lang=lang, task=task,
-            name=str(profile.get("name") or ""), weekly=str(profile.get("weekly_goal") or ""),
+            name=names.real_name(profile.get("name")), weekly=str(profile.get("weekly_goal") or ""),
         )
     if not summary_text and not today_context:
         return evening_opening(
             has_task=has_task, lang=lang, task=task,
-            name=str(profile.get("name") or ""), weekly=str(profile.get("weekly_goal") or ""),
+            name=names.real_name(profile.get("name")), weekly=str(profile.get("weekly_goal") or ""),
         )
     need_summary = not summary_text
 
-    name = str(profile.get("name", "")).strip()
-    display_name = name or ("подруга" if ru else "friend")
+    name = names.real_name(profile.get("name"))
+    display_name = name or ("человека (имя не указано)" if ru else "the user (no name)")
     name_instruction = _exact_name_prompt_instruction(profile, chat_id)
     goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
     weekly_goal = str(profile.get("weekly_goal") or "").strip()
@@ -3055,7 +3057,7 @@ async def _evening_message_text(
             "\"summary\":\"2-3 sentences about the day\","
             "\"mood\":\"mood in one word\",\"key_detail\":\"one detail or null\"}."
         )
-    evening_system = prepend_user_time(profile, evening_body)
+    evening_system = prepend_user_time(profile, f"{evening_body}\n\n{safety.medical_rule(lang)}")
     if not ru:
         evening_system = (
             "CRITICAL: Write ONLY in English. Not a single Russian word.\n\n"
@@ -3089,7 +3091,7 @@ async def _evening_message_text(
                 log.warning("evening personal message %s: %s", mid, e)
         return evening_opening(
             has_task=has_task, lang=lang, task=task,
-            name=str(profile.get("name") or ""), weekly=str(profile.get("weekly_goal") or ""),
+            name=names.real_name(profile.get("name")), weekly=str(profile.get("weekly_goal") or ""),
         )
 
     return await asyncio.to_thread(call)
@@ -3113,9 +3115,7 @@ async def _check_and_send_milestone(
         if db_store.milestone_already_shown(fresh, active_days):
             return
 
-        name = str(fresh.get("name") or "").strip()
-        display_name = name or "подруга"
-        message = f"{display_name}, {active_days} дней вместе — это уже что-то 💚"
+        message = names.lead(fresh.get("name"), f"{active_days} дней вместе — это уже что-то 💚")
         await bot.send_message(chat_id=cid, text=message)
         updated = db_store.mark_milestone_shown(cid, active_days)
         if isinstance(updated, dict):
@@ -3318,14 +3318,14 @@ async def _reengagement_message_text(
 ) -> str:
     lang = ui_lang(profile)
     ru = lang.lower().startswith("ru")
-    name = str(profile.get("name") or "").strip()
+    name = names.real_name(profile.get("name"))
     main_goal = str(
         profile.get("main_goal") or profile.get("final_goal") or ""
     ).strip()
     tone = _reengagement_tone(days_silent, lang)
     template = REENGAGEMENT_CLAUDE_SYSTEM_RU if ru else REENGAGEMENT_CLAUDE_SYSTEM_EN
     system = prepend_user_time(
-        profile, template.format(days=days_silent, tone=tone)
+        profile, template.format(days=days_silent, tone=tone) + "\n\n" + safety.medical_rule(lang)
     )
     if not ru:
         system = "CRITICAL: Write ONLY in English.\n\n" + system
@@ -3650,6 +3650,8 @@ _TRIAL_TEXTS = {
 
 def _trial_text(lang: str, key: str, **kw) -> str:
     table = _TRIAL_TEXTS["ru"] if str(lang or "").lower().startswith("ru") else _TRIAL_TEXTS["en"]
+    if "name" in kw:
+        return names.fill(table[key], kw.pop("name"), **kw)
     return table[key].format(**kw)
 
 
@@ -3733,7 +3735,7 @@ async def _maybe_send_payments_announcement(
     if db_store.cycle_flag_sent(profile, flag_key):
         return
     lang = ui_lang(profile)
-    name = str(profile.get("name") or "").strip() or ob._friend_word(lang)
+    name = names.real_name(profile.get("name"))
     last_day = date.fromisoformat(_trial_start_raw(profile)) + timedelta(days=trial.OLD_DAYS - 1)
     try:
         await bot.send_message(
@@ -3770,7 +3772,7 @@ async def _maybe_send_trial_evening_message(
     if not start_raw or db_store.cycle_flag_sent(profile, flag_key):
         return
     lang = ui_lang(profile)
-    name = str(profile.get("name") or "").strip() or ob._friend_word(lang)
+    name = names.real_name(profile.get("name"))
     goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
     goal_line = _trial_text(lang, "goal_line", goal=goal[:200]) if goal else ""
     facts = _trial_facts(cid, profile, lang, today) if key == "day3" else ""
@@ -3823,7 +3825,7 @@ async def _maybe_send_trial_pause(
         return
     _trial_pause_sent.add(flag_key + str(cid))
     lang = ui_lang(profile)
-    name = str(profile.get("name") or "").strip() or ob._friend_word(lang)
+    name = names.real_name(profile.get("name"))
     goal = str(profile.get("main_goal") or profile.get("final_goal") or "").strip()
     goal_line = _trial_text(lang, "goal_line", goal=goal[:200]) if goal else ""
     if lava_pay.enabled():
@@ -3897,7 +3899,7 @@ def _subscription_offer_keyboard(cid: int, lang: str) -> InlineKeyboardMarkup:
 
 
 def _subscription_paywall_text(profile: dict, lang: str) -> str:
-    name = str(profile.get("name") or "").strip() or ob._friend_word(lang)
+    name = names.real_name(profile.get("name"))
     today = _profile_local_date(profile)
     days = _days_since_trial_start(profile, today)
     lock = _trial_prices(lang, today)["lock"]
@@ -3918,7 +3920,7 @@ async def _send_subscription_paywall(
         ob.ob_text(
             "trial_expired_offer",
             lang,
-            name=str(profile.get("name") or "").strip() or ob._friend_word(lang),
+            name=names.real_name(profile.get("name")),
         ) + _trial_prices(lang, _profile_local_date(profile))["lock"]
         if offer
         else _subscription_paywall_text(profile, lang)
@@ -4597,7 +4599,7 @@ async def _run_subscription_maintenance(
     if not SUBSCRIPTIONS_ENABLED:
         return
     lang = ui_lang(profile)
-    name = str(profile.get("name") or "").strip() or ob._friend_word(lang)
+    name = names.real_name(profile.get("name"))
     today_iso = today.isoformat()
     end_raw = str(profile.get("subscription_end") or "").strip()[:10]
 
@@ -5332,7 +5334,9 @@ async def _generate_weekly_recap_message(
     days_since_start: int = 0,
 ) -> str:
     """One-way week recap letter from Space (no questions to the user)."""
-    name = str(profile.get("name") or "").strip()
+    name = names.real_name(profile.get("name"))
+    who_ru = f"Обращайся по имени {name}" if name else "Имени нет: обращайся без имени, не называй её подругой"
+    who_en = f"Address by name {name}" if name else "No name given: use no name, do not call her friend"
     main_goal = str(profile.get("main_goal") or "").strip()
     weekly_goal = str(profile.get("weekly_goal") or "").strip()
     vision = str(profile.get("vision") or "").strip()
@@ -5355,7 +5359,7 @@ async def _generate_weekly_recap_message(
     )
 
     if lang.startswith("ru"):
-        prompt = f"""Напиши итог личной недели для {name}. Это готовое сообщение в Telegram — пользователь только читает.
+        prompt = f"""Напиши итог личной недели для {name or "человека"}. Это готовое сообщение в Telegram — пользователь только читает.
 
 Цель на 12 недель: {main_goal or "не указана"}
 Цель этой недели: {weekly_goal or "не указана"}
@@ -5376,13 +5380,13 @@ async def _generate_weekly_recap_message(
 - Если неделя была тяжёлой (нет сил, плохое самочувствие, тяжёлые разговоры): не перечисляй её жалобы и симптомы, не считай провалы («ни один день не выполнен»), не давай указаний про еду, сон и здоровье. Скажи тепло, что неделя была непростой, отметь то, что всё-таки получилось, и предложи шаги полегче
 - Если подробностей мало — не говори об этом («в боте нет записей», «записей немного»), не пиши «давай честно», не упрекай; просто опирайся на цели
 - Без слов «невозможно», «нереально», «провал»
-- Обращайся по имени {name}"""
+- {who_ru}"""
         system = (
             "Ты Спейс. Пишешь готовый итог недели. Только текст сообщения, без вопросов.\n"
             + address_rule(profile)
         )
     else:
-        prompt = f"""Write the closing recap for {name}'s week. Ready Telegram message — user only reads.
+        prompt = f"""Write the closing recap for {name or 'the user'}'s week. Ready Telegram message — user only reads.
 
 12-week goal: {main_goal or "not set"}
 This week's goal: {weekly_goal or "not set"}
@@ -5402,8 +5406,9 @@ Rules:
 - If the week was hard (no energy, feeling unwell, heavy talks): do not list her complaints or symptoms, do not count failures ("not a single day done"), give no instructions about food, sleep or health. Say warmly that the week was not easy, note what did work, suggest lighter steps
 - If there are few notes, do not mention it ("there are no notes", "let's be honest") and do not reproach; just rely on the goals
 - No "impossible", "unrealistic", "failure"
-- Address by name {name}"""
+- {who_en}"""
         system = "You are Space. Week recap text only. No questions."
+    system += "\n\n" + safety.medical_rule(lang)
 
     def gen() -> str:
         for mid in model_chain:
@@ -5421,12 +5426,12 @@ Rules:
             except Exception as e:
                 log.warning("weekly recap generate %s: %s", mid, e)
         if lang.startswith("ru"):
-            return (
-                f"{name}, неделя позади 💙 "
+            return names.lead(
+                name, "неделя позади 💙 "
                 f"Ты держала фокус на «{weekly_goal or main_goal}»."
             )
-        return (
-            f"{name}, week {week_number} is behind you 💙 "
+        return names.lead(
+            name, f"week {week_number} is behind you 💙 "
             f"You stayed focused on «{weekly_goal or main_goal}»."
         )
 
@@ -7886,6 +7891,25 @@ async def _handle_under_18(update: Update, cid: int, raw: str, prof: dict | None
     return True
 
 
+def _note_name_said(cid: int, raw: str, prof: dict | None) -> None:
+    """«Меня зовут Катя» from someone whose name Space never understood."""
+    if not isinstance(prof, dict) or not str(prof.get("main_goal") or "").strip():
+        return
+    if names.real_name(prof.get("name")):
+        return
+    new = names.said(raw)
+    if not new:
+        return
+    try:
+        updated = db_store.update_profile(cid, {"name": new})
+    except Exception as e:
+        log.warning("name not saved cid=%s: %s", cid, e)
+        return
+    prof["name"] = new
+    if isinstance(updated, dict):
+        user_profiles[str(cid)] = updated
+
+
 _ED_GOAL_STEPS = frozenset({ob.OB_VISION, ob.OB_VISION_DIALOG, OB_GOAL_DIALOG, ob.OB_GOAL_12W, ob.OB_WEEKLY_TACTICS})
 
 
@@ -7955,6 +7979,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     _note_gender_said(cid, raw, prof_early)
+    _note_name_said(cid, raw, prof_early)
 
     if await _handle_city_timezone(update, cid, raw, prof_early):
         return
@@ -8683,9 +8708,11 @@ async def _today_task_options_message_text(
     )
     system = prepend_user_time(
         profile,
-        "Ты — Спейс. Коротко, тепло, без markdown."
-        if ru
-        else "You are Space. Short, warm, no markdown.",
+        (
+            "Ты — Спейс. Коротко, тепло, без markdown."
+            if ru
+            else "You are Space. Short, warm, no markdown."
+        ) + "\n\n" + safety.medical_rule(lang),
     )
     if not ru:
         system = (
@@ -8736,7 +8763,7 @@ async def _generate_today_task(profile: dict, model_names: list[str]) -> str:
         if ru
         else "Return only today's task. Write in English only."
     )
-    system = prepend_user_time(profile, system_body)
+    system = prepend_user_time(profile, f"{system_body}\n\n{safety.medical_rule(lang)}")
     if not ru:
         system = "CRITICAL: Write ONLY in English.\n\n" + system
 
@@ -8890,9 +8917,11 @@ async def _task_day_followup_text(
     )
     system = prepend_user_time(
         profile,
-        "Ты — Спейс. Коротко, тепло, без markdown."
-        if ru
-        else "You are Space. Short, warm, no markdown.",
+        (
+            "Ты — Спейс. Коротко, тепло, без markdown."
+            if ru
+            else "You are Space. Short, warm, no markdown."
+        ) + "\n\n" + safety.medical_rule(lang),
     )
     if not ru:
         system = (
@@ -10690,12 +10719,12 @@ async def _bootstrap_bot() -> None:
                 continue  # night where she is: the reminder waits for the morning
             try:
                 lang = str(st.get("lang") or st.get("language_code") or "en")
-                name = str(st.get("name") or "").strip()
+                name = names.real_name(st.get("name"))
                 if no_name:
                     text = ob.s("onboarding_reminder_noname", lang)
                 else:
                     reminder = ob.s("onboarding_reminder", lang)
-                    text = f"{name}, {reminder}" if name else reminder.capitalize()
+                    text = f"{name}, {reminder}" if name else names.cap(reminder)
                 await bot.send_message(chat_id=cid, text=text)
                 st["reminder_sent"] = True
                 _persist_cid_flow(cid)  # so a restart doesn't send it twice
@@ -11784,10 +11813,8 @@ def _milestone_system(lang: str) -> str:
 
 def _milestone_fallback(name: str, completed_days: int, lang: str) -> str:
     if is_ru(lang):
-        display_name = name or "подруга"
-        return f"{display_name}, {completed_days} дней — ты реально двигаешься к своей цели 💚"
-    display_name = name or "friend"
-    return f"{display_name}, {completed_days} days — you're really moving toward your goal 💚"
+        return names.lead(name, f"{completed_days} дней — ты реально двигаешься к своей цели 💚")
+    return names.lead(name, f"{completed_days} days — you're really moving toward your goal 💚")
 
 
 @app.get("/api/milestone")
@@ -11814,7 +11841,7 @@ def get_milestone(
     if db_store.milestone_already_shown(fresh_profile, completed_days):
         return {"milestone": None}
 
-    name = str(fresh_profile.get("name") or "").strip()
+    name = names.real_name(fresh_profile.get("name"))
     main_goal = str(fresh_profile.get("main_goal") or "").strip()
     vision = str(fresh_profile.get("vision") or "").strip()
     lang = str(fresh_profile.get("language_code") or "en")
@@ -11828,7 +11855,7 @@ def get_milestone(
                 text = claude_generate(
                     mid,
                     [{"role": "user", "content": prompt}],
-                    system=(_milestone_system(lang) + "\n" + address_rule(fresh_profile)).strip(),
+                    system=(_milestone_system(lang) + "\n" + address_rule(fresh_profile)).strip() + "\n\n" + safety.medical_rule(lang),
                     max_tokens=150,
                     lang=lang,
                     feature="milestone",

@@ -30,6 +30,7 @@ def _main_functions(names: set[str], namespace: dict) -> dict:
     if missing:
         raise AssertionError(f"missing in main.py: {sorted(missing)}")
     module = ast.Module(body=nodes, type_ignores=[])
+    namespace.setdefault("names", __import__("names"))
     exec(compile(module, "main.py", "exec"), namespace)
     return namespace
 
@@ -243,7 +244,7 @@ class MilestoneLanguageTests(unittest.TestCase):
         )
         self.assertEqual(
             self.ns["_milestone_fallback"]("", 7, "ru"),
-            "подруга, 7 дней — ты реально двигаешься к своей цели 💚",
+            "7 дней — ты реально двигаешься к своей цели 💚",
         )
 
 

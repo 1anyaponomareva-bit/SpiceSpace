@@ -17,6 +17,7 @@ Pure functions; main.py reads profiles and sends.
 from __future__ import annotations
 
 import re
+import names
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -191,7 +192,7 @@ def quiet_reason(turns: list[dict], now: datetime, last_message_date: object, de
 
 def clean_name(name: object) -> str:
     n = str(name or "").strip()
-    return "" if n.lower() in ("none", "null", "undefined", "-") else n
+    return names.real_name(n)
 
 
 def onb_text(n: int, lang: str, name: str = "", goal: str = "") -> str:

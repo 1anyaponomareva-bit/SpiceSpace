@@ -153,7 +153,9 @@
   }
 
   function pickName(user, prof) {
-    if (prof?.name) return String(prof.name).trim();
+    const own = String(prof?.name || '').trim();
+    // the placeholder saved when Space did not understand the name is not shown
+    if (own && !['подруга', 'friend'].includes(own.toLowerCase())) return own;
     const n = (user?.first_name || user?.username || '').trim();
     return n || t('friend_default');
   }

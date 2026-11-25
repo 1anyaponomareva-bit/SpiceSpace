@@ -55,6 +55,7 @@ class _Ob:
 
 def _ns(today: date, start_date: str = "2026-11-13") -> dict:
     ns = {
+        "names": __import__("names"),
         "_TRIAL_TEXTS": _TRIAL_TEXTS,
         "SUBSCRIPTIONS_ENABLED": True,
         "PAYMENTS_START_DATE": start_date,

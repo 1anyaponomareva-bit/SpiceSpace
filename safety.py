@@ -305,5 +305,18 @@ SAFETY_RULE_RU = SAFETY_RULE_RU + "\n\n" + _ED_RULE
 SAFETY_RULE_EN = SAFETY_RULE_EN + "\n\n" + _ED_RULE
 
 
+# Anya, 25.11.2026: Space built a menu and named sugar norms for gestational diabetes and
+# gave a pregnant person «a smaller dinner» as the task. Chat and onboarding get it with
+# SAFETY_RULE; morning, evening, tasks and recaps have no safety rule, so they add this one.
+MEDICAL_RULE_RU = """МЕДИЦИНСКИЕ ЦЕЛИ (важнее всех правил о еде, меню, целях и задачах): при беременности, кормлении, ГСД, диабете, других болезнях, приёме лекарств, РПП сейчас или в прошлом - не составляй лечебное питание, меню, рецепты и списки продуктов, не предлагай ей искать или составлять их самой. Не называй нормы сахара и других анализов, калории, граммы и дозы. Не оценивай анализ: ни «норма», ни «выше» или «ниже». Не предлагай похудение, порции поменьше, урезание еды и голодание, даже маленьким шагом или вместо голодания. План и цифры даёт её врач: скажи это тепло и коротко, один раз за разговор. Не пиши, что у неё уже есть план или схема, если она сама этого не сказала. Шаг по еде - только из плана врача, который она сама назвала. Плана нет - шаг такой: записать вопросы врачу, записаться к нему, найти бланк или назначения, вести дневник, если врач просил, сон, прогулка, если врач разрешил, настроение. При тревожных симптомах - к врачу срочно или экстренный номер. Если о здоровье она ничего не говорила, сама эту тему не поднимай."""
+MEDICAL_RULE_EN = """MEDICAL GOALS (outranks every rule about food, menus, goals and tasks): with pregnancy, breastfeeding, gestational diabetes, diabetes, any other illness, medication, or an eating disorder now or in the past - never build a therapeutic diet, menu, recipes or food lists, and do not suggest she look for or build them herself. Never name normal values for sugar or other tests, calories, grams or doses. Do not rate a test result: not "normal", not "high" or "low". Do not suggest weight loss, smaller portions, cutting food or fasting, not even as a small step or instead of fasting. The plan and the numbers come from her doctor: say it warmly and briefly, once in a conversation. Do not say she already has a plan unless she said so. A food step comes only from a doctor's plan she named herself. No plan: the step is to write down questions for the doctor, book a visit, find the test form or prescriptions, keep a diary if the doctor asked for it, sleep, a walk if the doctor allows it, mood. With alarming symptoms: a doctor at once or the emergency number. If she said nothing about her health, do not bring it up."""
+SAFETY_RULE_RU = SAFETY_RULE_RU + "\n\n" + MEDICAL_RULE_RU
+SAFETY_RULE_EN = SAFETY_RULE_EN + "\n\n" + MEDICAL_RULE_EN
+
+
+def medical_rule(lang: str) -> str:
+    return MEDICAL_RULE_RU if _is_ru(lang) else MEDICAL_RULE_EN
+
+
 def safety_rule(lang: str) -> str:
     return SAFETY_RULE_RU if _is_ru(lang) else SAFETY_RULE_EN

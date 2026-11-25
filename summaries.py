@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import names
 import json
 import logging
 import re
@@ -266,7 +267,7 @@ def generate_weekly_summary(
 
     daily_summaries_text = "\n".join(daily_lines)
     prompt = WEEKLY_SUMMARY_PROMPT.format(
-        name=profile.get("name", ""),
+        name=names.real_name(profile.get("name")),
         main_goal=profile.get("main_goal", "не указана"),
         weekly_goal=profile.get("weekly_goal", "не указана"),
         week_number=week_number,
@@ -428,7 +429,7 @@ def onboarding_summary_system(lang: str) -> str:
 
 def onboarding_summary_fallback(profile: dict) -> dict[str, str]:
     lang = str(profile.get("language_code") or "en")
-    name = profile.get("name")
+    name = names.real_name(profile.get("name"))
     goal = profile.get("main_goal")
     if lang.lower().startswith("ru"):
         return {
@@ -455,7 +456,7 @@ def save_onboarding_summary(
 
     lang = str(profile.get("language_code") or "en")
     prompt = onboarding_summary_prompt(lang).format(
-        name=profile.get("name", ""),
+        name=names.real_name(profile.get("name")),
         vision=profile.get("vision", ""),
         main_goal=profile.get("main_goal", ""),
         morning_time=profile.get("morning_time") or profile.get("daily_time", "09:30"),
