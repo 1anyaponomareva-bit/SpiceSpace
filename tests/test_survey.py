@@ -15,7 +15,7 @@ NOW = datetime(2026, 11, 30, 10, 0, tzinfo=timezone.utc)  # 13:00 in Moscow
 def person(**kw):
     p = {
         "name": "Катя", "language_code": "ru", "main_goal": "Цель", "weekly_goal": "Неделя",
-        "cycle_start_date": "2026-11-24", "trial_start_date": "2026-11-24",
+        "cycle_start_date": "2026-11-20", "trial_start_date": "2026-11-20",
         "timezone": "Europe/Moscow", "morning_time": "09:00", "daily_enabled": True,
         "cycle_flags": {},
     }
@@ -23,7 +23,7 @@ def person(**kw):
     return p
 
 
-def plan(prof, *, replies=("2026-11-25T10:00:00+00:00",), payments=(), state=None, now=NOW, check_hour=True):
+def plan(prof, *, replies=("2026-11-21T10:00:00+00:00",), payments=(), state=None, now=NOW, check_hour=True):
     rows = [{"user_id": 7, "created_at": t} for t in replies]
     with mock.patch.object(main, "SUBSCRIPTIONS_ENABLED", True), \
             mock.patch.object(main.db_store, "lava_payments_all", return_value=None if payments is None else list(payments)), \
@@ -34,8 +34,18 @@ def plan(prof, *, replies=("2026-11-25T10:00:00+00:00",), payments=(), state=Non
 
 
 class Who(unittest.TestCase):
-    def test_sent_off_by_default(self):
-        self.assertFalse(main.SURVEY_SEND)
+    def test_only_the_approved_window_and_number(self):
+        u = timezone.utc
+        self.assertFalse(survey.window_open(datetime(2026, 11, 25, 10, tzinfo=u)))
+        self.assertFalse(survey.window_open(datetime(2026, 11, 26, 8, 59, tzinfo=u)))
+        self.assertTrue(survey.window_open(datetime(2026, 11, 26, 9, 0, tzinfo=u)))
+        self.assertFalse(survey.window_open(datetime(2026, 11, 26, 13, 0, tzinfo=u)))
+        self.assertEqual(survey.left_to_send({str(i): {} for i in range(16)}), 0)
+        self.assertEqual(survey.left_to_send({}), 16)
+
+    def test_trial_that_ended_after_the_25th_is_left_out(self):
+        p = person(trial_start_date="2026-11-24", cycle_start_date="2026-11-24")
+        self.assertEqual(plan(p), [])
 
     def test_fits(self):
         self.assertEqual([i["cid"] for i in plan(person())], [7])
@@ -56,9 +66,9 @@ class Who(unittest.TestCase):
 
     def test_replied_only_on_days_2_to_4(self):
         for replies, n in (
-            ((), 0), (("2026-11-24T10:00:00+00:00",), 0), (("2026-11-28T10:00:00+00:00",), 0),
-            (("2026-11-27T10:00:00+00:00",), 1),
-            (("2026-11-24T21:30:00+00:00",), 1),  # already the 25th in Moscow
+            ((), 0), (("2026-11-20T10:00:00+00:00",), 0), (("2026-11-24T10:00:00+00:00",), 0),
+            (("2026-11-23T10:00:00+00:00",), 1),
+            (("2026-11-20T21:30:00+00:00",), 1),  # already the 21st in Moscow
         ):
             self.assertEqual(len(plan(person(), replies=replies)), n, replies)
 

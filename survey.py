@@ -1,18 +1,23 @@
 """One question to people whose trial ended without a payment (Anya, 25.11.2026).
 
 Texts are Anya's, Russian only. Once per person, in her daytime, never together with a pause
-message, no price and no payment button. Sending is OFF unless SURVEY_SEND=1 in Railway.
+message, no price and no payment button. Sent only in the window Anya approved: 26.11.2026, 12-16
+MSK, to people whose trial was over by 25.11, 16 at most. SURVEY_SEND=0 stops it.
 State: app_kv "survey": {uid: {"sent", "answer", "answer_at", "text_at"}}; "sent" is written
 before the message goes out, so a failure can never lead to a second one.
 Pure functions; main.py reads the data and sends."""
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 KV_KEY = "survey"
 FROM_HOUR, TO_HOUR = 12, 17
+# Anya's «yes» of 25.11.2026 covers this day and this many people, nothing else
+WINDOW = (datetime(2026, 11, 26, 9, 0, tzinfo=timezone.utc), datetime(2026, 11, 26, 13, 0, tzinfo=timezone.utc))
+ENDED_BY = date(2026, 11, 25)
+MAX_SENT = 16
 TEXT_DAYS = 7  # an answer in words is taken this long after the question
 
 TEXT = (
@@ -29,6 +34,15 @@ OPTIONS = (
     ("other", "нужно было что-то другое"),
 )
 CODES = tuple(c for c, _ in OPTIONS)
+
+
+def window_open(now: datetime) -> bool:
+    return WINDOW[0] <= now < WINDOW[1]
+
+
+def left_to_send(state: object) -> int:
+    used = len(state) if isinstance(state, dict) else 0
+    return max(0, MAX_SENT - used)
 
 
 def _dt(raw: object) -> datetime | None:

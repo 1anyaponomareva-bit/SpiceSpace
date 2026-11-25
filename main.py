@@ -148,8 +148,8 @@ SUBSCRIPTIONS_ENABLED = bool(PAYMENTS_START_DATE) and bool(os.getenv("LAVA_API_K
 # win-back messages (winback.py); WINBACK=0 switches them off without a deploy
 WINBACK_ENABLED = os.getenv("WINBACK", "1").strip() != "0"
 WINBACK_PER_RUN = 25
-# question after the trial (survey.py): nothing is sent until SURVEY_SEND=1 is set in Railway
-SURVEY_SEND = os.getenv("SURVEY_SEND", "0").strip() == "1"
+# question after the trial (survey.py): sent only in survey.WINDOW; SURVEY_SEND=0 stops it
+SURVEY_SEND = os.getenv("SURVEY_SEND", "1").strip() != "0"
 SURVEY_PER_RUN = 10
 
 SUBSCRIPTION_PLANS = {
@@ -6687,7 +6687,7 @@ def _survey_plan(now: datetime, *, check_hour: bool = True) -> list[dict]:
             continue
         local = winback.local_now(prof, "ru", now, ob._default_timezone())
         today = local.date()
-        if _profile_has_daily_access(prof, today):
+        if _profile_has_daily_access(prof, min(today, survey.ENDED_BY)):
             continue
         if check_hour and not survey.good_moment(local, prof.get("morning_time") or prof.get("daily_time")):
             continue
@@ -10984,9 +10984,15 @@ async def _bootstrap_bot() -> None:
 
     async def survey_job() -> None:
         try:
+            import survey
+
+            if not survey.window_open(datetime.now(timezone.utc)):
+                return
             plan = await asyncio.to_thread(_survey_plan, datetime.now(timezone.utc))
-            for item in plan[:SURVEY_PER_RUN]:
-                await _survey_send(bot, item)
+            left = survey.left_to_send(await asyncio.to_thread(db_store.kv_get_strict, survey.KV_KEY))
+            for item in plan[:min(SURVEY_PER_RUN, left)]:
+                if survey.window_open(datetime.now(timezone.utc)):
+                    await _survey_send(bot, item)
         except Exception as e:
             log.exception("survey_job crashed: %s", e)
 
