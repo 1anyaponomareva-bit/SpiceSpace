@@ -17,6 +17,8 @@ OWNER_TZ = os.getenv("OWNER_TZ", "Asia/Saigon").strip() or "Asia/Saigon"
 COHORT_DAYS = 14
 NO_LABEL = "none"
 SRC_PREFIX = "src_"
+# came through the Mini App button; her answer to «откуда узнала» is more exact and wins
+APP_LABEL = "app"
 _LABEL_RE = re.compile(r"[^a-z0-9_]")
 # start args used inside the app, not traffic sources
 _INTERNAL_ARGS = {
@@ -42,7 +44,7 @@ def profile_label(profile: dict) -> str:
         keys += [k for k, v in flags.items() if v and str(k).startswith(SRC_PREFIX)]
     if isinstance(profile, dict):
         keys += [k for k, v in profile.items() if v and str(k).startswith(SRC_PREFIX)]
-    for k in sorted(set(keys)):
+    for k in sorted(set(keys), key=lambda k: (k == SRC_PREFIX + APP_LABEL, str(k))):
         label = str(k)[len(SRC_PREFIX):]
         if label:
             return label

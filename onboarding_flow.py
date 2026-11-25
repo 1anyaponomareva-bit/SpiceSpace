@@ -320,7 +320,7 @@ def save_source_answer(cid: int, code: str) -> str:
         prof = db.get_profile(cid)
         flags = prof.get("cycle_flags") if isinstance(prof, dict) else None
         if isinstance(flags, dict) and any(
-            v and str(k).startswith("src_") for k, v in flags.items()
+            v and str(k).startswith("src_") and k != "src_app" for k, v in flags.items()
         ):
             return ""
         db.mark_cycle_flag(cid, "src_" + label)

@@ -6730,6 +6730,20 @@ def is_en_start_label(arg: str | None) -> bool:
     return raw == "en" or raw.startswith(("en_", "en-"))
 
 
+REONBOARD_ARGS = ("reonboard", "setup", "goals", "заново")
+
+
+def opens_from_app_first_time(prof: dict | None, st: dict | None) -> bool:
+    """The Mini App button sends ?start=reonboard to everyone. Someone with no name, no goal
+    and no onboarding under way gets the usual greeting instead (Anya, 25.11.2026)."""
+    prof = prof if isinstance(prof, dict) else {}
+    if str(prof.get("name") or "").strip() or ob.profile_has_main_goal(prof):
+        return False
+    if not isinstance(st, dict):
+        return True
+    return int(st.get("step") or 0) == ob.OB_NAME and not str(st.get("name") or "").strip()
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_chat or not update.message:
         return
@@ -6757,6 +6771,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lang = "en"
     if is_new_user:
         source = (context.args[0] if context.args else "").strip()[:40]
+        if source.lower() in REONBOARD_ARGS:
+            source = spice_stats.APP_LABEL
         src = f"\nОткуда: {source}" if source else ""
         await notify_admin(context.bot, f"🆕 Новый человек: {_who(update.effective_user)}{src}")
     saved_lang = str((existing or {}).get("language_code") or "").strip()
@@ -6772,6 +6788,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         with suppress(Exception):
             prof = db_store.mark_cycle_flag(cid, "tz_en_label") or prof
     start_label = spice_stats.clean_label(context.args[0] if context.args else "")
+    from_app = is_new_user and (
+        (context.args[0] if context.args else "").strip().lower() in REONBOARD_ARGS
+    )
+    if from_app:
+        start_label = spice_stats.APP_LABEL
     if is_new_user and isinstance(prof, dict):
         label = start_label
         if label:
@@ -6806,7 +6827,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             await _bot_reply(update.message, opening)
             return
-    if start_arg in ("reonboard", "setup", "goals", "заново"):
+    if start_arg in REONBOARD_ARGS and not opens_from_app_first_time(prof, onboarding.get(cid)):
         name = ""
         if isinstance(prof, dict):
             name = str(prof.get("name", "")).strip()
@@ -6878,8 +6899,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if ob.just_greeted(onboarding.get(cid)):
         return  # greeting is already on screen — don't send it twice
+    asked_before = bool((onboarding.get(cid) or {}).get("src_ask_end"))
     ob.start_new_onboarding(onboarding, cid, lang)
-    if is_new_user and not start_label:
+    if asked_before or (is_new_user and (not start_label or from_app)):
         # came without a ?start= label (e.g. TikTok, no profile link): ask after onboarding
         onboarding[cid]["src_ask_end"] = True
     await _bot_reply(
